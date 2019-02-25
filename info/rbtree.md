@@ -17,7 +17,7 @@ These benchmarks compare the transactional `swym-rbtree` vs the lock-free crossb
 
 ### Insert 100,000 Random Values
 
-Numbers 0..100_000 are put into a vec, and then shuffled before the benchmark is run. The benchmark consists of inserting the elements from the vec into the tree in the "shuffled" order.
+Numbers 0..100_000 are put into a vec, and then shuffled before the benchmark is run. The benchmark consists of inserting the elements from the vec into the tree in the shuffled order.
 
 Every iteration of the benchmark calls `std::mem::forget(tree)` at the end to exclude the destructor - though this may cause some noise due to increased memory consumption.
 
@@ -25,7 +25,7 @@ Every iteration of the benchmark calls `std::mem::forget(tree)` at the end to ex
 
 ### Lookup 100,000 Random Values
 
-Numbers 0..100_000 are put into a vec, shuffled, then put into the tree before the benchmark is run. The benchmark consists of lookup up the elements from the vec in the tree in the "shuffled" order.
+Numbers 0..100_000 are put into a vec, shuffled, then put into the tree before the benchmark is run. The benchmark consists of looking up the elements from the vec in the tree in the shuffled order.
 
 ![lookup](lookup.png)
 
