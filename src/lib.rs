@@ -1,0 +1,446 @@
+//! A low level transaction memory library.
+//!
+//! `swym` is an experimental STM that can be used to implement concurrent data structures with
+//! performance not far from lock-free data structures.
+//!
+//! # Examples
+//!
+//! Getting a handle to swym's thread local state:
+//! ```
+//! use swym::thread_key;
+//!
+//! let thread_key = thread_key::get();
+//! ```
+//!
+//! Creating new transactional memory cells:
+//! ```
+//! use swym::tcell::TCell;
+//!
+//! static A: TCell<i32> = TCell::new(0);
+//! let b = TCell::new(42);
+//! ```
+//!
+//! Performing a transaction to swap the two values:
+//! ```
+//! # use swym::{thread_key, tcell::TCell};
+//! # let thread_key = thread_key::get();
+//! # static A: TCell<i32> = TCell::new(0);
+//! # let b = TCell::new(42);
+//! thread_key.rw(|tx| {
+//!     let temp = A.get(tx, Default::default())?;
+//!     A.set(tx, b.get(tx, Default::default())?)?;
+//!     b.set(tx, temp)?;
+//!     Ok(())
+//! });
+//! ```
+//!
+//! # Features
+//!
+//! * Behaves as though a single global lock were held for the duration of every transaction. This
+//!   can be relaxed a bit using `Ordering::Read` for loads.
+//! * Highly optimized for read mostly data structures and modern caches. `TCell` stores all of its
+//!   data inline. Read only transactions don't modify any global state, and read write transactions
+//!   only modify global state on commit.
+//! * The number of allocations imposed by swym per transaction should average 0 through reuse of
+//!   read logs/write logs/garbage bags.
+//! * Support for building recursive data structures using `TPtr` is still experimental but looks
+//!   promising - see examples on github.
+//! * Backed by a custom epoch based reclaimation style garbage collector (still lots of
+//!   optimization work to do there).
+//! * Support for nested transactions is planned, but not yet implemented.
+//!
+//! ## Shared Memory
+//!
+//! * [`TCell`], a low level transactional memory location - does not perform any heap allocation.
+//! * [`TPtr`], a low level transactional pointer for building heap allocated data structures.
+//!
+//! ## Running Transactions
+//!
+//! * [`rw`], starts a read write transaction.
+//! * [`read`], starts a read only transaction.
+//! * [`try_rw`], starts a read write transaction returning an error if the transaction could not be
+//!   started.
+//! * [`try_read`], starts a read only transaction returning an error if the transaction could not
+//!   be started.
+//!
+//! [`TCell`]: tcell/struct.TCell.html
+//! [`TPtr`]: tptr/struct.TPtr.html
+//! [`rw`]: thread_key/struct.ThreadKey.html#method.rw
+//! [`read`]: thread_key/struct.ThreadKey.html#method.read
+//! [`try_rw`]: thread_key/struct.ThreadKey.html#method.try_rw
+//! [`try_read`]: thread_key/struct.ThreadKey.html#method.try_read
+
+#![feature(align_offset)]
+#![feature(allocator_api)]
+#![feature(cfg_target_thread_local)]
+#![feature(const_fn)]
+#![feature(core_intrinsics)]
+#![feature(dropck_eyepatch)]
+#![feature(fn_traits)]
+#![feature(non_exhaustive)]
+#![feature(optin_builtin_traits)]
+#![feature(ptr_offset_from)]
+#![feature(raw)]
+#![feature(thread_local)]
+#![feature(trusted_len)]
+#![feature(unboxed_closures)]
+#![feature(unsize)]
+#![deny(intra_doc_link_resolution_failure)]
+#![deny(rust_2018_idioms)]
+#![deny(unused_must_use)]
+
+#[cfg(feature = "stats")]
+#[macro_use]
+extern crate lazy_static;
+
+#[macro_use]
+mod internal;
+
+mod read;
+mod rw;
+pub mod tcell;
+pub mod thread_key;
+pub mod tptr;
+pub mod tx;
+
+pub use internal::stats::print_stats;
+pub use read::ReadTx;
+pub use rw::RWTx;
+
+#[cfg(test)]
+mod memory {
+    use crate::{internal::alloc::debug_alloc, tcell::TCell, thread_key, tx::Ordering};
+    use crossbeam_utils::thread;
+
+    #[test]
+    fn leak_single() {
+        const ITER_COUNT: usize = 100_000;
+        let x = TCell::new(fvec![1, 2, 3, 4]);
+        thread::scope(|s| {
+            s.spawn(|_| {
+                let thread_key = thread_key::get();
+                for _ in 0..ITER_COUNT {
+                    thread_key
+                        .try_rw(|tx| {
+                            let count = debug_alloc::alloc_count();
+                            x.set(tx, fvec![1, 2, 3, 4])?;
+                            assert!(
+                                count < debug_alloc::alloc_count(),
+                                "debug_alloc isn't on or working properly"
+                            );
+                            Ok(())
+                        })
+                        .unwrap();
+                }
+            })
+            .join()
+            .unwrap();
+        })
+        .unwrap();
+        drop(x);
+        assert_eq!(debug_alloc::alloc_count(), 1, "memory leak detected");
+    }
+
+    #[test]
+    fn leak_multi() {
+        const ITER_COUNT: usize = 10_000;
+        const THREAD_COUNT: usize = 16;
+        let x = TCell::new(fvec![1, 2, 3, 4]);
+        thread::scope(|s| {
+            for i in 0..THREAD_COUNT {
+                s.builder()
+                    .name(format!("scoped_thread#{}", i))
+                    .spawn(|_| {
+                        let thread_key = thread_key::get();
+                        for _ in 0..ITER_COUNT {
+                            thread_key
+                                .try_rw(|tx| {
+                                    x.set(tx, fvec![1, 2, 3, 4])?;
+                                    Ok(())
+                                })
+                                .unwrap();
+                        }
+                    })
+                    .unwrap();
+            }
+        })
+        .unwrap();
+        drop(x);
+        assert_eq!(debug_alloc::alloc_count(), 1, "memory leak detected");
+    }
+
+    #[test]
+    fn overaligned() {
+        #[repr(align(1024))]
+        struct Over(u8);
+        impl Drop for Over {
+            fn drop(&mut self) {
+                assert_eq!(self as *mut _ as usize % 1024, 0);
+            }
+        }
+
+        const ITER_COUNT: usize = 10_000;
+        const THREAD_COUNT: usize = 16;
+        let x = TCell::new(Over(0));
+        thread::scope(|s| {
+            for _ in 0..THREAD_COUNT {
+                s.spawn(|_| {
+                    let thread_key = thread_key::get();
+                    for _ in 0..ITER_COUNT {
+                        thread_key
+                            .try_rw(|tx| {
+                                let y = x.borrow(tx, Ordering::default())?.0;
+                                x.set(tx, Over(y.wrapping_add(1)))?;
+                                Ok(())
+                            })
+                            .unwrap();
+                    }
+                });
+            }
+        })
+        .unwrap();
+        drop(x);
+        assert_eq!(debug_alloc::alloc_count(), 1, "memory leak detected");
+    }
+
+    #[test]
+    fn zero_sized() {
+        struct ZeroNoDrop;
+
+        const ITER_COUNT: usize = 10_000;
+        const THREAD_COUNT: usize = 16;
+        let x = TCell::new(ZeroNoDrop);
+        thread::scope(|s| {
+            for _ in 0..THREAD_COUNT {
+                s.spawn(|_| {
+                    let thread_key = thread_key::get();
+                    for _ in 0..ITER_COUNT {
+                        thread_key
+                            .try_rw(|tx| {
+                                drop(x.borrow(tx, Ordering::default())?);
+                                x.set(tx, ZeroNoDrop)?;
+                                Ok(())
+                            })
+                            .unwrap();
+                    }
+                });
+            }
+        })
+        .unwrap();
+        drop(x);
+        assert_eq!(debug_alloc::alloc_count(), 1, "memory leak detected");
+    }
+
+    #[test]
+    fn zero_sized_drop() {
+        struct Zero;
+        impl Drop for Zero {
+            fn drop(&mut self) {}
+        }
+
+        const ITER_COUNT: usize = 10_000;
+        const THREAD_COUNT: usize = 16;
+        let x = TCell::new(Zero);
+        thread::scope(|s| {
+            for _ in 0..THREAD_COUNT {
+                s.spawn(|_| {
+                    let thread_key = thread_key::get();
+                    for _ in 0..ITER_COUNT {
+                        thread_key
+                            .try_rw(|tx| {
+                                drop(x.borrow(tx, Ordering::default())?);
+                                x.set(tx, Zero)?;
+                                Ok(())
+                            })
+                            .unwrap();
+                    }
+                });
+            }
+        })
+        .unwrap();
+        drop(x);
+        assert_eq!(debug_alloc::alloc_count(), 1, "memory leak detected");
+    }
+}
+
+#[cfg(test)]
+mod panic {
+    use crate::{internal::alloc::debug_alloc, tcell::TCell, thread_key, tx::Ordering};
+    use crossbeam_utils::thread;
+    use std::panic::{self, AssertUnwindSafe};
+
+    #[test]
+    fn simple() {
+        thread::scope(|s| {
+            s.spawn(|_| {
+                let thread_key = thread_key::get();
+                match panic::catch_unwind(AssertUnwindSafe(|| {
+                    thread_key
+                        .try_rw(|_| -> Result<(), _> { panic!("test panic") })
+                        .unwrap()
+                })) {
+                    Ok(_) => unreachable!(),
+                    Err(_) => assert!(
+                        thread_key.try_rw(|_| Ok(())).is_ok(),
+                        "failed to recover from a panic within a tx"
+                    ),
+                }
+            });
+        })
+        .unwrap();
+        assert_eq!(debug_alloc::alloc_count(), 1);
+
+        thread::scope(|s| {
+            s.spawn(|_| {
+                let thread_key = thread_key::get();
+                match panic::catch_unwind(AssertUnwindSafe(|| {
+                    thread_key
+                        .try_read(|_| -> Result<(), _> { panic!("test panic") })
+                        .unwrap()
+                })) {
+                    Ok(_) => unreachable!(),
+                    Err(_) => assert!(
+                        thread_key.try_rw(|_| Ok(())).is_ok(),
+                        "failed to recover from a panic within a tx"
+                    ),
+                }
+            });
+        })
+        .unwrap();
+        assert_eq!(debug_alloc::alloc_count(), 1);
+
+        thread::scope(|s| {
+            s.spawn(|_| {
+                let thread_key = thread_key::get();
+                match panic::catch_unwind(AssertUnwindSafe(|| {
+                    thread_key
+                        .try_rw(|_| -> Result<(), _> { panic!("test panic") })
+                        .unwrap()
+                })) {
+                    Ok(_) => unreachable!(),
+                    Err(_) => assert!(
+                        thread_key.try_read(|_| Ok(())).is_ok(),
+                        "failed to recover from a panic within a tx"
+                    ),
+                }
+            });
+        })
+        .unwrap();
+        assert_eq!(debug_alloc::alloc_count(), 1);
+
+        thread::scope(|s| {
+            s.spawn(|_| {
+                let thread_key = thread_key::get();
+                match panic::catch_unwind(AssertUnwindSafe(|| {
+                    thread_key
+                        .try_read(|_| -> Result<(), _> { panic!("test panic") })
+                        .unwrap()
+                })) {
+                    Ok(_) => unreachable!(),
+                    Err(_) => assert!(
+                        thread_key.try_read(|_| Ok(())).is_ok(),
+                        "failed to recover from a panic within a tx"
+                    ),
+                }
+            });
+        })
+        .unwrap();
+        assert_eq!(debug_alloc::alloc_count(), 1);
+    }
+
+    #[test]
+    fn write_log() {
+        let tcell = TCell::new("hello".to_owned());
+        thread::scope(|s| {
+            s.spawn(|_| {
+                let thread_key = thread_key::get();
+                match panic::catch_unwind(AssertUnwindSafe(|| {
+                    thread_key
+                        .try_rw(|tx| -> Result<(), _> {
+                            tcell.set(tx, "world".to_owned())?;
+                            panic!("test panic")
+                        })
+                        .unwrap()
+                })) {
+                    Ok(_) => unreachable!(),
+                    Err(_) => {
+                        let old = thread_key.try_rw(|tx| {
+                            let old = tcell.borrow(tx, Ordering::default())?.clone();
+                            tcell.set(tx, "world".to_owned())?;
+                            Ok(old)
+                        });
+                        assert!(old.is_ok(), "failed to recover from a panic within a tx");
+                        assert!(
+                            old.unwrap() == "hello",
+                            "failed to recover from a panic within a tx"
+                        );
+                    }
+                }
+            });
+        })
+        .unwrap();
+        assert_eq!(debug_alloc::alloc_count(), 1);
+    }
+
+    #[test]
+    fn nest_fail() {
+        thread::scope(|s| {
+            s.spawn(|_| {
+                let thread_key = thread_key::get();
+                assert!(
+                    thread_key
+                        .try_rw(|_| {
+                            assert!(
+                                thread_key.try_rw(|_| Ok(())).is_err(),
+                                "nesting unexpectedly did not cause an error"
+                            );
+                            Ok(())
+                        })
+                        .is_ok(),
+                    "nesting prevented the root transaction from committing"
+                );
+
+                assert!(
+                    thread_key
+                        .try_rw(|_| {
+                            assert!(
+                                thread_key.try_read(|_| Ok(())).is_err(),
+                                "nesting unexpectedly did not cause an error"
+                            );
+                            Ok(())
+                        })
+                        .is_ok(),
+                    "nesting prevented the root transaction from committing"
+                );
+
+                assert!(
+                    thread_key
+                        .try_read(|_| {
+                            assert!(
+                                thread_key.try_read(|_| Ok(())).is_err(),
+                                "nesting unexpectedly did not cause an error"
+                            );
+                            Ok(())
+                        })
+                        .is_ok(),
+                    "nesting prevented the root transaction from committing"
+                );
+
+                assert!(
+                    thread_key
+                        .try_read(|_| {
+                            assert!(
+                                thread_key.try_rw(|_| Ok(())).is_err(),
+                                "nesting unexpectedly did not cause an error"
+                            );
+                            Ok(())
+                        })
+                        .is_ok(),
+                    "nesting prevented the root transaction from committing"
+                );
+            });
+        })
+        .unwrap();
+        assert_eq!(debug_alloc::alloc_count(), 1);
+    }
+}

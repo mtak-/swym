@@ -1,0 +1,51 @@
+[package]
+name = "swym"
+version = "0.1.0-preview"
+authors = ["mtak-"]
+edition = "2018"
+license = "MIT"
+keywords = ["transactional", "stm", "transaction", "memory", "atomic"]
+categories = ["concurrency", "data-structures"]
+description = "Transactional memory for rust"
+repository = "https://github.com/mtak-/swym"
+homepage = "https://github.com/mtak-/swym"
+documentation = "https://docs.rs/swym"
+
+[features]
+default = []
+debug-alloc = []
+stats = ["lazy_static"]
+
+[dependencies]
+lazy_static = { version = "1.2.0", optional = true }
+lock_api = "0.1.5"
+
+[dev-dependencies]
+crossbeam-utils = "0.6.5"
+jemallocator = "0.1.9"
+
+[profile.bench]
+opt-level = 3
+debug = false
+rpath = false
+lto = "fat"
+debug-assertions = false
+codegen-units = 1
+incremental = false
+overflow-checks = false
+
+[profile.test]
+opt-level = 0
+debug = 2
+rpath = false
+lto = false
+debug-assertions = true
+codegen-units = 16
+incremental = true
+overflow-checks = true
+
+[workspace]
+members = [
+    ".",
+    "swym-rbtree",
+]
