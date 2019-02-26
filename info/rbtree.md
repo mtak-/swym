@@ -11,9 +11,16 @@ Benchmarks run using jemallocator on macos sierra and `-Ctarget-cpu=native`. Ben
   L3 Cache:	8 MB
 ```
 
-These benchmarks compare the transactional `swym-rbtree` vs the lock-free crossbeam skipmap vs the singlethreaded `rbtree`. Skipmaps and rbtrees are fundamentally different data structures with different tradeoffs, but there's not many options for concurrent sorted containers in rust for comparison.
+These benchmarks compare
+ - the transactional `swym-rbtree`
+ - the lock-free crossbeam skipmap
+ - the single threaded `rbtree`
+ - single threaded `BTreeMap`
+ - Mutex/RwLock wrapped `BTreeMap`
 
-"Ideal" is calculated based on `swym-rbtree`'s single threaded runtime, then dividing by the number of threads.
+Skipmaps and rbtrees are fundamentally different data structures with different tradeoffs, but there's not many options for concurrent sorted containers in rust for comparison.
+
+"Ideal" is calculated based on `swym-rbtree`'s single threaded ops/sec, then multiplying by the number of threads.
 
 ### Insert 100,000 Random Values
 
