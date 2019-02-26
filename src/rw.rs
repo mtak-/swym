@@ -236,7 +236,7 @@ impl RWTxImpl {
         let hash = dumb_reference_hash(&tcell.erased);
 
         if likely!(!tx_state.write_log.next_push_allocates::<V>())
-            && (!mem::needs_drop::<T>() || likely!(!tx_state.garbage.next_queue_allocates::<T>()))
+            && (!mem::needs_drop::<T>() || likely!(!tx_state.garbage.next_trash_allocates::<T>()))
             && likely!(tx_state.write_log.contained(hash) == Contained::No)
             && likely!(self.rw_valid(&tcell.erased, Relaxed))
         {

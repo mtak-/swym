@@ -317,7 +317,7 @@ impl UnpinRw<'_> {
             mem::forget(self);
             tx_state.read_log.clear();
             tx_state.write_log.clear_no_drop();
-            tx_state.garbage.seal_with_epoch(quiesce_epoch, synch);
+            tx_state.garbage.seal_with_epoch(synch, quiesce_epoch);
             synch.current_epoch.deactivate(Relaxed);
         }
     }

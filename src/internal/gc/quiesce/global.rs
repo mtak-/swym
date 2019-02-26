@@ -17,14 +17,22 @@ use std::{
     },
 };
 
+/// A synchronized ThreadList. Synchronization is provided by the sharded locks in Synch, and the
+/// outer mutex
+// TODO: Does repr(C) give better asm? Also repr(align(64)) might be helpful.
 #[repr(C)]
 pub struct GlobalThreadList {
+    /// The list of threads participating in the STM.
     thread_list: UnsafeCell<ThreadList>,
-    mutex:       FrwLock,
+
+    /// This mutex is only grabbed before modifying to the GlobalThreadList, and still requires
+    /// every threads lock to be acquired before any mutations.
+    mutex: FrwLock,
 }
 
 unsafe impl Sync for GlobalThreadList {}
 
+// Once allocated the SINGLETON is never deallocated.
 static SINGLETON: AtomicPtr<GlobalThreadList> = AtomicPtr::new(0 as _);
 
 impl GlobalThreadList {
@@ -32,6 +40,7 @@ impl GlobalThreadList {
     #[inline(never)]
     #[cold]
     fn init() -> &'static Self {
+        // Once handles two threads racing to initialize the GlobalThreadList
         static INIT_QUIESCE_LIST: Once = Once::new();
 
         #[inline(never)]
@@ -73,19 +82,20 @@ impl GlobalThreadList {
         &*raw
     }
 
+    /// Unsafe without holding atleast one of the locks in the GlobalThreadList.
     #[inline]
     unsafe fn raw(&self) -> &ThreadList {
         &*self.thread_list.get()
     }
 
-    // This uses a per thread mutex to get write access
-    // read access is achieved by simply locking the Handle
+    /// Gets write access to the GlobalThreadList.
     #[inline]
     pub fn write<'a>(&'a self) -> Write<'a> {
         Write::new(self)
     }
 }
 
+/// A write guard for the GlobalThreadList.
 pub struct Write<'a> {
     list: &'a GlobalThreadList,
 }
@@ -93,8 +103,12 @@ pub struct Write<'a> {
 impl<'a> Write<'a> {
     #[inline]
     fn new(list: &'a GlobalThreadList) -> Self {
+        // Atleast one mutex has to be held in order to call `raw` safely.
+        // The outer mutex is used for this purpose, so that, under contention, two writers will
+        // never deadlock.
         list.mutex.lock_exclusive();
         unsafe {
+            // lock all the Synchs to prevent them from creating a FreezeList
             for synch in list.raw().iter() {
                 synch.lock.lock_exclusive();
             }
@@ -131,23 +145,30 @@ impl<'a> DerefMut for Write<'a> {
     }
 }
 
+/// A read only guard for the GlobalThreadList.
 pub struct FreezeList<'a> {
     lock: &'a FrwLock,
 }
 
 impl<'a> FreezeList<'a> {
     #[inline]
-    pub(crate) fn new(lock: &'a FrwLock) -> Self {
+    pub fn new(synch: &'a Synch) -> Self {
+        let lock = &synch.lock;
         lock.lock_shared();
         FreezeList { lock }
     }
 
+    /// Returns true if the synchs lock is currently held by self.
     #[inline]
-    pub fn requested_by(&self, synch: &Synch) -> bool {
+    fn requested_by(&self, synch: &Synch) -> bool {
         ptr::eq(self.lock, &synch.lock)
     }
 
-    // result is always greater than quiesce_epoch, (must wait for threads who have a lesser epoch)
+    /// Waits for all threads to pass `epoch` (or go inactive) and then returns the minimum active
+    /// epoch.
+    ///
+    /// The result is always greater than `epoch`, (must wait for threads who have a lesser
+    /// epoch).
     #[inline]
     pub unsafe fn quiesce(&self, epoch: QuiesceEpoch) -> QuiesceEpoch {
         let mut result = QuiesceEpoch::max_value();
@@ -157,13 +178,15 @@ impl<'a> FreezeList<'a> {
                 let td_epoch = synch.current_epoch.get(Acquire);
 
                 debug_assert!(
-                    td_epoch > epoch || !self.requested_by(synch),
+                    !self.requested_by(synch) || td_epoch > epoch,
                     "deadlock detected. `wait_until_epoch_end` called by an active thread"
                 );
 
                 if likely!(td_epoch > epoch) {
                     result = result.min(td_epoch);
                 } else {
+                    // after quiescing, the thread owning `synch` will have entered the
+                    // INACTIVE_EPOCH atleast once, so there's no need to update result
                     synch.local_quiesce(epoch);
                 }
             }
