@@ -74,7 +74,7 @@ impl RWTxImpl {
             // STM write. It is a logic error in user code, and requires `unsafe` to make that
             // error. This assert helps to catch that.
             debug_assert!(
-                tx_state.garbage.is_speculative_garbage_empty(),
+                tx_state.garbage.is_speculative_bag_empty(),
                 "Garbage queued, without any writes!"
             );
             Some(QuiesceEpoch::first())
