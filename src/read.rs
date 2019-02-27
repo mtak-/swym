@@ -10,6 +10,9 @@ use std::{
 };
 
 /// A read only transaction.
+//
+// No instances of this type are ever created. References to values of this type are created by
+// transmuting QuiesceEpoch's.
 pub struct ReadTx<'tcell>(PhantomData<fn(&'tcell ())>);
 impl<'tcell> !Send for ReadTx<'tcell> {}
 impl<'tcell> !Sync for ReadTx<'tcell> {}
@@ -17,16 +20,22 @@ impl<'tcell> !Sync for ReadTx<'tcell> {}
 impl<'tcell> ReadTx<'tcell> {
     #[inline]
     pub(crate) fn new<'a>(pin_epoch: QuiesceEpoch) -> &'a Self {
+        debug_assert!(mem::align_of::<Self>() == 1, "unsafe alignment on ReadTx");
+        // we smuggle the pinned epoch through as a reference
         unsafe { mem::transmute(pin_epoch) }
     }
 
     #[inline]
     fn pin_epoch(&self) -> QuiesceEpoch {
+        // conver the reference back into the smuggled pinned epoch
         unsafe { mem::transmute(self) }
     }
 
     #[inline]
     unsafe fn get_impl<T>(&self, tcell: &TCell<T>) -> Result<ManuallyDrop<T>, Error> {
+        // In a read only transaction, there is no read log, write log or gc.
+        // The only thing that needs to be done is reading of the value, and then a check, to see if
+        // that value was written before this transaction began.
         let value = tcell.erased.read_acquire::<T>();
         if likely!(self
             .pin_epoch()

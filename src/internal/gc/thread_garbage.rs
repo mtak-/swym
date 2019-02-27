@@ -101,7 +101,7 @@ impl UnusedBags {
 #[repr(C)]
 pub struct ThreadGarbage {
     /// The bag that new trash will be pushed to.
-    current_bag: Bag,
+    speculative_bag: Bag,
 
     /// Bags that have been queued up for collection.
     sealed_bags: FVec<SealedBag>,
@@ -114,40 +114,44 @@ impl ThreadGarbage {
     #[inline]
     pub fn new() -> Self {
         let mut unused_bags = UnusedBags::new();
-        let current_bag = unsafe { unused_bags.open_bag_unchecked() };
+        let speculative_bag = unsafe { unused_bags.open_bag_unchecked() };
 
         ThreadGarbage {
-            current_bag,
+            speculative_bag,
             sealed_bags: FVec::with_capacity(UNUSED_BAG_COUNT).unwrap(),
             unused_bags,
         }
     }
 
-    /// Checks if there is any trash in the currently active bag.
+    /// Checks if there is any speculative trash.
     #[inline]
-    pub fn is_current_epoch_empty(&self) -> bool {
-        self.current_bag.queued.is_empty()
+    pub fn is_speculative_bag_empty(&self) -> bool {
+        self.speculative_bag.queued.is_empty()
     }
 
-    /// Leaks all the trash in the current bag.
+    /// Leaks all the trash in the speculative bag.
     ///
     /// When running a transaction, trash is queued up speculatively. If the transaction fails, none
     /// of the garbage that was queued up should be collected.
     #[inline]
-    pub fn leak_current_epoch(&mut self) {
-        self.current_bag.queued.clear_no_drop()
+    pub fn abort_speculative_garbage(&mut self) {
+        self.speculative_bag.queued.clear_no_drop()
     }
 
     /// Used to help move allocations out of the fast path.
     #[inline]
     pub fn next_trash_allocates<T: 'static + Send>(&self) -> bool {
-        unsafe { self.current_bag.queued.next_push_allocates::<Queued<T>>() }
+        unsafe {
+            self.speculative_bag
+                .queued
+                .next_push_allocates::<Queued<T>>()
+        }
     }
 
     /// Queues value up to be dropped should the current transaction succeed.
     #[inline]
     pub fn trash<T: 'static + Send>(&mut self, value: ManuallyDrop<T>) {
-        unsafe { self.current_bag.queued.push(Queued::new(value)) }
+        unsafe { self.speculative_bag.queued.push(Queued::new(value)) }
     }
 
     /// Queues value up to be dropped should the current transaction succeed.
@@ -155,7 +159,9 @@ impl ThreadGarbage {
     /// Assumes that the current bag has a large enough capacity to store the new garbage.
     #[inline]
     pub unsafe fn trash_unchecked<T: 'static + Send>(&mut self, value: ManuallyDrop<T>) {
-        self.current_bag.queued.push_unchecked(Queued::new(value))
+        self.speculative_bag
+            .queued
+            .push_unchecked(Queued::new(value))
     }
 
     /// Ends the speculative garbage queuing, and commits the current_bag's garbage to be collected
@@ -170,7 +176,7 @@ impl ThreadGarbage {
             quiesce_epoch.is_active(),
             "attempt to seal with an \"inactive\" epoch"
         );
-        if unlikely!(!self.is_current_epoch_empty()) {
+        if unlikely!(!self.is_speculative_bag_empty()) {
             self.seal_with_epoch_slow(synch, quiesce_epoch)
         }
     }
@@ -179,7 +185,7 @@ impl ThreadGarbage {
     #[inline(never)]
     unsafe fn seal_with_epoch_slow(&mut self, synch: &Synch, quiesce_epoch: QuiesceEpoch) {
         let new_bag = self.unused_bags.open_bag_unchecked();
-        let prev_bag = mem::replace(&mut self.current_bag, new_bag);
+        let prev_bag = mem::replace(&mut self.speculative_bag, new_bag);
         let sealed_bag = prev_bag.seal(quiesce_epoch);
         self.sealed_bags.push_unchecked(sealed_bag);
 
@@ -227,7 +233,7 @@ impl ThreadGarbage {
     #[cold]
     pub unsafe fn collect(&mut self, max_epoch: QuiesceEpoch) {
         debug_assert!(
-            self.is_current_epoch_empty(),
+            self.is_speculative_bag_empty(),
             "`collect` called while current bag is not empty"
         );
         assume!(
@@ -269,7 +275,7 @@ impl ThreadGarbage {
 impl Drop for ThreadGarbage {
     fn drop(&mut self) {
         debug_assert!(
-            self.current_bag.queued.is_empty(),
+            self.speculative_bag.queued.is_empty(),
             "dropping the thread garbage while the current bag is not empty"
         );
         debug_assert!(

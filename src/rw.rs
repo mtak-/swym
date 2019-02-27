@@ -1,10 +1,19 @@
+//! Per-Object TL2 algorithm is used:
+//! https://www.cs.tau.ac.il/~shanir/nir-pubs-web/Papers/Transactional_Locking.pdf
+//!
+//! The main difference is the addition of epoch based reclamation.
+//! Another sublte difference is a change to when the global clock is bumped. By doing it after
+//! TCells have had their value updated, but before releasing their locks, we can simplify reads.
+//! Reads don't have to read the per object epoch _before_ and after loading the value from shared
+//! memory. They only have to read the per object epoch after loading the value.
+
 use crate::{
     internal::{
         alloc::dyn_vec::DynElemMut,
         epoch::{QuiesceEpoch, EPOCH_CLOCK},
         tcell_erased::TCellErased,
-        thread::{ThreadKeyRaw, TxState},
-        write_log::{dumb_reference_hash, Contained, Entry, WriteEntryImpl},
+        thread::{ThreadKeyRaw, TxLogs},
+        write_log::{bloom_hash, Contained, Entry, WriteEntryImpl},
     },
     tcell::TCell,
     tx::{self, Error, Ordering, SetError, Write, _TValue},
@@ -27,26 +36,81 @@ impl RWTxImpl {
         RWTxImpl { thread_key }
     }
 
+    /// Contains the read, write, and garbage logs.
     #[inline]
-    fn tx_state(self) -> NonNull<TxState> {
-        self.thread_key.tx_state()
+    fn tx_logs(self) -> NonNull<TxLogs> {
+        self.thread_key.tx_logs()
     }
 
+    /// The epoch the transaction has pinned.
     #[inline]
     fn pin_epoch(self) -> QuiesceEpoch {
+        // we own the synch, so we're allowed to **read** it non-atomically
         unsafe { self.thread_key.synch().as_mut().current_epoch.get_unsync() }
     }
 
+    /// The commit algorithm, called after user code has finished running without returning an
+    /// error.
+    ///
+    /// Returns the QuiesceEpoch that has just began on success, or None on failure.
+    #[inline]
+    unsafe fn commit(self) -> Option<QuiesceEpoch> {
+        debug_assert!(
+            self.pin_epoch() <= EPOCH_CLOCK.now(Acquire),
+            "`EpochClock` behind current transaction start time"
+        );
+        let tx_state = &*self.tx_logs().as_ptr();
+
+        if likely!(!tx_state.write_log.is_empty()) {
+            self.commit_slow()
+        } else {
+            // RWTx validates reads as they occur. As a result, if there are no writes, then we have
+            // no work to do in our commit algorithm.
+            //
+            // The first epoch is a safe choice as having "began", it is only used for queuing up
+            // garbage, which we should not have with an empty write log. On the off chance we do
+            // have garbage, with an empty write log. Then there's no way that garbage could have
+            // been previously been shared, as the data cannot have been made inaccessible via an
+            // STM write. It is a logic error in user code, and requires `unsafe` to make that
+            // error. This assert helps to catch that.
+            debug_assert!(
+                tx_state.garbage.is_speculative_garbage_empty(),
+                "Garbage queued, without any writes!"
+            );
+            Some(QuiesceEpoch::first())
+        }
+    }
+
     #[inline(never)]
-    #[cold]
-    unsafe fn commit_read_fail(self) -> Option<QuiesceEpoch> {
-        self.tx_state().as_ref().write_log.unlock_entries();
-        None
+    unsafe fn commit_slow(self) -> Option<QuiesceEpoch> {
+        let tx_state = &mut *self.tx_logs().as_ptr();
+        tx_state.remove_writes_from_reads();
+        // TODO: would commit algorithm be faster with a single global lock, or lock striping?
+        // per object locking causes a cmpxchg per entry
+        if likely!(tx_state.write_log.try_lock_entries(self.pin_epoch())) {
+            self.commit_slower()
+        } else {
+            None
+        }
+    }
+
+    #[inline]
+    unsafe fn commit_slower(self) -> Option<QuiesceEpoch> {
+        if likely!(self
+            .tx_logs()
+            .as_ref()
+            .read_log
+            .validate_reads(self.pin_epoch()))
+        {
+            self.commit_success()
+        } else {
+            self.commit_read_fail()
+        }
     }
 
     #[inline]
     unsafe fn commit_success(self) -> Option<QuiesceEpoch> {
-        let tx_state = &*self.tx_state().as_ptr();
+        let tx_state = &*self.tx_logs().as_ptr();
         tx_state.write_log.perform_writes();
 
         let sync_epoch = EPOCH_CLOCK.fetch_and_tick(Release);
@@ -60,45 +124,11 @@ impl RWTxImpl {
         Some(sync_epoch)
     }
 
-    #[inline]
-    unsafe fn commit_slower(self) -> Option<QuiesceEpoch> {
-        if likely!(self
-            .tx_state()
-            .as_ref()
-            .read_log
-            .validate_reads(self.pin_epoch()))
-        {
-            self.commit_success()
-        } else {
-            self.commit_read_fail()
-        }
-    }
-
     #[inline(never)]
-    unsafe fn commit_slow(self) -> Option<QuiesceEpoch> {
-        let tx_state = &mut *self.tx_state().as_ptr();
-        tx_state.remove_writes_from_reads();
-        // TODO: would commit algorithm be faster with a single global lock, or lock striping?
-        // per object locking causes a cmpxchg per entry
-        if likely!(tx_state.write_log.try_lock_entries(self.pin_epoch())) {
-            self.commit_slower()
-        } else {
-            None
-        }
-    }
-
-    #[inline]
-    unsafe fn commit(self) -> Option<QuiesceEpoch> {
-        debug_assert!(
-            self.pin_epoch() <= EPOCH_CLOCK.now(Acquire),
-            "`EpochClock` behind current transaction start time"
-        );
-        let tx_state = &*self.tx_state().as_ptr();
-        if likely!(!tx_state.write_log.is_empty()) {
-            self.commit_slow()
-        } else {
-            Some(QuiesceEpoch::first())
-        }
+    #[cold]
+    unsafe fn commit_read_fail(self) -> Option<QuiesceEpoch> {
+        self.tx_logs().as_ref().write_log.unlock_entries();
+        None
     }
 
     #[inline]
@@ -110,7 +140,7 @@ impl RWTxImpl {
     #[inline(never)]
     #[cold]
     unsafe fn get_slow<T>(self, tcell: &TCell<T>) -> Result<ManuallyDrop<T>, Error> {
-        let tx_state = &mut *self.tx_state().as_ptr();
+        let tx_state = &mut *self.tx_logs().as_ptr();
         let found = tx_state.write_log.find(&tcell.erased);
         match found {
             None => {
@@ -132,14 +162,9 @@ impl RWTxImpl {
 
     #[inline]
     unsafe fn get_impl<T>(self, tcell: &TCell<T>) -> Result<ManuallyDrop<T>, Error> {
-        let tx_state = &mut *self.tx_state().as_ptr();
+        let tx_state = &mut *self.tx_logs().as_ptr();
         if likely!(!tx_state.read_log.next_push_allocates())
-            && likely!(
-                tx_state
-                    .write_log
-                    .contained(dumb_reference_hash(&tcell.erased))
-                    == Contained::No
-            )
+            && likely!(tx_state.write_log.contained(bloom_hash(&tcell.erased)) == Contained::No)
         {
             let value = tcell.erased.read_acquire::<T>();
             if likely!(self.rw_valid(&tcell.erased, Acquire)) {
@@ -153,7 +178,7 @@ impl RWTxImpl {
     #[inline(never)]
     #[cold]
     unsafe fn get_unlogged_slow<T>(self, tcell: &TCell<T>) -> Result<ManuallyDrop<T>, Error> {
-        let tx_state = &*self.tx_state().as_ptr();
+        let tx_state = &*self.tx_logs().as_ptr();
         let found = tx_state.write_log.find(&tcell.erased);
         match found {
             None => {
@@ -174,13 +199,8 @@ impl RWTxImpl {
 
     #[inline]
     unsafe fn get_unlogged_impl<T>(self, tcell: &TCell<T>) -> Result<ManuallyDrop<T>, Error> {
-        let tx_state = &*self.tx_state().as_ptr();
-        if likely!(
-            tx_state
-                .write_log
-                .contained(dumb_reference_hash(&tcell.erased))
-                == Contained::No
-        ) {
+        let tx_state = &*self.tx_logs().as_ptr();
+        if likely!(tx_state.write_log.contained(bloom_hash(&tcell.erased)) == Contained::No) {
             let value = tcell.erased.read_acquire::<T>();
             if likely!(self.rw_valid(&tcell.erased, Acquire)) {
                 return Ok(value);
@@ -196,7 +216,7 @@ impl RWTxImpl {
         tcell: &TCell<T>,
         value: V,
     ) -> Result<(), SetError<T>> {
-        let tx_state = &mut *self.tx_state().as_ptr();
+        let tx_state = &mut *self.tx_logs().as_ptr();
         match tx_state.write_log.entry(&tcell.erased) {
             Entry::Vacant { write_log, hash } => {
                 if likely!(self.rw_valid(&tcell.erased, Relaxed)) {
@@ -232,8 +252,8 @@ impl RWTxImpl {
         tcell: &TCell<T>,
         value: V,
     ) -> Result<(), SetError<T>> {
-        let tx_state = &mut *self.tx_state().as_ptr();
-        let hash = dumb_reference_hash(&tcell.erased);
+        let tx_state = &mut *self.tx_logs().as_ptr();
+        let hash = bloom_hash(&tcell.erased);
 
         if likely!(!tx_state.write_log.next_push_allocates::<V>())
             && (!mem::needs_drop::<T>() || likely!(!tx_state.garbage.next_trash_allocates::<T>()))
@@ -256,6 +276,9 @@ impl RWTxImpl {
 }
 
 /// A read write transaction.
+//
+// No instances of this type are ever created. References to values of this type are created by
+// transmuting RWTxImpl's.
 pub struct RWTx<'tcell>(PhantomData<fn(&'tcell ())>);
 impl<'tcell> !Send for RWTx<'tcell> {}
 impl<'tcell> !Sync for RWTx<'tcell> {}
@@ -305,7 +328,7 @@ unsafe impl<'tcell> Write<'tcell> for RWTx<'tcell> {
     fn _privatize<F: FnOnce() + Copy + Send + 'static>(&self, privatizer: F) {
         unsafe {
             self.as_impl()
-                .tx_state()
+                .tx_logs()
                 .as_mut()
                 .garbage
                 .trash(ManuallyDrop::new(After::new(privatizer, |p| p())));

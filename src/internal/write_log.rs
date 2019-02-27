@@ -225,8 +225,8 @@ impl WriteLog {
     // biased against finding the tcell
     #[inline]
     pub fn find(&self, dest_tcell: &TCellErased) -> Option<&dyn WriteEntry> {
-        let hash = dumb_reference_hash(dest_tcell);
-        debug_assert!(hash.get() != 0, "bug in dumb_reference_hash algorithm");
+        let hash = bloom_hash(dest_tcell);
+        debug_assert!(hash.get() != 0, "bug in bloom_hash algorithm");
         if likely!(self.contained(hash) == Contained::No) {
             None
         } else {
@@ -257,7 +257,7 @@ impl WriteLog {
     // biased against finding the tcell
     #[inline]
     pub fn entry<'a>(&'a mut self, dest_tcell: &TCellErased) -> Entry<'a> {
-        let hash = dumb_reference_hash(dest_tcell);
+        let hash = bloom_hash(dest_tcell);
         debug_assert!(hash.get() != 0, "bug in dumb_reference_hash algorithm");
         if likely!(self.contained(hash) == Contained::No) {
             Entry::new_hash(self, hash)
@@ -393,7 +393,7 @@ const fn calc_shift() -> usize {
 }
 
 #[inline]
-pub fn dumb_reference_hash(value: &TCellErased) -> NonZeroUsize {
+pub fn bloom_hash(value: &TCellErased) -> NonZeroUsize {
     const SHIFT: usize = calc_shift();
     let raw_hash: usize = value as *const TCellErased as usize >> SHIFT;
     let result = 1 << (raw_hash & (mem::size_of::<NonZeroUsize>() * 8 - 1));

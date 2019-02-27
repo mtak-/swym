@@ -50,7 +50,7 @@ impl ThreadKey {
             .current_epoch
             .set(QuiesceEpoch::end_of_time(), Release);
         self.thread
-            .tx_state()
+            .tx_logs()
             .as_mut()
             .garbage
             .synch_and_collect_all(self.thread.synch().as_ref());

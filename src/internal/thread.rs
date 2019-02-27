@@ -22,16 +22,16 @@ use std::{
 
 // TODO: optimize memory layout
 #[repr(C)]
-pub struct TxState {
+pub struct TxLogs {
     pub read_log:  ReadLog,
     pub write_log: WriteLog,
     pub garbage:   ThreadGarbage,
 }
 
-impl TxState {
+impl TxLogs {
     #[inline]
     fn new() -> Result<Self, AllocErr> {
-        Ok(TxState {
+        Ok(TxLogs {
             read_log:  ReadLog::new()?,
             write_log: WriteLog::new()?,
             garbage:   ThreadGarbage::new(),
@@ -66,12 +66,12 @@ impl TxState {
     pub fn validate_start_state(&mut self) {
         debug_assert!(self.read_log.is_empty());
         debug_assert!(self.write_log.is_empty());
-        debug_assert!(self.garbage.is_current_epoch_empty());
+        debug_assert!(self.garbage.is_speculative_bag_empty());
     }
 }
 
 #[cfg(debug_assertions)]
-impl Drop for TxState {
+impl Drop for TxLogs {
     fn drop(&mut self) {
         self.validate_start_state();
     }
@@ -79,7 +79,7 @@ impl Drop for TxState {
 
 #[repr(C, align(64))]
 pub struct Thread {
-    tx_state:         TxState,
+    tx_state:         TxLogs,
     pub(crate) synch: Synch,
     ref_count:        Cell<usize>,
 }
@@ -89,7 +89,7 @@ impl Thread {
     #[cold]
     pub(crate) fn new() -> Result<Self, AllocErr> {
         Ok(Thread {
-            tx_state:  TxState::new()?,
+            tx_state:  TxLogs::new()?,
             synch:     Synch::new(),
             ref_count: Cell::new(1),
         })
@@ -113,14 +113,14 @@ impl ThreadKeyRaw {
     }
 
     #[inline]
-    pub fn tx_state(self) -> NonNull<TxState> {
+    pub fn tx_logs(self) -> NonNull<TxLogs> {
         self.thread.cast()
     }
 
     #[inline]
     pub fn synch(self) -> NonNull<Synch> {
         unsafe {
-            self.tx_state()
+            self.tx_logs()
                 .assume_aligned()
                 .add(1)
                 .assume_aligned()
@@ -171,7 +171,7 @@ impl ThreadKeyRaw {
         loop {
             stats::write_transaction();
 
-            self.tx_state().as_mut().validate_start_state();
+            self.tx_logs().as_mut().validate_start_state();
             let pin = self.pin_rw();
             let tx = RWTx::new(self);
             let r = f(tx);
@@ -182,7 +182,7 @@ impl ThreadKeyRaw {
                     if likely!(quiesce_epoch.is_some()) {
                         if let Some(quiesce_epoch) = quiesce_epoch {
                             unpinned.success(quiesce_epoch);
-                            self.tx_state().as_mut().validate_start_state();
+                            self.tx_logs().as_mut().validate_start_state();
                             return o;
                         }
                     }
@@ -274,10 +274,10 @@ impl Drop for PinRw<'_> {
                 .as_ref()
                 .current_epoch
                 .deactivate(Release);
-            let mut tx_state = self.thread.tx_state();
+            let mut tx_state = self.thread.tx_logs();
             let tx_state = tx_state.as_mut();
             tx_state.read_log.clear();
-            tx_state.garbage.leak_current_epoch();
+            tx_state.garbage.abort_speculative_garbage();
             tx_state.write_log.clear();
         }
     }
@@ -292,10 +292,10 @@ impl Drop for UnpinRw<'_> {
     #[inline]
     fn drop(&mut self) {
         unsafe {
-            let mut tx_state = self.thread.tx_state();
+            let mut tx_state = self.thread.tx_logs();
             let tx_state = tx_state.as_mut();
             tx_state.read_log.clear();
-            tx_state.garbage.leak_current_epoch();
+            tx_state.garbage.abort_speculative_garbage();
             tx_state.write_log.clear();
             self.thread
                 .synch()
@@ -310,7 +310,7 @@ impl UnpinRw<'_> {
     #[inline]
     pub fn success(self, quiesce_epoch: QuiesceEpoch) {
         unsafe {
-            let mut tx_state = self.thread.tx_state();
+            let mut tx_state = self.thread.tx_logs();
             let tx_state = tx_state.as_mut();
             let synch = self.thread.synch();
             let synch = synch.as_ref();
