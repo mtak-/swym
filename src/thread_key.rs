@@ -4,7 +4,7 @@
 use crate::{
     internal::{
         epoch::QuiesceEpoch,
-        gc::GlobalThreadList,
+        gc::GlobalSynchList,
         thread::{Thread, ThreadKeyRaw},
     },
     read::ReadTx,
@@ -12,7 +12,6 @@ use crate::{
     tx::Error,
 };
 use std::{
-    alloc::AllocErr,
     fmt::{self, Debug, Formatter},
     ptr::NonNull,
     sync::atomic::Ordering::Release,
@@ -32,13 +31,13 @@ pub struct ThreadKey {
 impl ThreadKey {
     #[inline(never)]
     #[cold]
-    fn new() -> Result<Self, AllocErr> {
-        let thread = Box::new(Thread::new()?);
-        GlobalThreadList::instance()
-            .write()
-            .register((&thread.synch).into());
-        let thread = unsafe { ThreadKeyRaw::new(NonNull::new_unchecked(Box::into_raw(thread))) };
-        Ok(ThreadKey { thread })
+    fn new() -> Self {
+        let thread = Box::new(Thread::new());
+        unsafe {
+            GlobalSynchList::instance().write().register(&thread.synch);
+            let thread = ThreadKeyRaw::new(NonNull::new_unchecked(Box::into_raw(thread)));
+            ThreadKey { thread }
+        }
     }
 
     #[inline(never)]
@@ -60,7 +59,7 @@ impl ThreadKey {
             .set(QuiesceEpoch::inactive(), Release);
 
         tls::clear_tls();
-        GlobalThreadList::instance_unchecked()
+        GlobalSynchList::instance_unchecked()
             .write()
             .unregister(synch);
         drop(Box::from_raw(self.thread.thread().as_ptr()))
@@ -307,7 +306,7 @@ impl Drop for ThreadKey {
 #[inline(never)]
 #[cold]
 fn new_thread_key() -> ThreadKey {
-    ThreadKey::new().expect("Failed to allocate `Thread`")
+    ThreadKey::new()
 }
 
 #[inline(never)]

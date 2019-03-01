@@ -26,6 +26,6 @@ mod quiesce;
 mod thread_garbage;
 
 pub use self::{
-    quiesce::{FreezeList, GlobalThreadList, Synch, ThreadList, Write},
+    quiesce::{FreezeList, GlobalSynchList, Synch, SynchList, Write},
     thread_garbage::ThreadGarbage,
 };

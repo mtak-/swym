@@ -12,7 +12,7 @@ pub struct Queued<T: 'static + Send> {
 
 impl<T: 'static + Send> Queued<T> {
     #[inline]
-    pub unsafe fn new(to_drop: ManuallyDrop<T>) -> Self {
+    pub fn new(to_drop: ManuallyDrop<T>) -> Self {
         debug_assert!(
             mem::needs_drop::<T>(),
             "attempt to queue garbage that doesn't need dropping"
@@ -24,11 +24,12 @@ impl<T: 'static + Send> Queued<T> {
 }
 
 /// An in place FnOnce
-pub unsafe trait FnOnceish {
+pub trait FnOnceish {
+    /// Unsafe to call more than once
     unsafe fn call(&mut self);
 }
 
-unsafe impl<T: 'static + Send> FnOnceish for Queued<T> {
+impl<T: 'static + Send> FnOnceish for Queued<T> {
     #[inline]
     unsafe fn call(&mut self) {
         // if T's actual alignment is greater than the alignment of a usize,

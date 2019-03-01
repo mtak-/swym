@@ -12,7 +12,6 @@ use crate::{
     tx::Error,
 };
 use std::{
-    alloc::AllocErr,
     cell::Cell,
     marker::PhantomData,
     mem,
@@ -30,12 +29,12 @@ pub struct TxLogs {
 
 impl TxLogs {
     #[inline]
-    fn new() -> Result<Self, AllocErr> {
-        Ok(TxLogs {
-            read_log:  ReadLog::new()?,
-            write_log: WriteLog::new()?,
+    fn new() -> Self {
+        TxLogs {
+            read_log:  ReadLog::new(),
+            write_log: WriteLog::new(),
             garbage:   ThreadGarbage::new(),
-        })
+        }
     }
 
     #[inline]
@@ -87,12 +86,12 @@ pub struct Thread {
 impl Thread {
     #[inline(never)]
     #[cold]
-    pub(crate) fn new() -> Result<Self, AllocErr> {
-        Ok(Thread {
-            tx_state:  TxLogs::new()?,
+    pub(crate) fn new() -> Self {
+        Thread {
+            tx_state:  TxLogs::new(),
             synch:     Synch::new(),
             ref_count: Cell::new(1),
-        })
+        }
     }
 }
 

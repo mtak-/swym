@@ -3,7 +3,7 @@ use crate::internal::{
     pointer::PtrExt,
 };
 use std::{
-    alloc::{Alloc, AllocErr},
+    alloc::Alloc,
     borrow::{Borrow, BorrowMut},
     marker::{PhantomData, Unsize},
     mem::{self, ManuallyDrop},
@@ -30,15 +30,15 @@ unsafe impl<#[may_dangle] T: ?Sized, A: Alloc> Drop for DynVec<T, A> {
 
 impl<T: ?Sized, A: Alloc> DynVec<T, A> {
     #[inline]
-    pub fn with_alloc_and_capacity(allocator: A, capacity: NonZeroUsize) -> Result<Self, AllocErr> {
-        Ok(DynVec {
-            data:    FVec::with_alloc_and_capacity(allocator, capacity)?,
+    pub fn with_alloc_and_capacity(allocator: A, capacity: NonZeroUsize) -> Self {
+        DynVec {
+            data:    FVec::with_alloc_and_capacity(allocator, capacity),
             phantom: PhantomData,
-        })
+        }
     }
 
     #[inline]
-    pub fn new() -> Result<Self, AllocErr>
+    pub fn new() -> Self
     where
         A: Default,
     {
@@ -61,24 +61,29 @@ impl<T: ?Sized, A: Alloc> DynVec<T, A> {
     }
 
     #[inline]
-    pub unsafe fn next_push_allocates<U: Unsize<T>>(&self) -> bool {
+    pub fn next_push_allocates<U: Unsize<T>>(&self) -> bool {
         if mem::align_of::<U>() > mem::align_of::<usize>() {
             unimplemented!("overaligned types are currently unimplemented")
         } else {
-            self.data
-                .next_n_pushes_allocates(NonZeroUsize::new_unchecked(
-                    mem::size_of::<Elem<U>>() / mem::size_of::<usize>(),
-                ))
+            debug_assert!(mem::size_of::<Elem<U>>() % mem::size_of::<usize>() == 0);
+            self.data.next_n_pushes_allocates(
+                NonZeroUsize::new(mem::size_of::<Elem<U>>() / mem::size_of::<usize>()).unwrap(),
+            )
         }
     }
 
     #[inline]
-    pub unsafe fn push<U: Unsize<T>>(&mut self, u: U) {
+    pub fn push<U: Unsize<T>>(&mut self, u: U) {
         if mem::align_of::<U>() > mem::align_of::<usize>() {
             unimplemented!("overaligned types are currently unimplemented")
         }
         let elem = Elem::new::<T>(u);
-        self.data.extend_non_empty(elem.as_slice());
+
+        // extend_non_empty requires the slice to have non-zero length.
+        // elem has a vtable pointer in it, so it's never zero sized.
+        unsafe {
+            self.data.extend_non_empty(elem.as_slice());
+        }
         mem::forget(elem)
     }
 
@@ -194,6 +199,8 @@ impl<U> Elem<U> {
         U: Unsize<T>,
     {
         unsafe {
+            assert!(mem::size_of::<Self>() % mem::size_of::<usize>() == 0);
+            assert_eq!(mem::size_of::<&T>(), mem::size_of::<TraitObject>());
             let t = &elem as &T;
             let vtable = mem::transmute::<_, &TraitObject>(&t).vtable;
             Elem { vtable, elem }

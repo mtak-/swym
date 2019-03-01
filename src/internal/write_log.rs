@@ -7,7 +7,6 @@ use crate::internal::{
     usize_aligned::{ForcedUsizeAligned, UsizeAligned},
 };
 use std::{
-    alloc::AllocErr,
     mem::{self, ManuallyDrop},
     num::NonZeroUsize,
     ptr::{self, NonNull},
@@ -157,11 +156,11 @@ pub struct WriteLog {
 
 impl WriteLog {
     #[inline]
-    pub fn new() -> Result<Self, AllocErr> {
-        Ok(WriteLog {
+    pub fn new() -> Self {
+        WriteLog {
             filter: 0,
-            data:   DynVec::new()?,
-        })
+            data:   DynVec::new(),
+        }
     }
 
     #[inline]
@@ -268,7 +267,7 @@ impl WriteLog {
 
     #[inline]
     pub fn next_push_allocates<T>(&self) -> bool {
-        unsafe { self.data.next_push_allocates::<WriteEntryImpl<T>>() }
+        self.data.next_push_allocates::<WriteEntryImpl<T>>()
     }
 
     #[inline]

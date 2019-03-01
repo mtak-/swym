@@ -11,7 +11,7 @@ use std::sync::atomic::Ordering::Acquire;
 /// To modify the GlobalThreadList all Synchs must be locked. To read from the GlobalThreadList,
 /// only the current threads Synch needs to be locked.
 ///
-/// repr(C) is used to help reduce false sharing in `ThreadKey`
+/// TODO: optimize layout
 #[repr(C)]
 pub struct Synch {
     /// The currently pinned epoch, or INACTIVE_EPOCH
@@ -47,10 +47,10 @@ impl Synch {
     /// quiesce epoch.
     ///
     /// The calling thread must be different from the thread owning self, or self
-    /// must be inactive.
+    /// must be inactive, else deadlock.
     #[inline(never)]
     #[cold]
-    pub unsafe fn local_quiesce(&self, quiesce_epoch: QuiesceEpoch) {
+    pub(super) fn local_quiesce(&self, quiesce_epoch: QuiesceEpoch) {
         loop {
             frw_lock::backoff();
             if self.is_quiesced(quiesce_epoch) {
@@ -61,9 +61,10 @@ impl Synch {
 
     /// Acquires the Synch's lock allowing read only access to the GlobalThreadList.
     ///
-    /// This is only called by the thread that owns self.
+    /// Requires that this is called by the thread that owns self, and that self is registered to
+    /// the GlobalThreadList
     #[inline]
-    pub fn freeze_list<'a>(&'a self) -> FreezeList<'a> {
+    pub unsafe fn freeze_list<'a>(&'a self) -> FreezeList<'a> {
         FreezeList::new(self)
     }
 }

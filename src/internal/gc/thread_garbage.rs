@@ -12,7 +12,7 @@ use std::{
 };
 
 // TODO: measure to see what works best in practice.
-const UNUSED_BAG_COUNT: NonZeroUsize = unsafe { NonZeroUsize::new_unchecked(64) };
+const UNUSED_BAG_COUNT: usize = 64;
 
 /// A contiguous container of trash.
 struct Bag {
@@ -23,7 +23,7 @@ impl Bag {
     #[inline]
     fn new() -> Self {
         Bag {
-            queued: DynVec::new().unwrap(),
+            queued: DynVec::new(),
         }
     }
 
@@ -37,13 +37,12 @@ impl Bag {
     }
 
     #[inline]
-    unsafe fn collect(&mut self) {
-        assume!(
-            !self.queued.is_empty(),
-            "unexpectedly collecting an empty bag"
-        );
-        for mut closure in self.queued.drain() {
-            closure.call()
+    fn collect(&mut self) {
+        // the closures are only safe to call once, drain ensures, that is the case
+        unsafe {
+            for mut closure in self.queued.drain() {
+                closure.call()
+            }
         }
     }
 }
@@ -62,15 +61,15 @@ struct UnusedBags {
 impl UnusedBags {
     #[inline]
     fn new() -> Self {
+        // We add 1 here because FVec allocates on the push when it becomes full, instead of the
+        // push after
+        let capacity = NonZeroUsize::new(UNUSED_BAG_COUNT + 1).unwrap();
         let mut result = UnusedBags {
-            bags: unsafe {
-                FVec::with_capacity(NonZeroUsize::new_unchecked(UNUSED_BAG_COUNT.get() + 1))
-                    .unwrap()
-            },
+            bags: FVec::with_capacity(capacity),
         };
 
         unsafe {
-            for _ in 0..UNUSED_BAG_COUNT.get() {
+            for _ in 0..UNUSED_BAG_COUNT {
                 result.bags.push_unchecked(Bag::new());
             }
         }
@@ -86,12 +85,19 @@ impl UnusedBags {
     }
 
     /// Runs collect on a bag, and puts it back into the collection.
+    ///
+    /// Bag must have been acquired using `self.open_bag_unchecked()`
     #[inline]
     unsafe fn recycle_bag_unchecked(&mut self, bag: Bag) {
+        // to ensure that a bag is never "lost", the `collect()`, which runs arbitrary user code,
+        // must be called after the bag has been pushed
         self.bags.push_unchecked(bag);
         let bag = self.bags.back_unchecked();
-
-        // collect after pushing, so that we don't lose a bag on panic
+        debug_assert!(
+            !bag.queued.is_empty(),
+            "unexpectedly collecting an empty bag"
+        );
+        // the Drain iter, leaves the bag empty, even if there is a panic
         bag.collect();
         debug_assert!(bag.queued.is_empty(), "bag not empty after collection");
     }
@@ -114,11 +120,12 @@ impl ThreadGarbage {
     #[inline]
     pub fn new() -> Self {
         let mut unused_bags = UnusedBags::new();
+        debug_assert!(!unused_bags.bags.is_empty());
         let speculative_bag = unsafe { unused_bags.open_bag_unchecked() };
-
+        let sealed_capacity = NonZeroUsize::new(UNUSED_BAG_COUNT).unwrap();
         ThreadGarbage {
             speculative_bag,
-            sealed_bags: FVec::with_capacity(UNUSED_BAG_COUNT).unwrap(),
+            sealed_bags: FVec::with_capacity(sealed_capacity),
             unused_bags,
         }
     }
@@ -141,17 +148,15 @@ impl ThreadGarbage {
     /// Used to help move allocations out of the fast path.
     #[inline]
     pub fn next_trash_allocates<T: 'static + Send>(&self) -> bool {
-        unsafe {
-            self.speculative_bag
-                .queued
-                .next_push_allocates::<Queued<T>>()
-        }
+        self.speculative_bag
+            .queued
+            .next_push_allocates::<Queued<T>>()
     }
 
     /// Queues value up to be dropped should the current transaction succeed.
     #[inline]
     pub fn trash<T: 'static + Send>(&mut self, value: ManuallyDrop<T>) {
-        unsafe { self.speculative_bag.queued.push(Queued::new(value)) }
+        self.speculative_bag.queued.push(Queued::new(value))
     }
 
     /// Queues value up to be dropped should the current transaction succeed.

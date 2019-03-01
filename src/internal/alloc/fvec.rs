@@ -3,7 +3,7 @@ use crate::internal::{
     pointer::{PtrExt, PtrMutExt},
 };
 use std::{
-    alloc::{Alloc, AllocErr, Layout},
+    alloc::{Alloc, Layout},
     fmt::{self, Debug, Formatter},
     iter::TrustedLen,
     marker::PhantomData,
@@ -44,7 +44,7 @@ unsafe impl<#[may_dangle] T, A: Alloc> Drop for FVec<T, A> {
 
 impl<T, A: Alloc> FVec<T, A> {
     #[inline]
-    pub fn new() -> Result<FVec<T, A>, Error>
+    pub fn new() -> FVec<T, A>
     where
         A: Default,
     {
@@ -52,34 +52,33 @@ impl<T, A: Alloc> FVec<T, A> {
     }
 
     #[inline]
-    pub fn with_alloc_and_capacity(
-        mut allocator: A,
-        capacity: NonZeroUsize,
-    ) -> Result<FVec<T, A>, Error> {
+    pub fn with_alloc_and_capacity(mut allocator: A, capacity: NonZeroUsize) -> FVec<T, A> {
         assert!(
             mem::size_of::<T>() > 0,
             "`FVec` does not support zero sized types"
         );
 
         unsafe {
-            let buf = allocator
-                .alloc(Layout::from_size_align_unchecked(
-                    mem::size_of::<T>() * capacity.get(),
-                    mem::align_of::<T>(),
-                ))?
-                .cast();
-            Ok(FVec {
+            let layout = Layout::from_size_align_unchecked(
+                mem::size_of::<T>() * capacity.get(),
+                mem::align_of::<T>(),
+            );
+            let buf = match allocator.alloc(layout) {
+                Ok(buf) => buf.cast(),
+                Err(_) => std::alloc::handle_alloc_error(layout),
+            };
+            FVec {
                 end: buf,
                 last_valid_address: buf.add(capacity.get() - 1),
                 begin: buf,
                 _phantom: PhantomData,
                 allocator,
-            })
+            }
         }
     }
 
     #[inline]
-    pub fn with_capacity(capacity: NonZeroUsize) -> Result<FVec<T, A>, Error>
+    pub fn with_capacity(capacity: NonZeroUsize) -> FVec<T, A>
     where
         A: Default,
     {
@@ -87,7 +86,7 @@ impl<T, A: Alloc> FVec<T, A> {
     }
 
     #[inline]
-    pub fn with_alloc(alloc: A) -> Result<FVec<T, A>, Error> {
+    pub fn with_alloc(alloc: A) -> FVec<T, A> {
         FVec::with_alloc_and_capacity(alloc, START_SIZE)
     }
 
@@ -751,8 +750,6 @@ impl<T, A: Alloc> ExactSizeIterator for IntoIter<T, A> {
 
 unsafe impl<T, A: Alloc> TrustedLen for IntoIter<T, A> {}
 
-pub type Error = AllocErr;
-
 const START_SIZE: NonZeroUsize = unsafe { NonZeroUsize::new_unchecked(1024) };
 
 // used by tests
@@ -760,11 +757,9 @@ const START_SIZE: NonZeroUsize = unsafe { NonZeroUsize::new_unchecked(1024) };
 macro_rules! fvec {
     ($($es:expr),* $(,)*) => {
         {
-            let v = $crate::internal::alloc::fvec::FVec::<_, $crate::internal::alloc::DefaultAlloc>::new();
-            v.map(|mut v| {
-                $(v.push($es);)*
-                v
-            })
+            let mut v = $crate::internal::alloc::fvec::FVec::<_, $crate::internal::alloc::DefaultAlloc>::new();
+            $(v.push($es);)*
+            v
         }
     };
 }

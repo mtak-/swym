@@ -3,10 +3,10 @@
 
 mod global;
 mod synch;
-mod thread_list;
+mod synch_list;
 
 pub use self::{
-    global::{FreezeList, GlobalThreadList, Write},
+    global::{FreezeList, GlobalSynchList, Write},
     synch::Synch,
-    thread_list::ThreadList,
+    synch_list::SynchList,
 };

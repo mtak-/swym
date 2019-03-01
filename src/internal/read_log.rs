@@ -4,7 +4,7 @@ use crate::internal::{
     stats,
     tcell_erased::TCellErased,
 };
-use std::{alloc::AllocErr, num::NonZeroUsize, ptr::NonNull, sync::atomic::Ordering::Relaxed};
+use std::{num::NonZeroUsize, ptr::NonNull, sync::atomic::Ordering::Relaxed};
 
 const READ_SIZE: NonZeroUsize = unsafe { NonZeroUsize::new_unchecked(1024) };
 
@@ -15,10 +15,10 @@ pub struct ReadLog {
 
 impl ReadLog {
     #[inline]
-    pub fn new() -> Result<Self, AllocErr> {
-        Ok(ReadLog {
-            data: FVec::with_capacity(READ_SIZE)?,
-        })
+    pub fn new() -> Self {
+        ReadLog {
+            data: FVec::with_capacity(READ_SIZE),
+        }
     }
 
     #[inline]
