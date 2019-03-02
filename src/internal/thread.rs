@@ -19,63 +19,9 @@ use std::{
     sync::atomic::Ordering::{Acquire, Relaxed, Release},
 };
 
-// TODO: optimize memory layout
-#[repr(C)]
-pub struct TxLogs {
-    pub read_log:  ReadLog,
-    pub write_log: WriteLog,
-    pub garbage:   ThreadGarbage,
-}
-
-impl TxLogs {
-    #[inline]
-    fn new() -> Self {
-        TxLogs {
-            read_log:  ReadLog::new(),
-            write_log: WriteLog::new(),
-            garbage:   ThreadGarbage::new(),
-        }
-    }
-
-    #[inline]
-    pub fn remove_writes_from_reads(&mut self) {
-        let mut count = 0;
-        for i in (0..self.read_log.len()).rev() {
-            debug_assert!(i < self.read_log.len(), "bug in `remove_writes_from_reads`");
-            if self
-                .write_log
-                .find(unsafe { self.read_log.get_unchecked(i).src.as_ref() })
-                .is_some()
-            {
-                let l = self.read_log.len();
-                unsafe {
-                    self.read_log.swap_erase_unchecked(i);
-                }
-                count += 1;
-                debug_assert!(
-                    l == self.read_log.len() + 1,
-                    "bug in `remove_writes_from_reads`"
-                );
-            }
-        }
-        stats::unnecessary_read_size(count)
-    }
-
-    #[inline]
-    pub fn validate_start_state(&mut self) {
-        debug_assert!(self.read_log.is_empty());
-        debug_assert!(self.write_log.is_empty());
-        debug_assert!(self.garbage.is_speculative_bag_empty());
-    }
-}
-
-#[cfg(debug_assertions)]
-impl Drop for TxLogs {
-    fn drop(&mut self) {
-        self.validate_start_state();
-    }
-}
-
+/// Intrusive reference counted thread local data.
+///
+/// Synch is aliased in the GlobalSynchList of the garbage collector.
 #[repr(C, align(64))]
 pub struct Thread {
     tx_state:         TxLogs,
@@ -86,7 +32,7 @@ pub struct Thread {
 impl Thread {
     #[inline(never)]
     #[cold]
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Thread {
             tx_state:  TxLogs::new(),
             synch:     Synch::new(),
@@ -193,19 +139,76 @@ impl ThreadKeyRaw {
     }
 
     #[inline]
-    pub fn pin_read(&self) -> (PinRead<'_>, QuiesceEpoch) {
+    fn pin_read(&self) -> (PinRead<'_>, QuiesceEpoch) {
         PinRead::new(unsafe { &(*self.thread.as_ptr()).synch.current_epoch })
     }
 
     #[inline]
-    pub fn pin_rw(&self) -> PinRw<'_> {
+    fn pin_rw(&self) -> PinRw<'_> {
         PinRw::new(ThreadKeyRaw {
             thread: self.thread,
         })
     }
 }
 
-pub struct PinRead<'a> {
+// TODO: optimize memory layout
+#[repr(C)]
+pub struct TxLogs {
+    pub read_log:  ReadLog,
+    pub write_log: WriteLog,
+    pub garbage:   ThreadGarbage,
+}
+
+impl TxLogs {
+    #[inline]
+    fn new() -> Self {
+        TxLogs {
+            read_log:  ReadLog::new(),
+            write_log: WriteLog::new(),
+            garbage:   ThreadGarbage::new(),
+        }
+    }
+
+    #[inline]
+    pub fn remove_writes_from_reads(&mut self) {
+        let mut count = 0;
+        for i in (0..self.read_log.len()).rev() {
+            debug_assert!(i < self.read_log.len(), "bug in `remove_writes_from_reads`");
+            if self
+                .write_log
+                .find(unsafe { self.read_log.get_unchecked(i).src.as_ref() })
+                .is_some()
+            {
+                let l = self.read_log.len();
+                unsafe {
+                    self.read_log.swap_erase_unchecked(i);
+                }
+                count += 1;
+                debug_assert!(
+                    l == self.read_log.len() + 1,
+                    "bug in `remove_writes_from_reads`"
+                );
+            }
+        }
+        stats::unnecessary_read_size(count)
+    }
+
+    #[inline]
+    fn validate_start_state(&mut self) {
+        debug_assert!(self.read_log.is_empty());
+        debug_assert!(self.write_log.is_empty());
+        debug_assert!(self.garbage.is_speculative_bag_empty());
+    }
+}
+
+#[cfg(debug_assertions)]
+impl Drop for TxLogs {
+    fn drop(&mut self) {
+        self.validate_start_state();
+    }
+}
+
+struct PinRead<'a> {
     current_epoch: &'a AtomicQuiesceEpoch,
 }
 
@@ -245,7 +248,7 @@ impl<'a> PinRw<'a> {
     }
 
     #[inline]
-    pub fn unpin(self) -> UnpinRw<'a> {
+    fn unpin(self) -> UnpinRw<'a> {
         unsafe {
             let thread = ThreadKeyRaw {
                 thread: self.thread.thread(),
@@ -307,7 +310,7 @@ impl Drop for UnpinRw<'_> {
 
 impl UnpinRw<'_> {
     #[inline]
-    pub fn success(self, quiesce_epoch: QuiesceEpoch) {
+    fn success(self, quiesce_epoch: QuiesceEpoch) {
         unsafe {
             let mut tx_state = self.thread.tx_logs();
             let tx_state = tx_state.as_mut();

@@ -6,7 +6,7 @@
 //! 1. Start speculatively accumulating garbage
 //! 2. a. On transaction failure, "forget" all of the garbage.
 //! 2. b. On transaction success (assuming any garbage was queued for collection)
-//!     - A new Global Epoch was set by swym, and the current bag is sealed with the immediately
+//!     - The EpochClock was ticked by swym, and the current bag is sealed with the immediately
 //!       preceding epoch.
 //!     - The sealed bag is now guaranteed to be collected, and pushed into a list of other sealed
 //!       bags.
@@ -18,7 +18,7 @@
 //!         - Else we if the epoch is lower than any other observed epoch we record it.
 //!         - After iterating we now know the oldest pinned epoch.
 //!         - Then we collect all bags with epochs < than that epoch (and are guarnateed to atleast
-//!           collect one bag).
+//!           collect the oldest bag).
 //! 3. Unpin the current thread (set current_epoch to INACTIVE)
 
 mod queued;

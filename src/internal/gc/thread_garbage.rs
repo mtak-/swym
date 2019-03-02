@@ -241,7 +241,7 @@ impl ThreadGarbage {
             self.is_speculative_bag_empty(),
             "`collect` called while current bag is not empty"
         );
-        assume!(
+        debug_assert!(
             !self.sealed_bags.is_empty(),
             "`collect` called with no sealed bags"
         );
