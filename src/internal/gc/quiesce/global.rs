@@ -71,6 +71,7 @@ impl GlobalSynchList {
         unsafe { Self::instance_unchecked() }
     }
 
+    /// Returns a references to the global thread list.
     #[inline]
     pub fn instance() -> &'static Self {
         let raw = SINGLETON.load(Acquire);
@@ -82,7 +83,8 @@ impl GlobalSynchList {
         }
     }
 
-    // fast path, if `instance` has been called, then instance_unchecked is safe to call.
+    /// Returns a references to the global thread list. If `instance` has been called, then
+    /// instance_unchecked is safe to call.
     #[inline]
     pub unsafe fn instance_unchecked() -> &'static Self {
         let raw = SINGLETON.load(Relaxed);

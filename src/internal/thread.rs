@@ -21,12 +21,25 @@ use std::{
 
 /// Intrusive reference counted thread local data.
 ///
-/// Synch is aliased in the GlobalSynchList of the garbage collector.
+/// Synch is aliased in the GlobalSynchList of the garbage collector by a NonNull<Synch> pointer.
+/// This strongly hints that Synch and TxLogs should not be stored in the same struct; however, it
+/// is an optimization win for RWTx to only have one pointer to all of the threads state.
+///
+/// TODO: It's possible we don't need reference counting, if read/try_read/rw/try_rw are made free
+/// functions. But,s doing so, makes 'tcell lifetimes hard/impossible to create.
 #[repr(C, align(64))]
 pub struct Thread {
-    tx_state:         TxLogs,
+    /// Contains the Read/Write logs plus the ThreadGarbage. This field needs to be referenced
+    /// mutably, and the uniqueness requirement of pinning guarantees that we dont violate any
+    /// aliasing rules.
+    tx_state: TxLogs,
+
+    /// The part of a Thread that is visible to other threads in swym (an atomic epoch, and sharded
+    /// lock).
     pub(crate) synch: Synch,
-    ref_count:        Cell<usize>,
+
+    /// The reference count.
+    ref_count: Cell<usize>,
 }
 
 impl Thread {
@@ -41,51 +54,87 @@ impl Thread {
     }
 }
 
+/// Given a pointer to a thread, we want to be able to create pointers to its members without going
+/// through a &mut. Going through an &mut would violate rusts aliasing rules, because Synch might be
+/// borrowed immutably by other threads performing garbage collection.
+///
+/// ThreadKeyRaw handles the `offset_of` logic for creating member pointers.
 #[derive(Copy, Clone, Debug)]
 pub struct ThreadKeyRaw {
     thread: NonNull<Thread>,
 }
 
-// TODO: is this all necessary to avoid violating aliasing rules?
 impl ThreadKeyRaw {
     pub fn new(thread: NonNull<Thread>) -> Self {
         ThreadKeyRaw { thread }
     }
 
+    /// Returns a raw pointer to the thread
     #[inline]
     pub fn thread(self) -> NonNull<Thread> {
         self.thread
     }
 
+    /// Returns a raw pointer to the transaction logs (read/write/thread garbage).
     #[inline]
     pub fn tx_logs(self) -> NonNull<TxLogs> {
+        // relies on repr(C) on Thread
         self.thread.cast()
     }
 
+    /// Returns a raw pointer to the shared state of the thread (sharded lock and atomic epoch).
     #[inline]
     pub fn synch(self) -> NonNull<Synch> {
+        // relies on repr(C) on Thread
         unsafe {
             self.tx_logs()
-                .assume_aligned()
-                .add(1)
-                .assume_aligned()
+                .add(1) // synch is the field immediately after tx logs
+                .assume_aligned() // assume_aligned here, makes align_next optimize away on most (all?) platforms
                 .cast::<Synch>()
-                .align_next()
+                .align_next() // adjusts the pointer in the case that Synchs alignment is > TxLogs
         }
     }
 
+    /// Returns a raw pointer to the reference count.
     #[inline]
-    pub fn ref_count(self) -> NonNull<Cell<usize>> {
+    fn ref_count(self) -> NonNull<Cell<usize>> {
+        // relies on repr(C) on Thread
         unsafe {
             self.synch()
-                .assume_aligned()
-                .add(1)
-                .assume_aligned()
+                .add(1) // ref_count is the field immediately after tx logs
+                .assume_aligned() // assume_aligned here, makes align_next optimize away on most (all?) platforms
                 .cast::<Cell<usize>>()
-                .align_next()
+                .align_next() // adjusts the pointer in the case that Cell<usize> alignment is > Synch
         }
     }
 
+    // Increments the reference count on thread. Requires the thread pointer to still be valid.
+    #[inline]
+    pub unsafe fn inc_ref_count(self) {
+        let ref_count = self.ref_count();
+        let ref_count = ref_count.as_ref();
+        let count = ref_count.get();
+        debug_assert!(count > 0, "attempt to clone a deallocated `ThreadKey`");
+        ref_count.set(count + 1);
+    }
+
+    // Decrements the reference count on thread. Requires the thread pointer to still be valid.
+    #[inline]
+    pub unsafe fn dec_ref_count(self) -> DecRefCountResult {
+        let ref_count = self.ref_count();
+        let ref_count = ref_count.as_ref();
+        let count = ref_count.get();
+        debug_assert!(count > 0, "double free on `ThreadKey` attempted");
+        if count == 1 {
+            DecRefCountResult::DestroyRequested
+        } else {
+            ref_count.set(count - 1);
+            DecRefCountResult::StillValid
+        }
+    }
+
+    /// Runs a read only transaction. Requires the thread to not be in a transaction, and the thread
+    /// pointer to still be valid.
     #[inline]
     pub unsafe fn read_slow<'tcell, F, O>(self, mut f: F) -> O
     where
@@ -108,6 +157,8 @@ impl ThreadKeyRaw {
         }
     }
 
+    /// Runs a read-write transaction. Requires the thread to not be in a transaction, and the
+    /// thread pointer to still be valid.
     #[inline]
     pub unsafe fn rw_slow<'tcell, F, O>(self, mut f: F) -> O
     where
@@ -228,7 +279,7 @@ impl<'a> Drop for PinRead<'a> {
     }
 }
 
-pub struct PinRw<'a> {
+struct PinRw<'a> {
     thread:  ThreadKeyRaw,
     phantom: PhantomData<&'a mut ()>,
 }
@@ -285,7 +336,7 @@ impl Drop for PinRw<'_> {
     }
 }
 
-pub struct UnpinRw<'a> {
+struct UnpinRw<'a> {
     thread:  ThreadKeyRaw,
     phantom: PhantomData<&'a mut ()>,
 }
@@ -323,4 +374,10 @@ impl UnpinRw<'_> {
             synch.current_epoch.deactivate(Relaxed);
         }
     }
+}
+
+#[derive(Copy, Clone, PartialEq, Eq)]
+pub enum DecRefCountResult {
+    DestroyRequested,
+    StillValid,
 }

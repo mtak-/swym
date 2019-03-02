@@ -5,7 +5,7 @@ use crate::{
     internal::{
         epoch::QuiesceEpoch,
         gc::GlobalSynchList,
-        thread::{Thread, ThreadKeyRaw},
+        thread::{DecRefCountResult, Thread, ThreadKeyRaw},
     },
     read::ReadTx,
     rw::RWTx,
@@ -274,11 +274,7 @@ impl Clone for ThreadKey {
     #[inline]
     fn clone(&self) -> Self {
         unsafe {
-            let ref_count = self.thread.ref_count();
-            let ref_count = ref_count.as_ref();
-            let count = ref_count.get();
-            debug_assert!(count > 0, "attempt to clone a deallocated `ThreadKey`");
-            ref_count.set(count + 1);
+            self.thread.inc_ref_count();
             ThreadKey {
                 thread: self.as_raw(),
             }
@@ -290,14 +286,8 @@ impl Drop for ThreadKey {
     #[inline]
     fn drop(&mut self) {
         unsafe {
-            let ref_count = self.thread.ref_count();
-            let ref_count = ref_count.as_ref();
-            let count = ref_count.get();
-            debug_assert!(count > 0, "double free on ThreadKey attempted");
-            if count == 1 {
+            if self.thread.dec_ref_count() == DecRefCountResult::DestroyRequested {
                 self.unregister()
-            } else {
-                ref_count.set(count - 1);
             }
         }
     }
