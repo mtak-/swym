@@ -422,15 +422,15 @@ impl Drop for PinRw<'_> {
     #[inline]
     fn drop(&mut self) {
         unsafe {
-            synch(self.thread)
-                .as_ref()
-                .current_epoch
-                .deactivate(Release);
             let mut tx_logs = tx_logs(self.thread);
             let tx_logs = tx_logs.as_mut();
             tx_logs.read_log.clear();
             tx_logs.garbage.abort_speculative_garbage();
             tx_logs.write_log.clear();
+            synch(self.thread)
+                .as_ref()
+                .current_epoch
+                .deactivate(Relaxed);
         }
     }
 }
