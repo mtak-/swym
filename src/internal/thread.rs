@@ -93,6 +93,7 @@ fn ref_count(thread: NonNull<Thread>) -> NonNull<Cell<usize>> {
     }
 }
 
+/// Reference counted pointer to Thread.
 #[derive(Debug)]
 pub struct ThreadKeyInner {
     thread: NonNull<Thread>,
@@ -102,6 +103,7 @@ impl Clone for ThreadKeyInner {
     #[inline]
     fn clone(&self) -> Self {
         let ref_count = ref_count(self.thread);
+        // this is safe as long as the reference counting logic is safe
         let ref_count = unsafe { ref_count.as_ref() };
         let count = ref_count.get();
         debug_assert!(count > 0, "attempt to clone a deallocated `ThreadKey`");
@@ -116,12 +118,14 @@ impl Drop for ThreadKeyInner {
     #[inline]
     fn drop(&mut self) {
         let ref_count = ref_count(self.thread);
+        // this is safe as long as the reference counting logic is safe
         let ref_count = unsafe { ref_count.as_ref() };
         let count = ref_count.get();
         debug_assert!(count > 0, "double free on `ThreadKey` attempted");
         if likely!(count != 1) {
             ref_count.set(count - 1)
         } else {
+            // this is safe as long as the reference counting logic is safe
             unsafe {
                 dealloc(self.thread);
             }
@@ -132,6 +136,7 @@ impl Drop for ThreadKeyInner {
                 let synch = synch(this);
                 let synch = synch.as_ref();
 
+                // All thread garbage must be collected before the Thread is dropped.
                 synch
                     .current_epoch
                     .set(QuiesceEpoch::end_of_time(), Release);
