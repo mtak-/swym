@@ -23,24 +23,22 @@ impl SynchList {
 
     /// Unregisters a destructing synch.
     #[inline]
-    pub fn unregister(&mut self, to_remove: NonNull<Synch>) {
+    pub fn unregister(&mut self, to_remove: &Synch) {
         let position = self
             .synchs
             .iter()
             .rev()
-            .position(|&synch| synch == to_remove);
+            .position(|&synch| synch == to_remove.into());
 
-        match position {
-            Some(position) => unsafe {
-                // safe since self.synchs has not been modified
-                self.synchs.rswap_erase_unchecked(position);
-            },
-            None => {
-                if cfg!(debug_assertions) {
-                    panic!("failed to find thread in the global thread list")
-                }
-            }
-        }
+        debug_assert!(
+            position.is_some(),
+            "failed to find thread in the global thread list"
+        );
+
+        position.map(|position| unsafe {
+            // safe since self.synchs has not been modified
+            self.synchs.rswap_erase_unchecked(position);
+        });
     }
 
     #[inline]

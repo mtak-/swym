@@ -1,7 +1,7 @@
 use crate::{
     internal::{
         epoch::{AtomicQuiesceEpoch, QuiesceEpoch, EPOCH_CLOCK},
-        gc::{Synch, ThreadGarbage},
+        gc::{GlobalSynchList, Synch, ThreadGarbage},
         pointer::PtrExt,
         read_log::ReadLog,
         stats,
@@ -36,7 +36,7 @@ pub struct Thread {
 
     /// The part of a Thread that is visible to other threads in swym (an atomic epoch, and sharded
     /// lock).
-    pub(crate) synch: Synch,
+    synch: Synch,
 
     /// The reference count.
     ref_count: Cell<usize>,
@@ -45,7 +45,7 @@ pub struct Thread {
 impl Thread {
     #[inline(never)]
     #[cold]
-    pub fn new() -> Self {
+    fn new() -> Self {
         Thread {
             tx_state:  TxLogs::new(),
             synch:     Synch::new(),
@@ -58,21 +58,45 @@ impl Thread {
 /// through a &mut. Going through an &mut would violate rusts aliasing rules, because Synch might be
 /// borrowed immutably by other threads performing garbage collection.
 ///
-/// ThreadKeyRaw handles the `offset_of` logic for creating member pointers.
+/// ThreadKeyInner handles the `offset_of` logic for creating member pointers.
 #[derive(Copy, Clone, Debug)]
-pub struct ThreadKeyRaw {
+pub struct ThreadKeyInner {
     thread: NonNull<Thread>,
 }
 
-impl ThreadKeyRaw {
-    pub fn new(thread: NonNull<Thread>) -> Self {
-        ThreadKeyRaw { thread }
+impl ThreadKeyInner {
+    #[inline]
+    pub fn alloc() -> Self {
+        let thread = Box::new(Thread::new());
+        unsafe {
+            GlobalSynchList::instance().write().register(&thread.synch);
+            ThreadKeyInner {
+                thread: NonNull::new_unchecked(Box::into_raw(thread)),
+            }
+        }
     }
 
-    /// Returns a raw pointer to the thread
-    #[inline]
-    pub fn thread(self) -> NonNull<Thread> {
-        self.thread
+    #[inline(never)]
+    #[cold]
+    unsafe fn dealloc(self) -> DecRefCountResult {
+        let synch = self.synch();
+        let synch = synch.as_ref();
+
+        synch
+            .current_epoch
+            .set(QuiesceEpoch::end_of_time(), Release);
+        self.tx_logs()
+            .as_mut()
+            .garbage
+            .synch_and_collect_all(self.synch().as_ref());
+        synch.current_epoch.set(QuiesceEpoch::inactive(), Release);
+
+        GlobalSynchList::instance_unchecked()
+            .write()
+            .unregister(synch);
+        drop(Box::from_raw(self.thread.as_ptr()));
+
+        DecRefCountResult::Destroyed
     }
 
     /// Returns a raw pointer to the transaction logs (read/write/thread garbage).
@@ -84,7 +108,7 @@ impl ThreadKeyRaw {
 
     /// Returns a raw pointer to the shared state of the thread (sharded lock and atomic epoch).
     #[inline]
-    pub fn synch(self) -> NonNull<Synch> {
+    fn synch(self) -> NonNull<Synch> {
         // relies on repr(C) on Thread
         unsafe {
             self.tx_logs()
@@ -108,6 +132,32 @@ impl ThreadKeyRaw {
         }
     }
 
+    /// Returns whether the thread is currently active (pinned or collecting garbage). Requires the
+    /// thread pointer to still be valid.
+    #[inline]
+    pub unsafe fn is_active(self) -> bool {
+        // current_epoch is never changed by any thread except the owning thread, so we're able to
+        // read it without synchronization.
+        self.synch().as_mut().current_epoch.is_active_unsync()
+    }
+
+    /// Gets the currently pinned epoch. Requires the thread pointer to still be valid.
+    #[inline]
+    pub unsafe fn pinned_epoch(self) -> QuiesceEpoch {
+        // current_epoch is never changed by any thread except the owning thread, so we're able to
+        // read it without synchronization.
+        let pinned_epoch = self.synch().as_mut().current_epoch.get_unsync();
+        debug_assert!(
+            pinned_epoch.is_active(),
+            "attempt to get pinned_epoch of thread that is not pinned"
+        );
+        debug_assert!(
+            pinned_epoch != QuiesceEpoch::end_of_time(),
+            "attempt to get pinned_epoch of thread that is not pinned"
+        );
+        pinned_epoch
+    }
+
     // Increments the reference count on thread. Requires the thread pointer to still be valid.
     #[inline]
     pub unsafe fn inc_ref_count(self) {
@@ -125,11 +175,11 @@ impl ThreadKeyRaw {
         let ref_count = ref_count.as_ref();
         let count = ref_count.get();
         debug_assert!(count > 0, "double free on `ThreadKey` attempted");
-        if count == 1 {
-            DecRefCountResult::DestroyRequested
-        } else {
+        if likely!(count != 1) {
             ref_count.set(count - 1);
             DecRefCountResult::StillValid
+        } else {
+            self.dealloc()
         }
     }
 
@@ -196,7 +246,7 @@ impl ThreadKeyRaw {
 
     #[inline]
     fn pin_rw(&self) -> PinRw<'_> {
-        PinRw::new(ThreadKeyRaw {
+        PinRw::new(ThreadKeyInner {
             thread: self.thread,
         })
     }
@@ -280,13 +330,13 @@ impl<'a> Drop for PinRead<'a> {
 }
 
 struct PinRw<'a> {
-    thread:  ThreadKeyRaw,
+    thread:  ThreadKeyInner,
     phantom: PhantomData<&'a mut ()>,
 }
 
 impl<'a> PinRw<'a> {
     #[inline]
-    fn new(thread: ThreadKeyRaw) -> Self {
+    fn new(thread: ThreadKeyInner) -> Self {
         let now = EPOCH_CLOCK.now(Acquire);
         unsafe {
             thread.synch().as_ref().current_epoch.activate(now, Release);
@@ -301,8 +351,8 @@ impl<'a> PinRw<'a> {
     #[inline]
     fn unpin(self) -> UnpinRw<'a> {
         unsafe {
-            let thread = ThreadKeyRaw {
-                thread: self.thread.thread(),
+            let thread = ThreadKeyInner {
+                thread: self.thread.thread,
             };
             mem::forget(self);
             thread
@@ -337,7 +387,7 @@ impl Drop for PinRw<'_> {
 }
 
 struct UnpinRw<'a> {
-    thread:  ThreadKeyRaw,
+    thread:  ThreadKeyInner,
     phantom: PhantomData<&'a mut ()>,
 }
 
@@ -378,6 +428,6 @@ impl UnpinRw<'_> {
 
 #[derive(Copy, Clone, PartialEq, Eq)]
 pub enum DecRefCountResult {
-    DestroyRequested,
+    Destroyed,
     StillValid,
 }

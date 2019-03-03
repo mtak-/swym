@@ -12,7 +12,7 @@ use crate::{
         alloc::dyn_vec::DynElemMut,
         epoch::{QuiesceEpoch, EPOCH_CLOCK},
         tcell_erased::TCellErased,
-        thread::{ThreadKeyRaw, TxLogs},
+        thread::{ThreadKeyInner, TxLogs},
         write_log::{bloom_hash, Contained, Entry, WriteEntryImpl},
     },
     tcell::TCell,
@@ -27,12 +27,12 @@ use std::{
 
 #[derive(Clone, Copy, Debug)]
 struct RWTxImpl {
-    thread_key: ThreadKeyRaw,
+    thread_key: ThreadKeyInner,
 }
 
 impl RWTxImpl {
     #[inline]
-    fn new(thread_key: ThreadKeyRaw) -> Self {
+    fn new(thread_key: ThreadKeyInner) -> Self {
         RWTxImpl { thread_key }
     }
 
@@ -45,9 +45,7 @@ impl RWTxImpl {
     /// The epoch the transaction has pinned.
     #[inline]
     fn pin_epoch(self) -> QuiesceEpoch {
-        // current_epoch is never changed by any thread except the owning thread, so we're able to
-        // read it without synchronization.
-        unsafe { self.thread_key.synch().as_mut().current_epoch.get_unsync() }
+        unsafe { self.thread_key.pinned_epoch() }
     }
 
     /// The commit algorithm, called after user code has finished running without returning an
@@ -301,7 +299,7 @@ impl<'tcell> !Sync for RWTx<'tcell> {}
 
 impl<'tcell> RWTx<'tcell> {
     #[inline]
-    pub(crate) fn new<'a>(thread_key: ThreadKeyRaw) -> &'a mut Self {
+    pub(crate) fn new<'a>(thread_key: ThreadKeyInner) -> &'a mut Self {
         unsafe { mem::transmute(RWTxImpl::new(thread_key)) }
     }
 

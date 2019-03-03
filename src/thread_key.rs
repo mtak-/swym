@@ -2,19 +2,13 @@
 //!
 //! A handle to the thread local state can be acquired by calling [`thread_key::get`].
 use crate::{
-    internal::{
-        epoch::QuiesceEpoch,
-        gc::GlobalSynchList,
-        thread::{DecRefCountResult, Thread, ThreadKeyRaw},
-    },
+    internal::thread::{DecRefCountResult, ThreadKeyInner},
     read::ReadTx,
     rw::RWTx,
     tx::Error,
 };
 use std::{
     fmt::{self, Debug, Formatter},
-    ptr::NonNull,
-    sync::atomic::Ordering::Release,
     thread::AccessError,
 };
 
@@ -25,52 +19,51 @@ use std::{
 /// `ThreadKey`'s encapsulate the state required to perform transactions, and provides the necessary
 /// methods for running transactions.
 pub struct ThreadKey {
-    thread: ThreadKeyRaw,
+    thread: ThreadKeyInner,
+}
+
+impl Clone for ThreadKey {
+    #[inline]
+    fn clone(&self) -> Self {
+        unsafe {
+            self.thread.inc_ref_count();
+            ThreadKey {
+                thread: self.as_raw(),
+            }
+        }
+    }
+}
+
+impl Drop for ThreadKey {
+    #[inline]
+    fn drop(&mut self) {
+        unsafe {
+            if self.thread.dec_ref_count() == DecRefCountResult::Destroyed {
+                tls::clear_tls()
+            }
+        }
+    }
 }
 
 impl ThreadKey {
     #[inline(never)]
     #[cold]
     fn new() -> Self {
-        let thread = Box::new(Thread::new());
-        unsafe {
-            GlobalSynchList::instance().write().register(&thread.synch);
-            let thread = ThreadKeyRaw::new(NonNull::new_unchecked(Box::into_raw(thread)));
-            ThreadKey { thread }
+        ThreadKey {
+            thread: ThreadKeyInner::alloc(),
         }
     }
 
-    #[inline(never)]
-    #[cold]
-    unsafe fn unregister(&self) {
-        let synch = self.thread.synch();
-        synch
-            .as_ref()
-            .current_epoch
-            .set(QuiesceEpoch::end_of_time(), Release);
-        self.thread
-            .tx_logs()
-            .as_mut()
-            .garbage
-            .synch_and_collect_all(self.thread.synch().as_ref());
-        synch
-            .as_ref()
-            .current_epoch
-            .set(QuiesceEpoch::inactive(), Release);
-
-        tls::clear_tls();
-        GlobalSynchList::instance_unchecked()
-            .write()
-            .unregister(synch);
-        drop(Box::from_raw(self.thread.thread().as_ptr()))
-    }
-
     #[inline]
-    pub(crate) fn as_raw(&self) -> ThreadKeyRaw {
-        ThreadKeyRaw::new(self.thread.thread())
+    fn as_raw(&self) -> ThreadKeyInner {
+        self.thread
     }
 
     /// Performs a transaction capabable of only reading.
+    ///
+    /// # Panics
+    ///
+    /// Panics if there is already a running transaction on the current thread.
     ///
     /// # Examples
     ///
@@ -97,7 +90,7 @@ impl ThreadKey {
     ///
     /// # Panics
     ///
-    /// Panics if there is already a running transaction.
+    /// Panics if there is already a running transaction on the current thread.
     ///
     /// # Examples
     ///
@@ -151,7 +144,7 @@ impl ThreadKey {
     {
         let raw = self.as_raw();
         unsafe {
-            if likely!(!raw.synch().as_mut().current_epoch.is_active_unsync()) {
+            if likely!(!raw.is_active()) {
                 Ok(raw.read_slow(f))
             } else {
                 Err(TryReadErr::new())
@@ -190,104 +183,10 @@ impl ThreadKey {
     {
         let raw = self.as_raw();
         unsafe {
-            if likely!(!raw.synch().as_mut().current_epoch.is_active_unsync()) {
+            if likely!(!raw.is_active()) {
                 Ok(raw.rw_slow(f))
             } else {
                 Err(TryRWErr::new())
-            }
-        }
-    }
-
-    /// Performs a transaction capabable of only reading.
-    ///
-    /// # Safety
-    ///
-    /// If the thread is currently in a transaction, this results in undefined behavior.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use swym::{tcell::TCell, thread_key};
-    ///
-    /// let x = TCell::new(String::from("not gonna be overwritten"));
-    ///
-    /// let thread_key = thread_key::get();
-    ///
-    /// unsafe {
-    ///     let x_clone =
-    ///         thread_key.read_unchecked(|tx| Ok(x.borrow(tx, Default::default())?.to_owned()));
-    ///     assert_eq!(x_clone, "not gonna be overwritten");
-    /// }
-    /// ```
-    #[inline]
-    pub unsafe fn read_unchecked<'tcell, F, O>(&'tcell self, f: F) -> O
-    where
-        F: FnMut(&ReadTx<'tcell>) -> Result<O, Error>,
-    {
-        let raw = self.as_raw();
-        debug_assert!(
-            !raw.synch().as_mut().current_epoch.is_active_unsync(),
-            "`rw_unchecked` called during a transaction",
-        );
-        raw.read_slow(f)
-    }
-
-    /// Performs a transaction capabable of reading and writing.
-    ///
-    /// # Safety
-    ///
-    /// If the thread is currently in a transaction, this results in undefined behavior.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use swym::{tcell::TCell, thread_key};
-    ///
-    /// let x = TCell::new(String::from("gonna be overwritten"));
-    ///
-    /// let thread_key = thread_key::get();
-    ///
-    /// unsafe {
-    ///     let prev_x = thread_key.rw_unchecked(|tx| {
-    ///         let prev_x = x.borrow(tx, Default::default())?.to_owned();
-    ///         x.set(tx, "overwritten".to_owned())?;
-    ///         Ok(prev_x)
-    ///     });
-    ///     assert_eq!(prev_x, "gonna be overwritten");
-    /// }
-    /// ```
-    #[inline]
-    pub unsafe fn rw_unchecked<'tcell, F, O>(&'tcell self, f: F) -> O
-    where
-        F: FnMut(&mut RWTx<'tcell>) -> Result<O, Error>,
-    {
-        let raw = self.as_raw();
-        debug_assert!(
-            !raw.synch().as_mut().current_epoch.is_active_unsync(),
-            "`rw_unchecked` called during a transaction",
-        );
-        raw.rw_slow(f)
-    }
-}
-
-impl Clone for ThreadKey {
-    #[inline]
-    fn clone(&self) -> Self {
-        unsafe {
-            self.thread.inc_ref_count();
-            ThreadKey {
-                thread: self.as_raw(),
-            }
-        }
-    }
-}
-
-impl Drop for ThreadKey {
-    #[inline]
-    fn drop(&mut self) {
-        unsafe {
-            if self.thread.dec_ref_count() == DecRefCountResult::DestroyRequested {
-                self.unregister()
             }
         }
     }
@@ -326,26 +225,23 @@ mod tls {
 
 #[cfg(target_thread_local)]
 mod tls {
-    use super::{err_into_thread_key, NonNull, ThreadKey, ThreadKeyRaw, THREAD_KEY};
-    use crate::internal::thread::Thread;
-    use std::{mem, ptr};
+    use super::{err_into_thread_key, ThreadKey, ThreadKeyInner, THREAD_KEY};
+    use std::{cell::Cell, mem};
 
     #[thread_local]
-    static mut TLS: *mut Thread = ptr::null_mut();
+    static TLS: Cell<Option<ThreadKeyInner>> = Cell::new(None);
 
     #[inline]
     pub fn clear_tls() {
-        unsafe {
-            TLS = ptr::null_mut();
-        }
+        TLS.set(None)
     }
 
     #[inline(never)]
     #[cold]
     fn thread_key_impl() -> ThreadKey {
         THREAD_KEY
-            .try_with(|thread_key| unsafe {
-                TLS = thread_key.as_raw().thread().as_ptr();
+            .try_with(|thread_key| {
+                TLS.set(Some(thread_key.as_raw()));
                 thread_key.clone()
             })
             .unwrap_or_else(err_into_thread_key)
@@ -353,17 +249,13 @@ mod tls {
 
     #[inline]
     pub fn thread_key() -> ThreadKey {
-        unsafe {
-            let tls = TLS;
-            if likely!(!tls.is_null()) {
-                let thread_key = ThreadKey {
-                    thread: ThreadKeyRaw::new(NonNull::new_unchecked(tls)),
-                };
+        match TLS.get() {
+            Some(thread) => {
+                let thread_key = ThreadKey { thread };
                 mem::forget(thread_key.clone()); // bump ref_count since we created ThreadKey through other means
                 thread_key
-            } else {
-                thread_key_impl()
             }
+            None => thread_key_impl(),
         }
     }
 }
@@ -408,7 +300,7 @@ impl Debug for TryReadErr {
 
 impl TryReadErr {
     #[inline]
-    pub(crate) fn new() -> Self {
+    fn new() -> Self {
         TryReadErr { _private: () }
     }
 }
@@ -427,7 +319,7 @@ impl Debug for TryRWErr {
 
 impl TryRWErr {
     #[inline]
-    pub(crate) fn new() -> Self {
+    fn new() -> Self {
         TryRWErr { _private: () }
     }
 }
