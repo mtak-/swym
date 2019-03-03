@@ -26,7 +26,7 @@ use std::{
 /// is an optimization win for RWTx to only have one pointer to all of the threads state.
 ///
 /// TODO: It's possible we don't need reference counting, if read/try_read/rw/try_rw are made free
-/// functions. But,s doing so, makes 'tcell lifetimes hard/impossible to create.
+/// functions. But, doing so, makes 'tcell lifetimes hard/impossible to create.
 #[repr(C, align(64))]
 struct Thread {
     /// Contains the Read/Write logs plus the ThreadGarbage. This field needs to be referenced
@@ -102,9 +102,7 @@ pub struct ThreadKeyInner {
 impl Clone for ThreadKeyInner {
     #[inline]
     fn clone(&self) -> Self {
-        let ref_count = ref_count(self.thread);
-        // this is safe as long as the reference counting logic is safe
-        let ref_count = unsafe { ref_count.as_ref() };
+        let ref_count = self.ref_count();
         let count = ref_count.get();
         debug_assert!(count > 0, "attempt to clone a deallocated `ThreadKey`");
         ref_count.set(count + 1);
@@ -117,9 +115,7 @@ impl Clone for ThreadKeyInner {
 impl Drop for ThreadKeyInner {
     #[inline]
     fn drop(&mut self) {
-        let ref_count = ref_count(self.thread);
-        // this is safe as long as the reference counting logic is safe
-        let ref_count = unsafe { ref_count.as_ref() };
+        let ref_count = self.ref_count();
         let count = ref_count.get();
         debug_assert!(count > 0, "double free on `ThreadKey` attempted");
         if likely!(count != 1) {
@@ -163,25 +159,39 @@ impl ThreadKeyInner {
         }
     }
 
+    #[inline]
+    fn synch(&self) -> &Synch {
+        // this is safe as long as the reference counting logic is safe
+        unsafe { &*synch(self.thread).as_ptr() }
+    }
+
+    #[inline]
+    fn ref_count(&self) -> &Cell<usize> {
+        // this is safe as long as the reference counting logic is safe
+        unsafe { &*ref_count(self.thread).as_ptr() }
+    }
+
     /// Returns whether the thread is currently active (pinned or collecting garbage).
     #[inline]
-    pub fn is_active(&self) -> bool {
+    fn is_active(&self) -> bool {
         // current_epoch is never changed by any thread except the owning thread, so we're able to
         // read it without synchronization.
-        let synch = synch(self.thread);
+        let synch = self.synch();
         unsafe {
-            let synch = synch.as_ref();
             let epoch = &synch.current_epoch as *const AtomicQuiesceEpoch as *const QuiesceEpoch;
             (&*epoch).is_active()
         }
     }
 
+    /// Tries to run a read only transaction. Returns Some on success.
     #[inline]
-    pub fn try_read<'tcell, F, O>(&self, f: F) -> Option<O>
+    pub fn try_read<'tcell, F, O>(&'tcell self, f: F) -> Option<O>
     where
         F: FnMut(&ReadTx<'tcell>) -> Result<O, Error>,
     {
         if likely!(!self.is_active()) {
+            // we have checked that there is no transaction in the current thread, so it's safe to
+            // start one.
             Some(unsafe { self.read_slow(f) })
         } else {
             None
@@ -190,20 +200,17 @@ impl ThreadKeyInner {
 
     /// Runs a read only transaction. Requires the thread to not be in a transaction.
     #[inline]
-    unsafe fn read_slow<'tcell, F, O>(&self, mut f: F) -> O
+    unsafe fn read_slow<'tcell, F, O>(&'tcell self, mut f: F) -> O
     where
         F: FnMut(&ReadTx<'tcell>) -> Result<O, Error>,
     {
         loop {
             stats::read_transaction();
 
-            let (pin, now) = self.pin_read();
-            let tx = ReadTx::new(now);
-            match f(tx) {
-                Ok(o) => {
-                    drop(pin);
-                    break o;
-                }
+            let (_pin, now) = self.pin_read();
+            let r = f(ReadTx::new(now));
+            match r {
+                Ok(o) => break o,
                 Err(Error::RETRY) => {}
             }
 
@@ -211,12 +218,15 @@ impl ThreadKeyInner {
         }
     }
 
+    /// Tries to run a read write transaction. Returns Some on success.
     #[inline]
     pub fn try_rw<'tcell, F, O>(&'tcell self, f: F) -> Option<O>
     where
         F: FnMut(&mut RWTx<'tcell>) -> Result<O, Error>,
     {
         if likely!(!self.is_active()) {
+            // we have checked that there is no transaction in the current thread, so it's safe to
+            // start one.
             Some(unsafe { self.rw_slow(f) })
         } else {
             None
@@ -225,7 +235,7 @@ impl ThreadKeyInner {
 
     /// Runs a read-write transaction. Requires the thread to not be in a transaction.
     #[inline]
-    unsafe fn rw_slow<'tcell, F, O>(&self, mut f: F) -> O
+    unsafe fn rw_slow<'tcell, F, O>(&'tcell self, mut f: F) -> O
     where
         F: FnMut(&mut RWTx<'tcell>) -> Result<O, Error>,
     {
@@ -237,23 +247,23 @@ impl ThreadKeyInner {
             let r = f(RWTx::new(RWThreadKey {
                 thread: self.thread,
             }));
-            if likely!(r.is_ok()) {
-                if let Ok(o) = r {
+            match r {
+                Ok(o) => {
                     if likely!(pin.commit()) {
                         tx_logs(self.thread).as_mut().validate_start_state();
                         return o;
                     }
                 }
+                Err(Error::RETRY) => {}
             }
 
             stats::write_transaction_failure();
-            
         }
     }
 
     #[inline]
     fn pin_read(&self) -> (PinRead<'_>, QuiesceEpoch) {
-        PinRead::new(unsafe { &(*self.thread.as_ptr()).synch.current_epoch })
+        PinRead::new(&self.synch().current_epoch)
     }
 
     #[inline]

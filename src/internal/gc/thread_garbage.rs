@@ -171,7 +171,7 @@ impl ThreadGarbage {
     }
 
     /// Ends the speculative garbage queuing, and commits the current_bag's garbage to be collected
-    /// at some point.
+    /// at some point. May modify synch's current_epoch.
     ///
     /// This potentially will cause garbage collection to happen.
     ///
@@ -210,7 +210,8 @@ impl ThreadGarbage {
         self.synch_and_collect_impl(synch, self.earliest_epoch_unchecked())
     }
 
-    /// This is guaranteed to collect all of the garbage that has been queued.
+    /// This is guaranteed to collect all of the garbage that has been queued. May modify synch's
+    /// current_epoch.
     ///
     /// It is used in the destructor for ThreadKey.
     #[inline(never)]
@@ -222,6 +223,7 @@ impl ThreadGarbage {
     }
 
     /// Synchronizes with all the other threads participating in the STM, then collects the garbage.
+    /// Modifies synch's current_epoch.
     #[inline]
     unsafe fn synch_and_collect_impl(&mut self, synch: &Synch, quiesce_epoch: QuiesceEpoch) {
         // setting a dummy epoch that is far in the future, will protect against transactions
@@ -229,7 +231,7 @@ impl ThreadGarbage {
         synch
             .current_epoch
             .set(QuiesceEpoch::end_of_time(), Release);
-        
+
         // we want to collect atleast through quiesce_epoch, but it's possible that `quiesce` can
         // detect that even more garbage is able to be collected.
         let collect_epoch = synch.freeze_list().quiesce(quiesce_epoch);
