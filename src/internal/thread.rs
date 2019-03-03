@@ -32,7 +32,7 @@ struct Thread {
     /// Contains the Read/Write logs plus the ThreadGarbage. This field needs to be referenced
     /// mutably, and the uniqueness requirement of pinning guarantees that we dont violate any
     /// aliasing rules.
-    tx_state: TxLogs,
+    tx_logs: TxLogs,
 
     /// The part of a Thread that is visible to other threads in swym (an atomic epoch, and sharded
     /// lock).
@@ -47,7 +47,7 @@ impl Thread {
     #[cold]
     fn new() -> Self {
         Thread {
-            tx_state:  TxLogs::new(),
+            tx_logs:   TxLogs::new(),
             synch:     Synch::new(),
             ref_count: Cell::new(1),
         }
@@ -101,7 +101,7 @@ pub struct ThreadKeyInner {
 impl Clone for ThreadKeyInner {
     #[inline]
     fn clone(&self) -> Self {
-        let ref_count = self.ref_count();
+        let ref_count = ref_count(self.thread);
         let ref_count = unsafe { ref_count.as_ref() };
         let count = ref_count.get();
         debug_assert!(count > 0, "attempt to clone a deallocated `ThreadKey`");
@@ -115,7 +115,7 @@ impl Clone for ThreadKeyInner {
 impl Drop for ThreadKeyInner {
     #[inline]
     fn drop(&mut self) {
-        let ref_count = self.ref_count();
+        let ref_count = ref_count(self.thread);
         let ref_count = unsafe { ref_count.as_ref() };
         let count = ref_count.get();
         debug_assert!(count > 0, "double free on `ThreadKey` attempted");
@@ -123,30 +123,26 @@ impl Drop for ThreadKeyInner {
             ref_count.set(count - 1)
         } else {
             unsafe {
-                dealloc(ThreadKeyInner {
-                    thread: self.thread,
-                });
+                dealloc(self.thread);
             }
 
             #[inline(never)]
             #[cold]
-            unsafe fn dealloc(this: ThreadKeyInner) {
-                let synch = this.synch();
+            unsafe fn dealloc(this: NonNull<Thread>) {
+                let synch = synch(this);
                 let synch = synch.as_ref();
 
                 synch
                     .current_epoch
                     .set(QuiesceEpoch::end_of_time(), Release);
-                this.tx_logs()
-                    .as_mut()
-                    .garbage
-                    .synch_and_collect_all(this.synch().as_ref());
+                tx_logs(this).as_mut().garbage.synch_and_collect_all(synch);
                 synch.current_epoch.set(QuiesceEpoch::inactive(), Release);
 
                 GlobalSynchList::instance_unchecked()
                     .write()
                     .unregister(synch);
-                drop(Box::from_raw(this.thread.as_ptr()));
+                crate::thread_key::tls::clear_tls();
+                drop(Box::from_raw(this.as_ptr()));
             }
         }
     }
@@ -165,38 +161,20 @@ impl ThreadKeyInner {
         }
     }
 
-    /// Returns a raw pointer to the transaction logs (read/write/thread garbage).
+    /// Returns whether the thread is currently active (pinned or collecting garbage).
     #[inline]
-    fn tx_logs(&self) -> NonNull<TxLogs> {
-        tx_logs(self.thread)
-    }
-
-    /// Returns a raw pointer to the shared state of the thread (sharded lock and atomic epoch).
-    #[inline]
-    fn synch(&self) -> NonNull<Synch> {
-        synch(self.thread)
-    }
-
-    /// Returns a raw pointer to the reference count.
-    #[inline]
-    fn ref_count(&self) -> NonNull<Cell<usize>> {
-        ref_count(self.thread)
-    }
-
-    /// Returns whether the thread is currently active (pinned or collecting garbage). Requires the
-    /// thread pointer to still be valid.
-    #[inline]
-    pub unsafe fn is_active(&self) -> bool {
+    pub fn is_active(&self) -> bool {
         // current_epoch is never changed by any thread except the owning thread, so we're able to
         // read it without synchronization.
-        //
-        // TODO: this should not borrow synch as_mut, and should instead do pointer casting to
-        // epoch::Storage
-        self.synch().as_mut().current_epoch.is_active_unsync()
+        let synch = synch(self.thread);
+        unsafe {
+            let synch = synch.as_ref();
+            let epoch = &synch.current_epoch as *const AtomicQuiesceEpoch as *const QuiesceEpoch;
+            (&*epoch).is_active()
+        }
     }
 
-    /// Runs a read only transaction. Requires the thread to not be in a transaction, and the thread
-    /// pointer to still be valid.
+    /// Runs a read only transaction. Requires the thread to not be in a transaction.
     #[inline]
     pub unsafe fn read_slow<'tcell, F, O>(&self, mut f: F) -> O
     where
@@ -219,8 +197,7 @@ impl ThreadKeyInner {
         }
     }
 
-    /// Runs a read-write transaction. Requires the thread to not be in a transaction, and the
-    /// thread pointer to still be valid.
+    /// Runs a read-write transaction. Requires the thread to not be in a transaction.
     #[inline]
     pub unsafe fn rw_slow<'tcell, F, O>(&self, mut f: F) -> O
     where
@@ -229,7 +206,7 @@ impl ThreadKeyInner {
         loop {
             stats::write_transaction();
 
-            self.tx_logs().as_mut().validate_start_state();
+            tx_logs(self.thread).as_mut().validate_start_state();
             let pin = self.pin_rw();
             let tx = RWTx::new(RWThreadKey {
                 thread: self.thread,
@@ -242,7 +219,7 @@ impl ThreadKeyInner {
                     if likely!(quiesce_epoch.is_some()) {
                         if let Some(quiesce_epoch) = quiesce_epoch {
                             unpinned.success(quiesce_epoch);
-                            self.tx_logs().as_mut().validate_start_state();
+                            tx_logs(self.thread).as_mut().validate_start_state();
                             return o;
                         }
                     }
@@ -260,9 +237,7 @@ impl ThreadKeyInner {
 
     #[inline]
     fn pin_rw(&self) -> PinRw<'_> {
-        PinRw::new(ThreadKeyInner {
-            thread: self.thread,
-        })
+        PinRw::new(self.thread)
     }
 }
 
@@ -280,10 +255,15 @@ impl RWThreadKey {
 
     /// Gets the currently pinned epoch. Requires the thread pointer to still be valid.
     #[inline]
-    pub unsafe fn pinned_epoch(self) -> QuiesceEpoch {
+    pub fn pinned_epoch(self) -> QuiesceEpoch {
         // current_epoch is never changed by any thread except the owning thread, so we're able to
         // read it without synchronization.
-        let pinned_epoch = synch(self.thread).as_mut().current_epoch.get_unsync();
+        let synch = synch(self.thread);
+        let pinned_epoch = unsafe {
+            let synch = synch.as_ref();
+            let epoch = &synch.current_epoch as *const AtomicQuiesceEpoch as *const QuiesceEpoch;
+            *epoch
+        };
         debug_assert!(
             pinned_epoch.is_active(),
             "attempt to get pinned_epoch of thread that is not pinned"
@@ -374,16 +354,16 @@ impl<'a> Drop for PinRead<'a> {
 }
 
 struct PinRw<'a> {
-    thread:  ThreadKeyInner,
+    thread:  NonNull<Thread>,
     phantom: PhantomData<&'a mut ()>,
 }
 
 impl<'a> PinRw<'a> {
     #[inline]
-    fn new(thread: ThreadKeyInner) -> Self {
+    fn new(thread: NonNull<Thread>) -> Self {
         let now = EPOCH_CLOCK.now(Acquire);
         unsafe {
-            thread.synch().as_ref().current_epoch.activate(now, Release);
+            synch(thread).as_ref().current_epoch.activate(now, Release);
 
             PinRw {
                 thread,
@@ -395,12 +375,9 @@ impl<'a> PinRw<'a> {
     #[inline]
     fn unpin(self) -> UnpinRw<'a> {
         unsafe {
-            let thread = ThreadKeyInner {
-                thread: self.thread.thread,
-            };
+            let thread = self.thread;
             mem::forget(self);
-            thread
-                .synch()
+            synch(thread)
                 .as_ref()
                 .current_epoch
                 .set(QuiesceEpoch::end_of_time(), Release);
@@ -416,22 +393,21 @@ impl Drop for PinRw<'_> {
     #[inline]
     fn drop(&mut self) {
         unsafe {
-            self.thread
-                .synch()
+            synch(self.thread)
                 .as_ref()
                 .current_epoch
                 .deactivate(Release);
-            let mut tx_state = self.thread.tx_logs();
-            let tx_state = tx_state.as_mut();
-            tx_state.read_log.clear();
-            tx_state.garbage.abort_speculative_garbage();
-            tx_state.write_log.clear();
+            let mut tx_logs = tx_logs(self.thread);
+            let tx_logs = tx_logs.as_mut();
+            tx_logs.read_log.clear();
+            tx_logs.garbage.abort_speculative_garbage();
+            tx_logs.write_log.clear();
         }
     }
 }
 
 struct UnpinRw<'a> {
-    thread:  ThreadKeyInner,
+    thread:  NonNull<Thread>,
     phantom: PhantomData<&'a mut ()>,
 }
 
@@ -439,13 +415,12 @@ impl Drop for UnpinRw<'_> {
     #[inline]
     fn drop(&mut self) {
         unsafe {
-            let mut tx_state = self.thread.tx_logs();
-            let tx_state = tx_state.as_mut();
-            tx_state.read_log.clear();
-            tx_state.garbage.abort_speculative_garbage();
-            tx_state.write_log.clear();
-            self.thread
-                .synch()
+            let mut tx_logs = tx_logs(self.thread);
+            let tx_logs = tx_logs.as_mut();
+            tx_logs.read_log.clear();
+            tx_logs.garbage.abort_speculative_garbage();
+            tx_logs.write_log.clear();
+            synch(self.thread)
                 .as_ref()
                 .current_epoch
                 .deactivate(Relaxed);
@@ -457,14 +432,14 @@ impl UnpinRw<'_> {
     #[inline]
     fn success(self, quiesce_epoch: QuiesceEpoch) {
         unsafe {
-            let mut tx_state = self.thread.tx_logs();
-            let tx_state = tx_state.as_mut();
-            let synch = self.thread.synch();
+            let mut tx_logs = tx_logs(self.thread);
+            let tx_logs = tx_logs.as_mut();
+            let synch = synch(self.thread);
             let synch = synch.as_ref();
             mem::forget(self);
-            tx_state.read_log.clear();
-            tx_state.write_log.clear_no_drop();
-            tx_state.garbage.seal_with_epoch(synch, quiesce_epoch);
+            tx_logs.read_log.clear();
+            tx_logs.write_log.clear_no_drop();
+            tx_logs.garbage.seal_with_epoch(synch, quiesce_epoch);
             synch.current_epoch.deactivate(Relaxed);
         }
     }

@@ -45,7 +45,7 @@ impl RWTxImpl {
     /// The epoch the transaction has pinned.
     #[inline]
     fn pin_epoch(self) -> QuiesceEpoch {
-        unsafe { self.thread_key.pinned_epoch() }
+        self.thread_key.pinned_epoch()
     }
 
     /// The commit algorithm, called after user code has finished running without returning an

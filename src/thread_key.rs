@@ -18,13 +18,6 @@ pub struct ThreadKey {
     thread: ThreadKeyInner,
 }
 
-impl Drop for ThreadKey {
-    #[inline]
-    fn drop(&mut self) {
-        unimplemented!()
-    }
-}
-
 impl ThreadKey {
     #[inline(never)]
     #[cold]
@@ -189,7 +182,7 @@ thread_local! {
 }
 
 #[cfg(not(target_thread_local))]
-mod tls {
+pub(crate) mod tls {
     use super::*;
 
     #[inline(never)]
@@ -204,7 +197,7 @@ mod tls {
 }
 
 #[cfg(target_thread_local)]
-mod tls {
+pub(crate) mod tls {
     use super::{err_into_thread_key, ThreadKey, ThreadKeyInner, THREAD_KEY};
     use std::{cell::Cell, mem, ptr::NonNull};
 
@@ -222,7 +215,7 @@ mod tls {
         THREAD_KEY
             .try_with(|thread_key| {
                 TLS.set(Some(unsafe {
-                    mem::transmute_copy::<ThreadKeyInner, _>(thread_key.as_raw())
+                    mem::transmute_copy::<ThreadKey, _>(thread_key)
                 }));
                 thread_key.clone()
             })
@@ -233,9 +226,7 @@ mod tls {
     pub fn thread_key() -> ThreadKey {
         match TLS.get() {
             Some(thread) => {
-                let thread_key = ThreadKey {
-                    thread: unsafe { mem::transmute(thread) },
-                };
+                let thread_key: ThreadKey = unsafe { mem::transmute(thread) };
                 mem::forget(thread_key.clone()); // bump ref_count since we created ThreadKey through other means
                 thread_key
             }

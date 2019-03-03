@@ -202,16 +202,6 @@ impl AtomicQuiesceEpoch {
     }
 
     #[inline]
-    pub fn get_unsync(&mut self) -> QuiesceEpoch {
-        unsafe { QuiesceEpoch::new_unchecked(*self.0.get_mut()) }
-    }
-
-    #[inline]
-    pub fn is_active_unsync(&mut self) -> bool {
-        self.get_unsync().is_active()
-    }
-
-    #[inline]
     pub fn set(&self, value: QuiesceEpoch, o: Ordering) {
         self.0.store(value.0.get(), o)
     }
