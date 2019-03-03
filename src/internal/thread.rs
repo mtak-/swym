@@ -174,9 +174,21 @@ impl ThreadKeyInner {
         }
     }
 
+    #[inline]
+    pub fn try_read<'tcell, F, O>(&self, f: F) -> Option<O>
+    where
+        F: FnMut(&ReadTx<'tcell>) -> Result<O, Error>,
+    {
+        if likely!(!self.is_active()) {
+            Some(unsafe { self.read_slow(f) })
+        } else {
+            None
+        }
+    }
+
     /// Runs a read only transaction. Requires the thread to not be in a transaction.
     #[inline]
-    pub unsafe fn read_slow<'tcell, F, O>(&self, mut f: F) -> O
+    unsafe fn read_slow<'tcell, F, O>(&self, mut f: F) -> O
     where
         F: FnMut(&ReadTx<'tcell>) -> Result<O, Error>,
     {
@@ -197,9 +209,21 @@ impl ThreadKeyInner {
         }
     }
 
+    #[inline]
+    pub fn try_rw<'tcell, F, O>(&'tcell self, f: F) -> Option<O>
+    where
+        F: FnMut(&mut RWTx<'tcell>) -> Result<O, Error>,
+    {
+        if likely!(!self.is_active()) {
+            Some(unsafe { self.rw_slow(f) })
+        } else {
+            None
+        }
+    }
+
     /// Runs a read-write transaction. Requires the thread to not be in a transaction.
     #[inline]
-    pub unsafe fn rw_slow<'tcell, F, O>(&self, mut f: F) -> O
+    unsafe fn rw_slow<'tcell, F, O>(&self, mut f: F) -> O
     where
         F: FnMut(&mut RWTx<'tcell>) -> Result<O, Error>,
     {

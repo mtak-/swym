@@ -115,14 +115,7 @@ impl ThreadKey {
     where
         F: FnMut(&ReadTx<'tcell>) -> Result<O, Error>,
     {
-        let raw = self.as_raw();
-        unsafe {
-            if likely!(!raw.is_active()) {
-                Ok(raw.read_slow(f))
-            } else {
-                Err(TryReadErr::new())
-            }
-        }
+        self.as_raw().try_read(f).ok_or_else(|| TryReadErr::new())
     }
 
     /// Performs a transaction capabable of reading and writing.
@@ -154,14 +147,7 @@ impl ThreadKey {
     where
         F: FnMut(&mut RWTx<'tcell>) -> Result<O, Error>,
     {
-        let raw = self.as_raw();
-        unsafe {
-            if likely!(!raw.is_active()) {
-                Ok(raw.rw_slow(f))
-            } else {
-                Err(TryRWErr::new())
-            }
-        }
+        self.as_raw().try_rw(f).ok_or_else(|| TryRWErr::new())
     }
 }
 
