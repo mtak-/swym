@@ -198,11 +198,11 @@ pub(crate) mod tls {
 
 #[cfg(target_thread_local)]
 pub(crate) mod tls {
-    use super::{err_into_thread_key, ThreadKey, ThreadKeyInner, THREAD_KEY};
+    use super::{err_into_thread_key, ThreadKey, THREAD_KEY};
     use std::{cell::Cell, mem, ptr::NonNull};
 
     #[thread_local]
-    static TLS: Cell<Option<NonNull<()>>> = Cell::new(None);
+    static TLS: Cell<Option<NonNull<usize>>> = Cell::new(None);
 
     #[inline]
     pub fn clear_tls() {
