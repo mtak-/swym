@@ -10,7 +10,7 @@
 use crate::{
     internal::{
         alloc::dyn_vec::DynElemMut,
-        epoch::{QuiesceEpoch, EPOCH_CLOCK},
+        epoch::QuiesceEpoch,
         tcell_erased::TCellErased,
         thread::{RWThreadKey, TxLogs},
         write_log::{bloom_hash, Contained, Entry, WriteEntryImpl},
@@ -22,7 +22,7 @@ use std::{
     marker::PhantomData,
     mem::{self, ManuallyDrop},
     ptr::{self, NonNull},
-    sync::atomic::Ordering::{self as AtomicOrdering, Acquire, Relaxed, Release},
+    sync::atomic::Ordering::{self as AtomicOrdering, Acquire, Relaxed},
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -45,107 +45,7 @@ impl RWTxImpl {
     /// The epoch the transaction has pinned.
     #[inline]
     fn pin_epoch(self) -> QuiesceEpoch {
-        self.thread_key.pinned_epoch()
-    }
-
-    /// The commit algorithm, called after user code has finished running without returning an
-    /// error. This doesn't handle things like sealing up the current garbage bag, etc...
-    ///
-    /// Returns the QuiesceEpoch that has just began on success, or None on failure.
-    #[inline]
-    unsafe fn commit(self) -> Option<QuiesceEpoch> {
-        debug_assert!(
-            self.pin_epoch() <= EPOCH_CLOCK.now(Acquire),
-            "`EpochClock` behind current transaction start time"
-        );
-        let logs = &*self.logs().as_ptr();
-
-        if likely!(!logs.write_log.is_empty()) {
-            self.commit_slow()
-        } else {
-            // RWTx validates reads as they occur. As a result, if there are no writes, then we have
-            // no work to do in our commit algorithm.
-            //
-            // The first epoch is a safe choice as having "began", it is only used for queuing up
-            // garbage, which we should not have with an empty write log. On the off chance we do
-            // have garbage, with an empty write log. Then there's no way that garbage could have
-            // been previously been shared, as the data cannot have been made inaccessible via an
-            // STM write. It is a logic error in user code, and requires `unsafe` to make that
-            // error. This assert helps to catch that.
-            debug_assert!(
-                logs.garbage.is_speculative_bag_empty(),
-                "Garbage queued, without any writes!"
-            );
-            Some(QuiesceEpoch::first())
-        }
-    }
-
-    /// This performs a lot of lock cmpxchgs, so inlining doesn't really doesn't give us much.
-    #[inline(never)]
-    unsafe fn commit_slow(self) -> Option<QuiesceEpoch> {
-        let logs = &mut *self.logs().as_ptr();
-
-        // Locking the write log, would cause validation of any reads to the same TCell to fail.
-        // So we remove all TCells in the read log that are also in the read log, and assume all
-        // TCells in the write log, have been read.
-        logs.remove_writes_from_reads();
-
-        // Locking the write set can fail if another thread has the lock, or if any TCell in the
-        // write set has been updated since the transaction began.
-        //
-        // TODO: would commit algorithm be faster with a single global lock, or lock striping?
-        // per object locking causes a cmpxchg per entry
-        if likely!(logs.write_log.try_lock_entries(self.pin_epoch())) {
-            self.commit_slower()
-        } else {
-            None
-        }
-    }
-
-    #[inline]
-    unsafe fn commit_slower(self) -> Option<QuiesceEpoch> {
-        // after locking the write set, ensure nothing in the read set has been modified.
-        if likely!(self
-            .logs()
-            .as_ref()
-            .read_log
-            .validate_reads(self.pin_epoch()))
-        {
-            // The transaction can no longer fail, so proceed to modify and publish the TCells in
-            // the write set.
-            self.validation_success()
-        } else {
-            self.validation_failure()
-        }
-    }
-
-    #[inline]
-    unsafe fn validation_success(self) -> Option<QuiesceEpoch> {
-        let logs = &*self.logs().as_ptr();
-
-        // The writes must be performed before the EPOCH_CLOCK is tick'ed.
-        // Reads can get away with performing less work with this ordering.
-        logs.write_log.perform_writes();
-
-        let sync_epoch = EPOCH_CLOCK.fetch_and_tick(Release);
-        debug_assert!(
-            self.pin_epoch() <= sync_epoch,
-            "`EpochClock::fetch_and_tick` returned an earlier time than expected"
-        );
-
-        // unlocks everything in the write lock and sets the TCell epochs to sync_epoch.next()
-        logs.write_log.publish(sync_epoch.next());
-
-        // return the synch epoch
-        Some(sync_epoch)
-    }
-
-    #[inline(never)]
-    #[cold]
-    unsafe fn validation_failure(self) -> Option<QuiesceEpoch> {
-        // on fail unlock the write set
-        self.logs().as_ref().write_log.unlock_entries();
-        None
+        self.thread_key.pin_epoch()
     }
 
     #[inline]
@@ -306,11 +206,6 @@ impl<'tcell> RWTx<'tcell> {
     #[inline]
     fn as_impl(&self) -> RWTxImpl {
         unsafe { mem::transmute(self) }
-    }
-
-    #[inline]
-    pub(crate) unsafe fn commit(&self) -> Option<QuiesceEpoch> {
-        self.as_impl().commit()
     }
 }
 

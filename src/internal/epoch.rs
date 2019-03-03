@@ -70,11 +70,6 @@ impl QuiesceEpoch {
     }
 
     #[inline]
-    pub fn first() -> Self {
-        unsafe { QuiesceEpoch::new_unchecked(FIRST) }
-    }
-
-    #[inline]
     fn read_write_valid(self, target: NonZeroStorage) -> bool {
         self.0 >= target
     }

@@ -137,9 +137,6 @@ impl Drop for ThreadKeyInner {
                 let synch = synch.as_ref();
 
                 // All thread garbage must be collected before the Thread is dropped.
-                synch
-                    .current_epoch
-                    .set(QuiesceEpoch::end_of_time(), Release);
                 tx_logs(this).as_mut().garbage.synch_and_collect_all(synch);
                 synch.current_epoch.set(QuiesceEpoch::inactive(), Release);
 
@@ -237,25 +234,20 @@ impl ThreadKeyInner {
 
             tx_logs(self.thread).as_mut().validate_start_state();
             let pin = self.pin_rw();
-            let tx = RWTx::new(RWThreadKey {
+            let r = f(RWTx::new(RWThreadKey {
                 thread: self.thread,
-            });
-            let r = f(tx);
+            }));
             if likely!(r.is_ok()) {
                 if let Ok(o) = r {
-                    let quiesce_epoch = tx.commit();
-                    let unpinned = pin.unpin();
-                    if likely!(quiesce_epoch.is_some()) {
-                        if let Some(quiesce_epoch) = quiesce_epoch {
-                            unpinned.success(quiesce_epoch);
-                            tx_logs(self.thread).as_mut().validate_start_state();
-                            return o;
-                        }
+                    if likely!(pin.commit()) {
+                        tx_logs(self.thread).as_mut().validate_start_state();
+                        return o;
                     }
                 }
             }
 
             stats::write_transaction_failure();
+            
         }
     }
 
@@ -284,24 +276,24 @@ impl RWThreadKey {
 
     /// Gets the currently pinned epoch. Requires the thread pointer to still be valid.
     #[inline]
-    pub fn pinned_epoch(self) -> QuiesceEpoch {
+    pub fn pin_epoch(self) -> QuiesceEpoch {
         // current_epoch is never changed by any thread except the owning thread, so we're able to
         // read it without synchronization.
         let synch = synch(self.thread);
-        let pinned_epoch = unsafe {
+        let pin_epoch = unsafe {
             let synch = synch.as_ref();
             let epoch = &synch.current_epoch as *const AtomicQuiesceEpoch as *const QuiesceEpoch;
             *epoch
         };
         debug_assert!(
-            pinned_epoch.is_active(),
+            pin_epoch.is_active(),
             "attempt to get pinned_epoch of thread that is not pinned"
         );
         debug_assert!(
-            pinned_epoch != QuiesceEpoch::end_of_time(),
+            pin_epoch != QuiesceEpoch::end_of_time(),
             "attempt to get pinned_epoch of thread that is not pinned"
         );
-        pinned_epoch
+        pin_epoch
     }
 }
 
@@ -401,25 +393,149 @@ impl<'a> PinRw<'a> {
         }
     }
 
+    /// Gets the currently pinned epoch. Requires the thread pointer to still be valid.
     #[inline]
-    fn unpin(self) -> UnpinRw<'a> {
-        unsafe {
-            let thread = self.thread;
-            mem::forget(self);
-            synch(thread)
-                .as_ref()
-                .current_epoch
-                .set(QuiesceEpoch::end_of_time(), Release);
-            UnpinRw {
-                thread,
-                phantom: PhantomData,
-            }
+    pub fn pin_epoch(&self) -> QuiesceEpoch {
+        // current_epoch is never changed by any thread except the owning thread, so we're able to
+        // read it without synchronization.
+        let synch = synch(self.thread);
+        let pin_epoch = unsafe {
+            let synch = synch.as_ref();
+            let epoch = &synch.current_epoch as *const AtomicQuiesceEpoch as *const QuiesceEpoch;
+            *epoch
+        };
+        debug_assert!(
+            pin_epoch.is_active(),
+            "attempt to get pinned_epoch of thread that is not pinned"
+        );
+        debug_assert!(
+            pin_epoch != QuiesceEpoch::end_of_time(),
+            "attempt to get pinned_epoch of thread that is not pinned"
+        );
+        pin_epoch
+    }
+
+    /// The commit algorithm, called after user code has finished running without returning an
+    /// error. Returns true if the transaction committed successfully.
+    #[inline]
+    unsafe fn commit(self) -> bool {
+        let logs = &*tx_logs(self.thread).as_ptr();
+
+        if likely!(!logs.write_log.is_empty()) {
+            self.commit_slow()
+        } else {
+            self.commit_empty_write_log()
         }
+    }
+
+    #[inline]
+    unsafe fn commit_empty_write_log(self) -> bool {
+        let logs = &mut *tx_logs(self.thread).as_ptr();
+        let synch = synch(self.thread);
+        mem::forget(self);
+        // RWTx validates reads as they occur. As a result, if there are no writes, then we have
+        // no work to do in our commit algorithm.
+        //
+        // On the off chance we do have garbage, with an empty write log. Then there's no way
+        // that garbage could have been previously been shared, as the data cannot
+        // have been made inaccessible via an STM write. It is a logic error in user
+        // code, and requires `unsafe` to make that error. This assert helps to
+        // catch that.
+        debug_assert!(
+            logs.garbage.is_speculative_bag_empty(),
+            "Garbage queued, without any writes!"
+        );
+        logs.read_log.clear();
+        synch.as_ref().current_epoch.deactivate(Relaxed);
+        true
+    }
+
+    /// This performs a lot of lock cmpxchgs, so inlining doesn't really doesn't give us much.
+    #[inline(never)]
+    unsafe fn commit_slow(self) -> bool {
+        let logs = &mut *tx_logs(self.thread).as_ptr();
+
+        // Locking the write log, would cause validation of any reads to the same TCell to fail.
+        // So we remove all TCells in the read log that are also in the read log, and assume all
+        // TCells in the write log, have been read.
+        logs.remove_writes_from_reads();
+
+        // Locking the write set can fail if another thread has the lock, or if any TCell in the
+        // write set has been updated since the transaction began.
+        //
+        // TODO: would commit algorithm be faster with a single global lock, or lock striping?
+        // per object locking causes a cmpxchg per entry
+        if likely!(logs.write_log.try_lock_entries(self.pin_epoch())) {
+            self.write_log_lock_success()
+        } else {
+            self.write_log_lock_failure()
+        }
+    }
+
+    #[inline(never)]
+    #[cold]
+    unsafe fn write_log_lock_failure(self) -> bool {
+        drop(self);
+        false
+    }
+
+    #[inline]
+    unsafe fn write_log_lock_success(self) -> bool {
+        // after locking the write set, ensure nothing in the read set has been modified.
+        if likely!(tx_logs(self.thread)
+            .as_ref()
+            .read_log
+            .validate_reads(self.pin_epoch()))
+        {
+            // The transaction can no longer fail, so proceed to modify and publish the TCells in
+            // the write set.
+            self.validation_success()
+        } else {
+            self.validation_failure()
+        }
+    }
+
+    #[inline]
+    unsafe fn validation_success(self) -> bool {
+        let logs = &mut *tx_logs(self.thread).as_ptr();
+
+        // The writes must be performed before the EPOCH_CLOCK is tick'ed.
+        // Reads can get away with performing less work with this ordering.
+        logs.write_log.perform_writes();
+
+        let sync_epoch = EPOCH_CLOCK.fetch_and_tick(Release);
+        debug_assert!(
+            self.pin_epoch() <= sync_epoch,
+            "`EpochClock::fetch_and_tick` returned an earlier time than expected"
+        );
+
+        // unlocks everything in the write lock and sets the TCell epochs to sync_epoch.next()
+        logs.write_log.publish(sync_epoch.next());
+
+        let synch = synch(self.thread);
+        mem::forget(self);
+        let synch = synch.as_ref();
+        logs.read_log.clear();
+        logs.write_log.clear_no_drop();
+        logs.garbage.seal_with_epoch(synch, sync_epoch);
+        synch.current_epoch.deactivate(Relaxed);
+
+        true
+    }
+
+    #[inline(never)]
+    #[cold]
+    unsafe fn validation_failure(self) -> bool {
+        // on fail unlock the write set
+        tx_logs(self.thread).as_ref().write_log.unlock_entries();
+        drop(self);
+        false
     }
 }
 
 impl Drop for PinRw<'_> {
-    #[inline]
+    #[inline(never)]
+    #[cold]
     fn drop(&mut self) {
         unsafe {
             let mut tx_logs = tx_logs(self.thread);
@@ -431,45 +547,6 @@ impl Drop for PinRw<'_> {
                 .as_ref()
                 .current_epoch
                 .deactivate(Relaxed);
-        }
-    }
-}
-
-struct UnpinRw<'a> {
-    thread:  NonNull<Thread>,
-    phantom: PhantomData<&'a mut ()>,
-}
-
-impl Drop for UnpinRw<'_> {
-    #[inline]
-    fn drop(&mut self) {
-        unsafe {
-            let mut tx_logs = tx_logs(self.thread);
-            let tx_logs = tx_logs.as_mut();
-            tx_logs.read_log.clear();
-            tx_logs.garbage.abort_speculative_garbage();
-            tx_logs.write_log.clear();
-            synch(self.thread)
-                .as_ref()
-                .current_epoch
-                .deactivate(Relaxed);
-        }
-    }
-}
-
-impl UnpinRw<'_> {
-    #[inline]
-    fn success(self, quiesce_epoch: QuiesceEpoch) {
-        unsafe {
-            let mut tx_logs = tx_logs(self.thread);
-            let tx_logs = tx_logs.as_mut();
-            let synch = synch(self.thread);
-            let synch = synch.as_ref();
-            mem::forget(self);
-            tx_logs.read_log.clear();
-            tx_logs.write_log.clear_no_drop();
-            tx_logs.garbage.seal_with_epoch(synch, quiesce_epoch);
-            synch.current_epoch.deactivate(Relaxed);
         }
     }
 }

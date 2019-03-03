@@ -9,6 +9,7 @@ use crate::internal::{
 use std::{
     mem::{self, ManuallyDrop},
     num::NonZeroUsize,
+    sync::atomic::Ordering::Release,
 };
 
 // TODO: measure to see what works best in practice.
@@ -223,10 +224,12 @@ impl ThreadGarbage {
     /// Synchronizes with all the other threads participating in the STM, then collects the garbage.
     #[inline]
     unsafe fn synch_and_collect_impl(&mut self, synch: &Synch, quiesce_epoch: QuiesceEpoch) {
-        debug_assert!(
-            synch.is_quiesced(quiesce_epoch),
-            "attempt to collect garbage while active"
-        );
+        // setting a dummy epoch that is far in the future, will protect against transactions
+        // running during garbage collection.
+        synch
+            .current_epoch
+            .set(QuiesceEpoch::end_of_time(), Release);
+        
         // we want to collect atleast through quiesce_epoch, but it's possible that `quiesce` can
         // detect that even more garbage is able to be collected.
         let collect_epoch = synch.freeze_list().quiesce(quiesce_epoch);
