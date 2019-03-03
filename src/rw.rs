@@ -12,7 +12,7 @@ use crate::{
         alloc::dyn_vec::DynElemMut,
         epoch::{QuiesceEpoch, EPOCH_CLOCK},
         tcell_erased::TCellErased,
-        thread::{ThreadKeyInner, TxLogs},
+        thread::{RWThreadKey, TxLogs},
         write_log::{bloom_hash, Contained, Entry, WriteEntryImpl},
     },
     tcell::TCell,
@@ -27,12 +27,12 @@ use std::{
 
 #[derive(Clone, Copy, Debug)]
 struct RWTxImpl {
-    thread_key: ThreadKeyInner,
+    thread_key: RWThreadKey,
 }
 
 impl RWTxImpl {
     #[inline]
-    fn new(thread_key: ThreadKeyInner) -> Self {
+    fn new(thread_key: RWThreadKey) -> Self {
         RWTxImpl { thread_key }
     }
 
@@ -299,7 +299,7 @@ impl<'tcell> !Sync for RWTx<'tcell> {}
 
 impl<'tcell> RWTx<'tcell> {
     #[inline]
-    pub(crate) fn new<'a>(thread_key: ThreadKeyInner) -> &'a mut Self {
+    pub(crate) fn new<'a>(thread_key: RWThreadKey) -> &'a mut Self {
         unsafe { mem::transmute(RWTxImpl::new(thread_key)) }
     }
 

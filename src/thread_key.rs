@@ -1,12 +1,7 @@
 //! Thread local state, [`thread_key::ThreadKey`], used to run transactions.
 //!
 //! A handle to the thread local state can be acquired by calling [`thread_key::get`].
-use crate::{
-    internal::thread::{DecRefCountResult, ThreadKeyInner},
-    read::ReadTx,
-    rw::RWTx,
-    tx::Error,
-};
+use crate::{internal::thread::ThreadKeyInner, read::ReadTx, rw::RWTx, tx::Error};
 use std::{
     fmt::{self, Debug, Formatter},
     thread::AccessError,
@@ -18,30 +13,15 @@ use std::{
 ///
 /// `ThreadKey`'s encapsulate the state required to perform transactions, and provides the necessary
 /// methods for running transactions.
+#[derive(Clone, Debug)]
 pub struct ThreadKey {
     thread: ThreadKeyInner,
-}
-
-impl Clone for ThreadKey {
-    #[inline]
-    fn clone(&self) -> Self {
-        unsafe {
-            self.thread.inc_ref_count();
-            ThreadKey {
-                thread: self.as_raw(),
-            }
-        }
-    }
 }
 
 impl Drop for ThreadKey {
     #[inline]
     fn drop(&mut self) {
-        unsafe {
-            if self.thread.dec_ref_count() == DecRefCountResult::Destroyed {
-                tls::clear_tls()
-            }
-        }
+        unimplemented!()
     }
 }
 
@@ -50,13 +30,13 @@ impl ThreadKey {
     #[cold]
     fn new() -> Self {
         ThreadKey {
-            thread: ThreadKeyInner::alloc(),
+            thread: ThreadKeyInner::new(),
         }
     }
 
     #[inline]
-    fn as_raw(&self) -> ThreadKeyInner {
-        self.thread
+    fn as_raw(&self) -> &ThreadKeyInner {
+        &self.thread
     }
 
     /// Performs a transaction capabable of only reading.
@@ -226,10 +206,10 @@ mod tls {
 #[cfg(target_thread_local)]
 mod tls {
     use super::{err_into_thread_key, ThreadKey, ThreadKeyInner, THREAD_KEY};
-    use std::{cell::Cell, mem};
+    use std::{cell::Cell, mem, ptr::NonNull};
 
     #[thread_local]
-    static TLS: Cell<Option<ThreadKeyInner>> = Cell::new(None);
+    static TLS: Cell<Option<NonNull<()>>> = Cell::new(None);
 
     #[inline]
     pub fn clear_tls() {
@@ -241,7 +221,9 @@ mod tls {
     fn thread_key_impl() -> ThreadKey {
         THREAD_KEY
             .try_with(|thread_key| {
-                TLS.set(Some(thread_key.as_raw()));
+                TLS.set(Some(unsafe {
+                    mem::transmute_copy::<ThreadKeyInner, _>(thread_key.as_raw())
+                }));
                 thread_key.clone()
             })
             .unwrap_or_else(err_into_thread_key)
@@ -251,7 +233,9 @@ mod tls {
     pub fn thread_key() -> ThreadKey {
         match TLS.get() {
             Some(thread) => {
-                let thread_key = ThreadKey { thread };
+                let thread_key = ThreadKey {
+                    thread: unsafe { mem::transmute(thread) },
+                };
                 mem::forget(thread_key.clone()); // bump ref_count since we created ThreadKey through other means
                 thread_key
             }

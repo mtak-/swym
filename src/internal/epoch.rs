@@ -60,8 +60,8 @@ impl QuiesceEpoch {
     }
 
     #[inline]
-    pub unsafe fn end_of_time() -> Self {
-        let r = QuiesceEpoch(NonZeroStorage::new_unchecked(!LOCK_BIT));
+    pub fn end_of_time() -> Self {
+        let r = QuiesceEpoch(NonZeroStorage::new(!LOCK_BIT).unwrap());
         debug_assert!(
             r.is_active(),
             "`QuiesceEpoch::end_of_time` returned an invalid epoch"
