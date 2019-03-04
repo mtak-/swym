@@ -1,6 +1,7 @@
 //! Thread local state, [`thread_key::ThreadKey`], used to run transactions.
 //!
 //! A handle to the thread local state can be acquired by calling [`thread_key::get`].
+
 use crate::{internal::thread::ThreadKeyInner, read::ReadTx, rw::RWTx, tx::Error};
 use std::{
     fmt::{self, Debug, Formatter},
@@ -25,11 +26,6 @@ impl ThreadKey {
         ThreadKey {
             thread: ThreadKeyInner::new(),
         }
-    }
-
-    #[inline]
-    fn as_raw(&self) -> &ThreadKeyInner {
-        &self.thread
     }
 
     /// Performs a transaction capabable of only reading.
@@ -115,7 +111,7 @@ impl ThreadKey {
     where
         F: FnMut(&ReadTx<'tcell>) -> Result<O, Error>,
     {
-        self.as_raw().try_read(f).ok_or_else(|| TryReadErr::new())
+        self.thread.try_read(f).ok_or_else(|| TryReadErr::new())
     }
 
     /// Performs a transaction capabable of reading and writing.
@@ -147,7 +143,7 @@ impl ThreadKey {
     where
         F: FnMut(&mut RWTx<'tcell>) -> Result<O, Error>,
     {
-        self.as_raw().try_rw(f).ok_or_else(|| TryRWErr::new())
+        self.thread.try_rw(f).ok_or_else(|| TryRWErr::new())
     }
 }
 
