@@ -32,7 +32,7 @@ struct Thread {
     /// Contains the Read/Write logs plus the ThreadGarbage. This field needs to be referenced
     /// mutably, and the uniqueness requirement of pinning guarantees that we dont violate any
     /// aliasing rules.
-    tx_logs: TxLogs,
+    logs: Logs,
 
     /// The part of a Thread that is visible to other threads in swym (an atomic epoch, and sharded
     /// lock).
@@ -47,7 +47,7 @@ impl Thread {
     #[cold]
     fn new() -> Self {
         Thread {
-            tx_logs:   TxLogs::new(),
+            logs:      Logs::new(),
             synch:     Synch::new(),
             ref_count: Cell::new(1),
         }
@@ -62,7 +62,7 @@ impl Thread {
 
 /// Returns a raw pointer to the transaction logs (read/write/thread garbage).
 #[inline]
-fn tx_logs(thread: NonNull<Thread>) -> NonNull<TxLogs> {
+fn logs(thread: NonNull<Thread>) -> NonNull<Logs> {
     // relies on repr(C) on Thread
     thread.cast()
 }
@@ -72,7 +72,7 @@ fn tx_logs(thread: NonNull<Thread>) -> NonNull<TxLogs> {
 fn synch(thread: NonNull<Thread>) -> NonNull<Synch> {
     // relies on repr(C) on Thread
     unsafe {
-        tx_logs(thread)
+        logs(thread)
             .add(1) // synch is the field immediately after tx logs
             .assume_aligned() // assume_aligned here, makes align_next optimize away on most (all?) platforms
             .cast::<Synch>()
@@ -133,7 +133,7 @@ impl Drop for ThreadKeyInner {
                 let synch = synch.as_ref();
 
                 // All thread garbage must be collected before the Thread is dropped.
-                tx_logs(this).as_mut().garbage.synch_and_collect_all(synch);
+                logs(this).as_mut().garbage.synch_and_collect_all(synch);
                 synch.current_epoch.set(QuiesceEpoch::inactive(), Release);
 
                 GlobalSynchList::instance_unchecked()
@@ -242,15 +242,13 @@ impl ThreadKeyInner {
         loop {
             stats::write_transaction();
 
-            tx_logs(self.thread).as_mut().validate_start_state();
+            logs(self.thread).as_mut().validate_start_state();
             let pin = self.pin_rw();
-            let r = f(RWTx::new(RWThreadKey {
-                thread: self.thread,
-            }));
+            let r = f(RWTx::new(RWThreadKey::new(self)));
             match r {
                 Ok(o) => {
                     if likely!(pin.commit()) {
-                        tx_logs(self.thread).as_mut().validate_start_state();
+                        logs(self.thread).as_mut().validate_start_state();
                         return o;
                     }
                 }
@@ -272,21 +270,36 @@ impl ThreadKeyInner {
     }
 }
 
-#[derive(Copy, Clone, Debug)]
-pub struct RWThreadKey {
-    thread: NonNull<Thread>,
+#[derive(Debug)]
+pub struct RWThreadKey<'tcell> {
+    thread:  NonNull<Thread>,
+    phantom: PhantomData<&'tcell ThreadKeyInner>,
 }
 
-impl RWThreadKey {
-    /// Returns a raw pointer to the transaction logs (read/write/thread garbage).
+impl<'tcell> RWThreadKey<'tcell> {
     #[inline]
-    pub fn tx_logs(self) -> NonNull<TxLogs> {
-        tx_logs(self.thread)
+    fn new(thread_key: &'tcell ThreadKeyInner) -> Self {
+        RWThreadKey {
+            thread:  thread_key.thread,
+            phantom: PhantomData,
+        }
+    }
+
+    /// Returns a reference to the transaction logs (read/write/thread garbage).
+    #[inline]
+    pub fn logs(&self) -> &'tcell Logs {
+        unsafe { &*logs(self.thread).as_ptr() }
+    }
+
+    /// Returns a &mut to the transaction logs (read/write/thread garbage).
+    #[inline]
+    pub fn logs_mut(&mut self) -> &'tcell mut Logs {
+        unsafe { &mut *logs(self.thread).as_ptr() }
     }
 
     /// Gets the currently pinned epoch. Requires the thread pointer to still be valid.
     #[inline]
-    pub fn pin_epoch(self) -> QuiesceEpoch {
+    pub fn pin_epoch(&self) -> QuiesceEpoch {
         // current_epoch is never changed by any thread except the owning thread, so we're able to
         // read it without synchronization.
         let synch = synch(self.thread);
@@ -309,16 +322,16 @@ impl RWThreadKey {
 
 // TODO: optimize memory layout
 #[repr(C)]
-pub struct TxLogs {
+pub struct Logs {
     pub read_log:  ReadLog,
     pub write_log: WriteLog,
     pub garbage:   ThreadGarbage,
 }
 
-impl TxLogs {
+impl Logs {
     #[inline]
     fn new() -> Self {
-        TxLogs {
+        Logs {
             read_log:  ReadLog::new(),
             write_log: WriteLog::new(),
             garbage:   ThreadGarbage::new(),
@@ -358,7 +371,7 @@ impl TxLogs {
 }
 
 #[cfg(debug_assertions)]
-impl Drop for TxLogs {
+impl Drop for Logs {
     fn drop(&mut self) {
         self.validate_start_state();
     }
@@ -429,7 +442,7 @@ impl<'a> PinRw<'a> {
     /// error. Returns true if the transaction committed successfully.
     #[inline]
     unsafe fn commit(self) -> bool {
-        let logs = &*tx_logs(self.thread).as_ptr();
+        let logs = &*logs(self.thread).as_ptr();
 
         if likely!(!logs.write_log.is_empty()) {
             self.commit_slow()
@@ -440,7 +453,7 @@ impl<'a> PinRw<'a> {
 
     #[inline]
     unsafe fn commit_empty_write_log(self) -> bool {
-        let logs = &mut *tx_logs(self.thread).as_ptr();
+        let logs = &mut *logs(self.thread).as_ptr();
         let synch = synch(self.thread);
         mem::forget(self);
         // RWTx validates reads as they occur. As a result, if there are no writes, then we have
@@ -463,7 +476,7 @@ impl<'a> PinRw<'a> {
     /// This performs a lot of lock cmpxchgs, so inlining doesn't really doesn't give us much.
     #[inline(never)]
     unsafe fn commit_slow(self) -> bool {
-        let logs = &mut *tx_logs(self.thread).as_ptr();
+        let logs = &mut *logs(self.thread).as_ptr();
 
         // Locking the write log, would cause validation of any reads to the same TCell to fail.
         // So we remove all TCells in the read log that are also in the read log, and assume all
@@ -492,7 +505,7 @@ impl<'a> PinRw<'a> {
     #[inline]
     unsafe fn write_log_lock_success(self) -> bool {
         // after locking the write set, ensure nothing in the read set has been modified.
-        if likely!(tx_logs(self.thread)
+        if likely!(logs(self.thread)
             .as_ref()
             .read_log
             .validate_reads(self.pin_epoch()))
@@ -507,7 +520,7 @@ impl<'a> PinRw<'a> {
 
     #[inline]
     unsafe fn validation_success(self) -> bool {
-        let logs = &mut *tx_logs(self.thread).as_ptr();
+        let logs = &mut *logs(self.thread).as_ptr();
 
         // The writes must be performed before the EPOCH_CLOCK is tick'ed.
         // Reads can get away with performing less work with this ordering.
@@ -537,7 +550,7 @@ impl<'a> PinRw<'a> {
     #[cold]
     unsafe fn validation_failure(self) -> bool {
         // on fail unlock the write set
-        tx_logs(self.thread).as_ref().write_log.unlock_entries();
+        logs(self.thread).as_ref().write_log.unlock_entries();
         drop(self);
         false
     }
@@ -548,11 +561,11 @@ impl Drop for PinRw<'_> {
     #[cold]
     fn drop(&mut self) {
         unsafe {
-            let mut tx_logs = tx_logs(self.thread);
-            let tx_logs = tx_logs.as_mut();
-            tx_logs.read_log.clear();
-            tx_logs.garbage.abort_speculative_garbage();
-            tx_logs.write_log.clear();
+            let mut logs = logs(self.thread);
+            let logs = logs.as_mut();
+            logs.read_log.clear();
+            logs.garbage.abort_speculative_garbage();
+            logs.write_log.clear();
             synch(self.thread)
                 .as_ref()
                 .current_epoch

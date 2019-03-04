@@ -10,9 +10,8 @@
 use crate::{
     internal::{
         alloc::dyn_vec::DynElemMut,
-        epoch::QuiesceEpoch,
         tcell_erased::TCellErased,
-        thread::{RWThreadKey, TxLogs},
+        thread::RWThreadKey,
         write_log::{bloom_hash, Contained, Entry, WriteEntryImpl},
     },
     tcell::TCell,
@@ -21,43 +20,32 @@ use crate::{
 use std::{
     marker::PhantomData,
     mem::{self, ManuallyDrop},
-    ptr::{self, NonNull},
+    ptr,
     sync::atomic::Ordering::{self as AtomicOrdering, Acquire, Relaxed},
 };
 
-#[derive(Clone, Copy, Debug)]
-struct RWTxImpl {
-    thread_key: RWThreadKey,
+#[derive(Debug)]
+struct RWTxImpl<'tcell> {
+    thread_key: RWThreadKey<'tcell>,
 }
 
-impl RWTxImpl {
+impl<'tcell> RWTxImpl<'tcell> {
     #[inline]
-    fn new(thread_key: RWThreadKey) -> Self {
+    fn new(thread_key: RWThreadKey<'tcell>) -> Self {
         RWTxImpl { thread_key }
     }
 
-    /// Contains the read, write, and garbage logs.
     #[inline]
-    fn logs(self) -> NonNull<TxLogs> {
-        self.thread_key.tx_logs()
-    }
-
-    /// The epoch the transaction has pinned.
-    #[inline]
-    fn pin_epoch(self) -> QuiesceEpoch {
-        self.thread_key.pin_epoch()
-    }
-
-    #[inline]
-    fn rw_valid(self, erased: &TCellErased, o: AtomicOrdering) -> bool {
-        self.pin_epoch()
+    fn rw_valid(&self, erased: &TCellErased, o: AtomicOrdering) -> bool {
+        self.thread_key
+            .pin_epoch()
             .read_write_valid_lockable(&erased.current_epoch, o)
     }
 
     #[inline(never)]
     #[cold]
-    unsafe fn get_slow<T>(self, tcell: &TCell<T>) -> Result<ManuallyDrop<T>, Error> {
-        let logs = &mut *self.logs().as_ptr();
+    unsafe fn get_slow<T>(mut self, tcell: &TCell<T>) -> Result<ManuallyDrop<T>, Error> {
+        let logs = self.thread_key.logs_mut();
         let found = logs.write_log.find(&tcell.erased);
         match found {
             None => {
@@ -78,8 +66,8 @@ impl RWTxImpl {
     }
 
     #[inline]
-    unsafe fn get_impl<T>(self, tcell: &TCell<T>) -> Result<ManuallyDrop<T>, Error> {
-        let logs = &mut *self.logs().as_ptr();
+    unsafe fn get_impl<T>(mut self, tcell: &TCell<T>) -> Result<ManuallyDrop<T>, Error> {
+        let logs = self.thread_key.logs_mut();
         if likely!(!logs.read_log.next_push_allocates())
             && likely!(logs.write_log.contained(bloom_hash(&tcell.erased)) == Contained::No)
         {
@@ -95,7 +83,7 @@ impl RWTxImpl {
     #[inline(never)]
     #[cold]
     unsafe fn get_unlogged_slow<T>(self, tcell: &TCell<T>) -> Result<ManuallyDrop<T>, Error> {
-        let logs = &*self.logs().as_ptr();
+        let logs = self.thread_key.logs();
         let found = logs.write_log.find(&tcell.erased);
         match found {
             None => {
@@ -116,7 +104,7 @@ impl RWTxImpl {
 
     #[inline]
     unsafe fn get_unlogged_impl<T>(self, tcell: &TCell<T>) -> Result<ManuallyDrop<T>, Error> {
-        let logs = &*self.logs().as_ptr();
+        let logs = self.thread_key.logs();
         if likely!(logs.write_log.contained(bloom_hash(&tcell.erased)) == Contained::No) {
             let value = tcell.erased.read_acquire::<T>();
             if likely!(self.rw_valid(&tcell.erased, Acquire)) {
@@ -129,11 +117,11 @@ impl RWTxImpl {
     #[inline(never)]
     #[cold]
     unsafe fn set_slow<T: 'static + Send, V: _TValue<T>>(
-        self,
+        mut self,
         tcell: &TCell<T>,
         value: V,
     ) -> Result<(), SetError<T>> {
-        let logs = &mut *self.logs().as_ptr();
+        let logs = self.thread_key.logs_mut();
         match logs.write_log.entry(&tcell.erased) {
             Entry::Vacant { write_log, hash } => {
                 if likely!(self.rw_valid(&tcell.erased, Relaxed)) {
@@ -165,11 +153,11 @@ impl RWTxImpl {
 
     #[inline]
     unsafe fn set_impl<T: Send + 'static, V: _TValue<T>>(
-        self,
+        mut self,
         tcell: &TCell<T>,
         value: V,
     ) -> Result<(), SetError<T>> {
-        let logs = &mut *self.logs().as_ptr();
+        let logs = self.thread_key.logs_mut();
         let hash = bloom_hash(&tcell.erased);
 
         if likely!(!logs.write_log.next_push_allocates::<V>())
@@ -199,12 +187,12 @@ impl<'tcell> !Sync for RWTx<'tcell> {}
 
 impl<'tcell> RWTx<'tcell> {
     #[inline]
-    pub(crate) fn new<'a>(thread_key: RWThreadKey) -> &'a mut Self {
+    pub(crate) fn new<'a>(thread_key: RWThreadKey<'tcell>) -> &'a mut Self {
         unsafe { mem::transmute(RWTxImpl::new(thread_key)) }
     }
 
     #[inline]
-    fn as_impl(&self) -> RWTxImpl {
+    fn as_impl(&self) -> RWTxImpl<'tcell> {
         unsafe { mem::transmute(self) }
     }
 }
@@ -235,13 +223,11 @@ unsafe impl<'tcell> Write<'tcell> for RWTx<'tcell> {
 
     #[inline]
     fn _privatize<F: FnOnce() + Copy + Send + 'static>(&self, privatizer: F) {
-        unsafe {
-            self.as_impl()
-                .logs()
-                .as_mut()
-                .garbage
-                .trash(ManuallyDrop::new(After::new(privatizer, |p| p())));
-        }
+        self.as_impl()
+            .thread_key
+            .logs_mut()
+            .garbage
+            .trash(ManuallyDrop::new(After::new(privatizer, |p| p())));
     }
 }
 
