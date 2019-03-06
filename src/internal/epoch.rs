@@ -247,15 +247,16 @@ impl EpochClock {
         unsafe { QuiesceEpoch::new_unchecked(self.0.load(o)) }
     }
 
-    // unsafe due to overflow + NonZeroUsize
     #[inline]
-    pub unsafe fn fetch_and_tick(&self, o: Ordering) -> QuiesceEpoch {
+    pub fn fetch_and_tick(&self, o: Ordering) -> QuiesceEpoch {
         let result = self.0.fetch_add(QuiesceEpoch::tick_size().get(), o);
         debug_assert!(
             result < EpochClock::max_version().0.get() - QuiesceEpoch::tick_size().get(),
             "potential `EpochClock` overflow detected"
         );
-        QuiesceEpoch::new_unchecked(result)
+        // takes centuries for this overflow to happen on 64bit processors...
+        // TODO: handle overflow
+        unsafe { QuiesceEpoch::new_unchecked(result) }
     }
 
     #[inline]
