@@ -2,9 +2,10 @@ use std::{
     fmt::{self, Debug, Formatter},
     mem,
     num::NonZeroUsize,
+    process,
     sync::atomic::{
         AtomicUsize,
-        Ordering::{self, Relaxed},
+        Ordering::{self, Relaxed, Release},
     },
 };
 
@@ -50,17 +51,25 @@ impl QuiesceEpoch {
     }
 
     #[inline]
-    pub const fn inactive() -> Self {
-        INACTIVE_EPOCH
+    fn new(epoch: Storage) -> Option<Self> {
+        debug_assert!(
+            epoch >= FIRST,
+            "creating a `QuieseEpoch` before the start of time"
+        );
+        debug_assert!(
+            !lock_bit_set(epoch) || epoch == INACTIVE_EPOCH.0.get(),
+            "creating a locked `QuieseEpoch` is a logic error"
+        );
+        NonZeroStorage::new(epoch).map(QuiesceEpoch)
     }
 
     #[inline]
     pub const fn max_value() -> Self {
-        INACTIVE_EPOCH
+        unsafe { QuiesceEpoch(NonZeroStorage::new_unchecked(!0)) }
     }
 
     #[inline]
-    pub fn end_of_time() -> Self {
+    fn end_of_time() -> Self {
         let r = QuiesceEpoch(NonZeroStorage::new(!LOCK_BIT).unwrap());
         debug_assert!(
             r.is_active(),
@@ -80,19 +89,18 @@ impl QuiesceEpoch {
     }
 
     #[inline]
-    pub fn tick_size() -> NonZeroStorage {
-        unsafe { NonZeroStorage::new_unchecked(1) }
-    }
-
-    #[inline]
     pub fn is_active(self) -> bool {
         self != INACTIVE_EPOCH
     }
 
-    // unsafe due to overflow + NonZeroUsize
+    /// Gets the epoch immediately after self.
+    ///
+    /// This is unsafe due to overflow, and the only way of creating invalid epochs from outside
+    /// this module. EpochClock::fetch_and_tick is guaranteed to return epochs with a valid `next`.
+    /// So this should only be called on epochs returned from `fetch_and_tick`.
     #[inline]
     pub unsafe fn next(self) -> Self {
-        QuiesceEpoch::new_unchecked(self.0.get() + QuiesceEpoch::tick_size().get())
+        QuiesceEpoch::new_unchecked(self.0.get() + 1)
     }
 }
 
@@ -133,20 +141,17 @@ impl EpochLock {
         let actual = self.load_raw(Relaxed); // could be a torn read, if MM permitted it
         likely!(max_expected.read_write_valid(actual))
             && likely!({
-                unsafe {
-                    assume!(
-                        !lock_bit_set(actual.get()),
-                        "lock bit unexpectedly set on `EpochLock`"
-                    )
-                };
+                debug_assert!(
+                    !lock_bit_set(actual.get()),
+                    "lock bit unexpectedly set on `EpochLock`"
+                );
                 self.0
                     .compare_exchange(actual.get(), toggle_lock_bit(actual.get()), so, fo)
                     .is_ok()
             })
     }
 
-    // certain values of QuiesceEpoch are overloaded to mean "locked", making this function unsafe
-    // additionally requires that this is locked by calling thread
+    // UB if not locked by calling thread
     #[inline]
     pub unsafe fn unlock_as_epoch(&self, epoch: QuiesceEpoch, o: Ordering) {
         debug_assert!(
@@ -197,14 +202,17 @@ impl AtomicQuiesceEpoch {
     }
 
     #[inline]
-    pub fn set(&self, value: QuiesceEpoch, o: Ordering) {
+    fn set(&self, value: QuiesceEpoch, o: Ordering) {
         self.0.store(value.0.get(), o)
     }
 
-    // certain values of QuiesceEpoch are overloaded to mean "locked", making this function unsafe
-    // additionally requires that self is not active
     #[inline]
-    pub unsafe fn activate(&self, epoch: QuiesceEpoch, o: Ordering) {
+    pub fn set_collect_epoch(&self) {
+        self.set(QuiesceEpoch::end_of_time(), Release)
+    }
+
+    #[inline]
+    pub fn activate(&self, epoch: QuiesceEpoch, o: Ordering) {
         debug_assert!(
             !self.get(Relaxed).is_active(),
             "already active AtomicQuiesceEpoch"
@@ -244,28 +252,32 @@ impl EpochClock {
 
     #[inline]
     pub fn now(&self, o: Ordering) -> QuiesceEpoch {
+        // it is fetch_and_tick's responsibility too make sure this is always a valid epoch.
         unsafe { QuiesceEpoch::new_unchecked(self.0.load(o)) }
     }
 
     #[inline]
-    pub fn fetch_and_tick(&self, o: Ordering) -> QuiesceEpoch {
-        let result = self.0.fetch_add(QuiesceEpoch::tick_size().get(), o);
-        debug_assert!(
-            result < EpochClock::max_version().0.get() - QuiesceEpoch::tick_size().get(),
-            "potential `EpochClock` overflow detected"
-        );
-        // takes centuries for this overflow to happen on 64bit processors...
-        // TODO: handle overflow
-        unsafe { QuiesceEpoch::new_unchecked(result) }
+    pub fn fetch_and_tick(&self) -> QuiesceEpoch {
+        let mut expired = self.now(Relaxed);
+        loop {
+            if likely!(expired < EpochClock::max_version()) {
+                match self.0.compare_exchange_weak(
+                    expired.0.get(),
+                    expired.0.get() + 1,
+                    Release,
+                    Relaxed,
+                ) {
+                    Ok(_) => break expired,
+                    Err(current) => expired = unsafe { QuiesceEpoch::new_unchecked(current) },
+                }
+            } else {
+                process::abort();
+            }
+        }
     }
 
     #[inline]
     fn max_version() -> QuiesceEpoch {
-        unsafe {
-            QuiesceEpoch::new_unchecked(
-                !((1 as Storage)
-                    << (mem::size_of::<usize>() as Storage * 8 - QuiesceEpoch::tick_size().get())),
-            )
-        }
+        QuiesceEpoch::new(!LOCK_BIT).unwrap()
     }
 }

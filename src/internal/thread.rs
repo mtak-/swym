@@ -134,13 +134,15 @@ impl Drop for ThreadKeyInner {
 
                 // All thread garbage must be collected before the Thread is dropped.
                 logs(this).as_mut().garbage.synch_and_collect_all(synch);
-                synch.current_epoch.set(QuiesceEpoch::inactive(), Release);
 
+                // fullfilling the promise we made in `Self::new`. we must unregister before
+                // deallocation, or there will be UB
                 GlobalSynchList::instance_unchecked()
                     .write()
                     .unregister(synch);
+                // clear the cached #[thread_local] pointer to `this`
                 crate::thread_key::tls::clear_tls();
-                drop(Box::from_raw(this.as_ptr()));
+                drop(Box::from_raw(this.as_ptr()))
             }
         }
     }
@@ -312,10 +314,6 @@ impl<'tcell> RWThreadKey<'tcell> {
             pin_epoch.is_active(),
             "attempt to get pinned_epoch of thread that is not pinned"
         );
-        debug_assert!(
-            pin_epoch != QuiesceEpoch::end_of_time(),
-            "attempt to get pinned_epoch of thread that is not pinned"
-        );
         pin_epoch
     }
 }
@@ -431,10 +429,6 @@ impl<'a> PinRw<'a> {
             pin_epoch.is_active(),
             "attempt to get pinned_epoch of thread that is not pinned"
         );
-        debug_assert!(
-            pin_epoch != QuiesceEpoch::end_of_time(),
-            "attempt to get pinned_epoch of thread that is not pinned"
-        );
         pin_epoch
     }
 
@@ -526,7 +520,7 @@ impl<'a> PinRw<'a> {
         // Reads can get away with performing less work with this ordering.
         logs.write_log.perform_writes();
 
-        let sync_epoch = EPOCH_CLOCK.fetch_and_tick(Release);
+        let sync_epoch = EPOCH_CLOCK.fetch_and_tick();
         debug_assert!(
             self.pin_epoch() <= sync_epoch,
             "`EpochClock::fetch_and_tick` returned an earlier time than expected"
