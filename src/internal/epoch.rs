@@ -12,7 +12,7 @@ type Storage = usize;
 type NonZeroStorage = NonZeroUsize;
 type AtomicStorage = AtomicUsize;
 
-const INACTIVE_EPOCH: QuiesceEpoch = QuiesceEpoch(unsafe { NonZeroStorage::new_unchecked(!0) });
+const INACTIVE_EPOCH: Storage = !0;
 const LOCK_BIT: Storage = 1 << (mem::size_of::<Storage>() as Storage * 8 - 1);
 const FIRST: Storage = 1;
 
@@ -42,7 +42,7 @@ impl QuiesceEpoch {
             "creating a `QuieseEpoch` before the start of time"
         );
         debug_assert!(
-            !lock_bit_set(epoch) || epoch == INACTIVE_EPOCH.0.get(),
+            !lock_bit_set(epoch) || epoch == INACTIVE_EPOCH,
             "creating a locked `QuieseEpoch` is a logic error"
         );
         QuiesceEpoch(NonZeroStorage::new_unchecked(epoch))
@@ -55,7 +55,7 @@ impl QuiesceEpoch {
             "creating a `QuieseEpoch` before the start of time"
         );
         debug_assert!(
-            !lock_bit_set(epoch) || epoch == INACTIVE_EPOCH.0.get(),
+            !lock_bit_set(epoch) || epoch == INACTIVE_EPOCH,
             "creating a locked `QuieseEpoch` is a logic error"
         );
         NonZeroStorage::new(epoch).map(QuiesceEpoch)
@@ -88,7 +88,7 @@ impl QuiesceEpoch {
 
     #[inline]
     pub fn is_active(self) -> bool {
-        self != INACTIVE_EPOCH
+        self.0.get() != INACTIVE_EPOCH
     }
 
     /// Gets the epoch immediately after self.
@@ -191,7 +191,7 @@ pub struct AtomicQuiesceEpoch(AtomicStorage);
 impl AtomicQuiesceEpoch {
     #[inline]
     pub fn inactive() -> Self {
-        AtomicQuiesceEpoch(AtomicStorage::new(INACTIVE_EPOCH.0.get()))
+        AtomicQuiesceEpoch(AtomicStorage::new(INACTIVE_EPOCH))
     }
 
     #[inline]
@@ -232,7 +232,7 @@ impl AtomicQuiesceEpoch {
             self.get(Relaxed).is_active(),
             "attempt to deactive an already inactive AtomicQuiesceEpoch"
         );
-        self.set(INACTIVE_EPOCH, o)
+        self.set(QuiesceEpoch::new(INACTIVE_EPOCH).unwrap(), o)
     }
 }
 
