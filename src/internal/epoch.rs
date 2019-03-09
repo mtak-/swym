@@ -2,7 +2,6 @@ use std::{
     fmt::{self, Debug, Formatter},
     mem,
     num::NonZeroUsize,
-    process,
     sync::atomic::{
         AtomicUsize,
         Ordering::{self, Relaxed, Release},
@@ -250,42 +249,40 @@ impl EpochClock {
     }
 
     #[inline]
-    pub fn now(&self, o: Ordering) -> QuiesceEpoch {
+    pub fn now(&self, o: Ordering) -> Option<QuiesceEpoch> {
         let epoch = self.0.load(o);
         if likely!(!lock_bit_set(epoch)) {
-            unsafe { QuiesceEpoch::new_unchecked(self.0.load(o)) }
+            Some(unsafe { QuiesceEpoch::new_unchecked(epoch) })
         } else {
-            process::abort()
+            // Program would probly have to be running for several centuries, see below.
+            None
         }
     }
 
     // increments the clock, and returns the previous epoch
     #[inline]
     pub fn fetch_and_tick(&self) -> QuiesceEpoch {
-        let result = self.0.fetch_add(1, Release);
-
         // To calculate how long overflow will take:
-        // - LSB is always 1
         // - MSB is reserved for the lock bit
-        // - so on 64 bit platforms we have 2^62 * fetch_add_time(ns) / 1000000000(ns/s) /
+        // - so on 64 bit platforms we have 2^63 * fetch_add_time(ns) / 1000000000(ns/s) /
         //   60(sec/min) / 60(min/hr) / 24(hr/day) / 365(day/yr)
-        //  for a fetch_add time of 1ns (actually benched at around 5ns), we get 146.23yrs
+        //  for a fetch_add time of 1ns (actually benched at around 5ns), we get 292.46yrs
         //  on 32 bit platforms we get just over 1sec until overflow (fetch_add=1ns)
         //
         // When this overflow happens, the lock bit becomes set for additional epochs causing
         // reads from EpochLocks to succeed even when locked by another thread. This is solved by
-        // "now" checking for a set lock bit and aborting.
-        debug_assert!(
-            result < EpochClock::max_version().0.get() - 1,
-            "potential `EpochClock` overflow detected"
-        );
+        // "now" checking for a set lock bit and returning None. Relies on us knowing that Rw
+        // transactions' commit is the only thing that calls fetch_and_tick, and both Read,
+        // and Rw transactions call now, before starting.
+        let result = self.0.fetch_add(1, Release);
 
-        // TICK_SIZE == 4, FIRST == 2, so this is always nonzero
+        // Technically, this can wrap to 0 making this UB.
+        // - EpochClock is at `end_of_time` - 0x7FFF_FFFF_FFFF_FFFF
+        // - Now 2^63 + 1 (0x1000_0000_0000_0001) or more threads start read write transactions.
+        // - ...
+        // - They all succeed and commit, causing epoch clock to overflow.
+        //
+        // Memory would run out well before that many threads could be created.
         unsafe { QuiesceEpoch::new_unchecked(result) }
-    }
-
-    #[inline]
-    fn max_version() -> QuiesceEpoch {
-        QuiesceEpoch::new(!LOCK_BIT).unwrap()
     }
 }

@@ -14,7 +14,7 @@ use crate::{
 use std::{
     cell::Cell,
     marker::PhantomData,
-    mem,
+    mem, process,
     ptr::NonNull,
     sync::atomic::Ordering::{Acquire, Relaxed, Release},
 };
@@ -372,8 +372,12 @@ impl<'a> PinRead<'a> {
     #[inline]
     fn new(synch: &'a OwnedSynch) -> (Self, QuiesceEpoch) {
         let now = EPOCH_CLOCK.now(Acquire);
-        synch.pin(now, Release);
-        (PinRead { synch }, now)
+        if let Some(now) = now {
+            synch.pin(now, Release);
+            (PinRead { synch }, now)
+        } else {
+            process::abort()
+        }
     }
 }
 
@@ -393,13 +397,17 @@ impl<'a> PinRw<'a> {
     #[inline]
     fn new(thread: NonNull<Thread>) -> Self {
         let now = EPOCH_CLOCK.now(Acquire);
-        unsafe {
-            synch(thread).as_ref().pin(now, Release);
+        if let Some(now) = now {
+            unsafe {
+                synch(thread).as_ref().pin(now, Release);
 
-            PinRw {
-                thread,
-                phantom: PhantomData,
+                PinRw {
+                    thread,
+                    phantom: PhantomData,
+                }
             }
+        } else {
+            process::abort()
         }
     }
 
