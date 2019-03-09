@@ -1,13 +1,8 @@
-use crate::internal::{
-    epoch::QuiesceEpoch,
-    frw_lock::FrwLock,
-    gc::quiesce::{synch::Synch, synch_list::SynchList},
-};
+use crate::internal::{frw_lock::FrwLock, gc::quiesce::synch_list::SynchList};
 use lock_api::RawRwLock;
 use std::{
     cell::UnsafeCell,
     ops::{Deref, DerefMut},
-    ptr,
     sync::{
         atomic::{
             AtomicPtr,
@@ -97,7 +92,7 @@ impl GlobalSynchList {
 
     /// Unsafe without holding atleast one of the locks in the GlobalSynchList.
     #[inline]
-    unsafe fn raw(&self) -> &SynchList {
+    pub(super) unsafe fn raw(&self) -> &SynchList {
         &*self.synch_list.get()
     }
 
@@ -129,7 +124,7 @@ impl<'a> Write<'a> {
         unsafe {
             // lock all the Synchs to prevent them from creating a FreezeList
             for synch in list.raw().iter() {
-                synch.lock.lock_exclusive();
+                synch.lock();
             }
             Write { list }
         }
@@ -140,7 +135,7 @@ impl<'a> Drop for Write<'a> {
     #[inline]
     fn drop(&mut self) {
         for synch in self.iter() {
-            synch.lock.unlock_exclusive();
+            synch.unlock();
         }
         self.list.mutex.unlock_exclusive();
     }
@@ -161,77 +156,5 @@ impl<'a> DerefMut for Write<'a> {
     fn deref_mut(&mut self) -> &mut SynchList {
         // we own all the sharded locks, giving us mutable access
         unsafe { self.list.raw_mut() }
-    }
-}
-
-/// A read only guard for the GlobalSynchList.
-pub struct FreezeList<'a> {
-    lock: &'a FrwLock,
-}
-
-impl<'a> FreezeList<'a> {
-    /// Creating a new freezelist requires the Synch to have been registered to the GlobalSynchList
-    #[inline]
-    pub(super) unsafe fn new(synch: &'a Synch) -> Self {
-        let lock = &synch.lock;
-        lock.lock_shared();
-        debug_assert!(
-            GlobalSynchList::instance_unchecked()
-                .raw()
-                .iter()
-                .find(|&lhs| ptr::eq(lhs, synch))
-                .is_some(),
-            "bug: synch not registered to the GlobalSynchList"
-        );
-
-        FreezeList { lock }
-    }
-
-    /// Returns true if the synchs lock is currently held by self.
-    #[inline]
-    fn requested_by(&self, synch: &Synch) -> bool {
-        ptr::eq(self.lock, &synch.lock)
-    }
-
-    /// Waits for all threads to pass `epoch` (or go inactive) and then returns the minimum active
-    /// epoch.
-    ///
-    /// The result is always greater than `epoch`, (must wait for threads who have a lesser
-    /// epoch).
-    #[inline]
-    pub fn quiesce(&self, epoch: QuiesceEpoch) -> QuiesceEpoch {
-        let mut result = QuiesceEpoch::max_value();
-
-        // we hold one of the sharded locks, so read access is safe.
-        let synchs = unsafe { GlobalSynchList::instance_unchecked().raw().iter() };
-        for synch in synchs {
-            let td_epoch = synch.current_epoch.get(Acquire);
-
-            debug_assert!(
-                !self.requested_by(synch) || td_epoch > epoch,
-                "deadlock detected. `wait_until_epoch_end` called by an active thread"
-            );
-
-            if likely!(td_epoch > epoch) {
-                result = result.min(td_epoch);
-            } else {
-                // after quiescing, the thread owning `synch` will have entered the
-                // INACTIVE_EPOCH atleast once, so there's no need to update result
-                synch.local_quiesce(epoch);
-            }
-        }
-
-        debug_assert!(
-            result >= epoch,
-            "bug: quiesced to an epoch less than the requested epoch"
-        );
-        result
-    }
-}
-
-impl<'a> Drop for FreezeList<'a> {
-    #[inline]
-    fn drop(&mut self) {
-        self.lock.unlock_shared()
     }
 }

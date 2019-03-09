@@ -32,7 +32,6 @@ const fn toggle_lock_bit(e: Storage) -> Storage {
     e ^ LOCK_BIT
 }
 
-/// This type holds
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct QuiesceEpoch(NonZeroStorage);
 

@@ -1,4 +1,7 @@
-use crate::internal::{alloc::FVec, gc::quiesce::synch::Synch};
+use crate::internal::{
+    alloc::FVec,
+    gc::quiesce::synch::{OwnedSynch, Synch},
+};
 use std::ptr::NonNull;
 
 /// A list of pointers to each threads Synch (sharded lock and current epoch)
@@ -17,13 +20,15 @@ impl SynchList {
     ///
     /// Synch must never be moved or dropped, until it is unregistered.
     #[inline]
-    pub unsafe fn register(&mut self, synch: &Synch) {
-        self.synchs.push(synch.into())
+    pub unsafe fn register(&mut self, to_add: &OwnedSynch) {
+        let to_add = &to_add.inner;
+        self.synchs.push(to_add.into())
     }
 
     /// Unregisters a destructing synch.
     #[inline]
-    pub fn unregister(&mut self, to_remove: &Synch) {
+    pub fn unregister(&mut self, to_remove: &OwnedSynch) {
+        let to_remove = &to_remove.inner;
         let position = self
             .synchs
             .iter()

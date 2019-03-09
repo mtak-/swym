@@ -3,7 +3,7 @@ use crate::internal::{
     epoch::QuiesceEpoch,
     gc::{
         queued::{FnOnceish, Queued},
-        quiesce::Synch,
+        quiesce::OwnedSynch,
     },
 };
 use std::{
@@ -173,10 +173,8 @@ impl ThreadGarbage {
     /// at some point. May modify synch's current_epoch.
     ///
     /// This potentially will cause garbage collection to happen.
-    ///
-    /// Synch should be owned by the current thread.
     #[inline]
-    pub unsafe fn seal_with_epoch(&mut self, synch: &Synch, quiesce_epoch: QuiesceEpoch) {
+    pub unsafe fn seal_with_epoch(&mut self, synch: &OwnedSynch, quiesce_epoch: QuiesceEpoch) {
         debug_assert!(
             quiesce_epoch.is_active(),
             "attempt to seal with an \"inactive\" epoch"
@@ -188,7 +186,7 @@ impl ThreadGarbage {
 
     /// If the current bag was not empty, we have real work to do.
     #[inline(never)]
-    unsafe fn seal_with_epoch_slow(&mut self, synch: &Synch, quiesce_epoch: QuiesceEpoch) {
+    unsafe fn seal_with_epoch_slow(&mut self, synch: &OwnedSynch, quiesce_epoch: QuiesceEpoch) {
         let new_bag = self.unused_bags.open_bag_unchecked();
         let prev_bag = mem::replace(&mut self.speculative_bag, new_bag);
         let sealed_bag = prev_bag.seal(quiesce_epoch);
@@ -205,7 +203,7 @@ impl ThreadGarbage {
     /// collecting more.
     #[inline(never)]
     #[cold]
-    unsafe fn synch_and_collect(&mut self, synch: &Synch) {
+    unsafe fn synch_and_collect(&mut self, synch: &OwnedSynch) {
         self.synch_and_collect_impl(synch, self.earliest_epoch_unchecked())
     }
 
@@ -215,7 +213,7 @@ impl ThreadGarbage {
     /// It is used in the destructor for ThreadKey.
     #[inline(never)]
     #[cold]
-    pub unsafe fn synch_and_collect_all(&mut self, synch: &Synch) {
+    pub unsafe fn synch_and_collect_all(&mut self, synch: &OwnedSynch) {
         if !self.sealed_bags.is_empty() {
             self.synch_and_collect_impl(synch, self.latest_epoch_unchecked())
         }
@@ -224,11 +222,7 @@ impl ThreadGarbage {
     /// Synchronizes with all the other threads participating in the STM, then collects the garbage.
     /// Modifies synch's current_epoch.
     #[inline]
-    unsafe fn synch_and_collect_impl(&mut self, synch: &Synch, quiesce_epoch: QuiesceEpoch) {
-        // setting a dummy epoch that is far in the future, will protect against transactions
-        // running during garbage collection.
-        synch.current_epoch.set_collect_epoch();
-
+    unsafe fn synch_and_collect_impl(&mut self, synch: &OwnedSynch, quiesce_epoch: QuiesceEpoch) {
         // we want to collect atleast through quiesce_epoch, but it's possible that `quiesce` can
         // detect that even more garbage is able to be collected.
         let collect_epoch = synch.freeze_list().quiesce(quiesce_epoch);

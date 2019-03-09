@@ -6,7 +6,7 @@ mod synch;
 mod synch_list;
 
 pub use self::{
-    global::{FreezeList, GlobalSynchList, Write},
-    synch::Synch,
+    global::{GlobalSynchList, Write},
+    synch::{FreezeList, OwnedSynch},
     synch_list::SynchList,
 };
