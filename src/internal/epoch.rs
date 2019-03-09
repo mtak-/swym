@@ -273,7 +273,8 @@ impl EpochClock {
         //  on 32 bit platforms we get just over 1sec until overflow (fetch_add=1ns)
         //
         // When this overflow happens, the lock bit becomes set for additional epochs causing
-        // reads from EpochLocks to succeed even when locked by another thread.
+        // reads from EpochLocks to succeed even when locked by another thread. This is solved by
+        // "now" checking for a set lock bit and aborting.
         debug_assert!(
             result < EpochClock::max_version().0.get() - 1,
             "potential `EpochClock` overflow detected"
