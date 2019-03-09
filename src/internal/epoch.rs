@@ -63,13 +63,13 @@ impl QuiesceEpoch {
     }
 
     #[inline]
-    pub const fn max_value() -> Self {
-        unsafe { QuiesceEpoch(NonZeroStorage::new_unchecked(!0)) }
+    pub fn max_value() -> Self {
+        QuiesceEpoch::new(!0).unwrap()
     }
 
     #[inline]
     fn end_of_time() -> Self {
-        let r = QuiesceEpoch(NonZeroStorage::new(!LOCK_BIT).unwrap());
+        let r = QuiesceEpoch::new(!LOCK_BIT).unwrap();
         debug_assert!(
             r.is_active(),
             "`QuiesceEpoch::end_of_time` returned an invalid epoch"
@@ -240,7 +240,7 @@ impl AtomicQuiesceEpoch {
 #[derive(Debug)]
 pub struct EpochClock(AtomicStorage);
 
-// TODO: stick this in quiescelist???
+// TODO: stick this in GlobalSynchList?
 pub static EPOCH_CLOCK: EpochClock = EpochClock::new();
 
 impl EpochClock {
@@ -251,28 +251,36 @@ impl EpochClock {
 
     #[inline]
     pub fn now(&self, o: Ordering) -> QuiesceEpoch {
-        // it is fetch_and_tick's responsibility too make sure this is always a valid epoch.
-        unsafe { QuiesceEpoch::new_unchecked(self.0.load(o)) }
+        let epoch = self.0.load(o);
+        if likely!(!lock_bit_set(epoch)) {
+            unsafe { QuiesceEpoch::new_unchecked(self.0.load(o)) }
+        } else {
+            process::abort()
+        }
     }
 
+    // increments the clock, and returns the previous epoch
     #[inline]
     pub fn fetch_and_tick(&self) -> QuiesceEpoch {
-        let mut expired = self.now(Relaxed);
-        loop {
-            if likely!(expired < EpochClock::max_version()) {
-                match self.0.compare_exchange_weak(
-                    expired.0.get(),
-                    expired.0.get() + 1,
-                    Release,
-                    Relaxed,
-                ) {
-                    Ok(_) => break expired,
-                    Err(current) => expired = unsafe { QuiesceEpoch::new_unchecked(current) },
-                }
-            } else {
-                process::abort();
-            }
-        }
+        let result = self.0.fetch_add(1, Release);
+
+        // To calculate how long overflow will take:
+        // - LSB is always 1
+        // - MSB is reserved for the lock bit
+        // - so on 64 bit platforms we have 2^62 * fetch_add_time(ns) / 1000000000(ns/s) /
+        //   60(sec/min) / 60(min/hr) / 24(hr/day) / 365(day/yr)
+        //  for a fetch_add time of 1ns (actually benched at around 5ns), we get 146.23yrs
+        //  on 32 bit platforms we get just over 1sec until overflow (fetch_add=1ns)
+        //
+        // When this overflow happens, the lock bit becomes set for additional epochs causing
+        // reads from EpochLocks to succeed even when locked by another thread.
+        debug_assert!(
+            result < EpochClock::max_version().0.get() - 1,
+            "potential `EpochClock` overflow detected"
+        );
+
+        // TICK_SIZE == 4, FIRST == 2, so this is always nonzero
+        unsafe { QuiesceEpoch::new_unchecked(result) }
     }
 
     #[inline]
