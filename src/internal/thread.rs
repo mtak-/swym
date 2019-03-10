@@ -54,6 +54,63 @@ impl Thread {
     }
 }
 
+// TODO: optimize memory layout
+#[repr(C)]
+pub struct Logs {
+    pub read_log:  ReadLog,
+    pub write_log: WriteLog,
+    pub garbage:   ThreadGarbage,
+}
+
+impl Logs {
+    #[inline]
+    fn new() -> Self {
+        Logs {
+            read_log:  ReadLog::new(),
+            write_log: WriteLog::new(),
+            garbage:   ThreadGarbage::new(),
+        }
+    }
+
+    #[inline]
+    pub fn remove_writes_from_reads(&mut self) {
+        let mut count = 0;
+        for i in (0..self.read_log.len()).rev() {
+            debug_assert!(i < self.read_log.len(), "bug in `remove_writes_from_reads`");
+            if self
+                .write_log
+                .find(unsafe { self.read_log.get_unchecked(i).src.as_ref() })
+                .is_some()
+            {
+                let l = self.read_log.len();
+                unsafe {
+                    self.read_log.swap_erase_unchecked(i);
+                }
+                count += 1;
+                debug_assert!(
+                    l == self.read_log.len() + 1,
+                    "bug in `remove_writes_from_reads`"
+                );
+            }
+        }
+        stats::unnecessary_read_size(count)
+    }
+
+    #[inline]
+    fn validate_start_state(&mut self) {
+        debug_assert!(self.read_log.is_empty());
+        debug_assert!(self.write_log.is_empty());
+        debug_assert!(self.garbage.is_speculative_bag_empty());
+    }
+}
+
+#[cfg(debug_assertions)]
+impl Drop for Logs {
+    fn drop(&mut self) {
+        self.validate_start_state();
+    }
+}
+
 /// Given a pointer to a thread, we want to be able to create pointers to its members without going
 /// through a &mut. Going through an &mut would violate rusts aliasing rules, because Synch might be
 /// borrowed immutably by other threads performing garbage collection.
@@ -173,9 +230,9 @@ impl ThreadKeyInner {
         unsafe { &*ref_count(self.thread).as_ptr() }
     }
 
-    /// Returns whether the thread is currently active (pinned or collecting garbage).
+    /// Returns whether the thread is pinned.
     #[inline]
-    fn is_active(&self) -> bool {
+    fn is_pinned(&self) -> bool {
         self.synch().pin_epoch().is_active()
     }
 
@@ -185,7 +242,7 @@ impl ThreadKeyInner {
     where
         F: FnMut(&ReadTx<'tcell>) -> Result<O, Error>,
     {
-        if likely!(!self.is_active()) {
+        if likely!(!self.is_pinned()) {
             // we have checked that there is no transaction in the current thread, so it's safe to
             // start one.
             Some(unsafe { self.read_slow(f) })
@@ -220,7 +277,7 @@ impl ThreadKeyInner {
     where
         F: FnMut(&mut RWTx<'tcell>) -> Result<O, Error>,
     {
-        if likely!(!self.is_active()) {
+        if likely!(!self.is_pinned()) {
             // we have checked that there is no transaction in the current thread, so it's safe to
             // start one.
             Some(unsafe { self.rw_slow(f) })
@@ -239,8 +296,8 @@ impl ThreadKeyInner {
             stats::write_transaction();
 
             logs(self.thread).as_mut().validate_start_state();
-            let pin = self.pin_rw();
-            let r = f(RWTx::new(RWThreadKey::new(self)));
+            let mut pin = self.pin_rw();
+            let r = f(RWTx::new(RWThreadKey::new(&mut pin)));
             match r {
                 Ok(o) => {
                     if likely!(pin.commit()) {
@@ -255,30 +312,70 @@ impl ThreadKeyInner {
         }
     }
 
+    // must not be currently pinned
     #[inline]
-    fn pin_read(&self) -> (PinRead<'_>, QuiesceEpoch) {
+    unsafe fn pin_read(&self) -> (PinRead<'_>, QuiesceEpoch) {
         PinRead::new(self.synch())
     }
 
+    // must not be currently pinned
     #[inline]
-    fn pin_rw(&self) -> PinRw<'_> {
-        PinRw::new(self.thread)
+    unsafe fn pin_rw(&self) -> PinRw<'_> {
+        PinRw::new(self)
+    }
+}
+
+struct PinRead<'tcell> {
+    synch: &'tcell OwnedSynch,
+}
+
+impl<'tcell> PinRead<'tcell> {
+    // must not be currently pinned
+    #[inline]
+    unsafe fn new(synch: &'tcell OwnedSynch) -> (Self, QuiesceEpoch) {
+        let now = EPOCH_CLOCK.now(Acquire);
+        if let Some(now) = now {
+            synch.pin(now, Release);
+            (PinRead { synch }, now)
+        } else {
+            process::abort()
+        }
+    }
+}
+
+impl<'tcell> Drop for PinRead<'tcell> {
+    #[inline]
+    fn drop(&mut self) {
+        self.synch.unpin(Release)
     }
 }
 
 #[derive(Debug)]
-pub struct RWThreadKey<'tcell> {
+struct PinRw<'tcell> {
     thread:  NonNull<Thread>,
-    phantom: PhantomData<&'tcell ThreadKeyInner>,
+    phantom: PhantomData<&'tcell mut ()>,
 }
 
-impl<'tcell> RWThreadKey<'tcell> {
+impl<'tcell> PinRw<'tcell> {
     #[inline]
-    fn new(thread_key: &'tcell ThreadKeyInner) -> Self {
-        RWThreadKey {
-            thread:  thread_key.thread,
-            phantom: PhantomData,
+    unsafe fn new(thread: &'tcell ThreadKeyInner) -> Self {
+        let now = EPOCH_CLOCK.now(Acquire);
+        if let Some(now) = now {
+            thread.synch().pin(now, Release);
+
+            PinRw {
+                thread:  thread.thread,
+                phantom: PhantomData,
+            }
+        } else {
+            process::abort()
         }
+    }
+
+    /// Returns a reference to the transaction logs (read/write/thread garbage).
+    #[inline]
+    pub fn synch(&self) -> &'tcell OwnedSynch {
+        unsafe { &*synch(self.thread).as_ptr() }
     }
 
     /// Returns a reference to the transaction logs (read/write/thread garbage).
@@ -293,132 +390,10 @@ impl<'tcell> RWThreadKey<'tcell> {
         unsafe { &mut *logs(self.thread).as_ptr() }
     }
 
-    /// Gets the currently pinned epoch.
-    #[inline]
-    pub fn pin_epoch(&self) -> QuiesceEpoch {
-        let synch = synch(self.thread);
-        let synch = unsafe { synch.as_ref() };
-        let pin_epoch = synch.pin_epoch();
-        debug_assert!(
-            pin_epoch.is_active(),
-            "attempt to get pinned_epoch of thread that is not pinned"
-        );
-        pin_epoch
-    }
-}
-
-// TODO: optimize memory layout
-#[repr(C)]
-pub struct Logs {
-    pub read_log:  ReadLog,
-    pub write_log: WriteLog,
-    pub garbage:   ThreadGarbage,
-}
-
-impl Logs {
-    #[inline]
-    fn new() -> Self {
-        Logs {
-            read_log:  ReadLog::new(),
-            write_log: WriteLog::new(),
-            garbage:   ThreadGarbage::new(),
-        }
-    }
-
-    #[inline]
-    pub fn remove_writes_from_reads(&mut self) {
-        let mut count = 0;
-        for i in (0..self.read_log.len()).rev() {
-            debug_assert!(i < self.read_log.len(), "bug in `remove_writes_from_reads`");
-            if self
-                .write_log
-                .find(unsafe { self.read_log.get_unchecked(i).src.as_ref() })
-                .is_some()
-            {
-                let l = self.read_log.len();
-                unsafe {
-                    self.read_log.swap_erase_unchecked(i);
-                }
-                count += 1;
-                debug_assert!(
-                    l == self.read_log.len() + 1,
-                    "bug in `remove_writes_from_reads`"
-                );
-            }
-        }
-        stats::unnecessary_read_size(count)
-    }
-
-    #[inline]
-    fn validate_start_state(&mut self) {
-        debug_assert!(self.read_log.is_empty());
-        debug_assert!(self.write_log.is_empty());
-        debug_assert!(self.garbage.is_speculative_bag_empty());
-    }
-}
-
-#[cfg(debug_assertions)]
-impl Drop for Logs {
-    fn drop(&mut self) {
-        self.validate_start_state();
-    }
-}
-
-struct PinRead<'a> {
-    synch: &'a OwnedSynch,
-}
-
-impl<'a> PinRead<'a> {
-    #[inline]
-    fn new(synch: &'a OwnedSynch) -> (Self, QuiesceEpoch) {
-        let now = EPOCH_CLOCK.now(Acquire);
-        if let Some(now) = now {
-            synch.pin(now, Release);
-            (PinRead { synch }, now)
-        } else {
-            process::abort()
-        }
-    }
-}
-
-impl<'a> Drop for PinRead<'a> {
-    #[inline]
-    fn drop(&mut self) {
-        self.synch.unpin(Release)
-    }
-}
-
-struct PinRw<'tcell> {
-    thread:  NonNull<Thread>,
-    phantom: PhantomData<&'tcell mut ()>,
-}
-
-impl<'a> PinRw<'a> {
-    #[inline]
-    fn new(thread: NonNull<Thread>) -> Self {
-        let now = EPOCH_CLOCK.now(Acquire);
-        if let Some(now) = now {
-            unsafe {
-                synch(thread).as_ref().pin(now, Release);
-
-                PinRw {
-                    thread,
-                    phantom: PhantomData,
-                }
-            }
-        } else {
-            process::abort()
-        }
-    }
-
     /// Gets the currently pinned epoch. Requires the thread pointer to still be valid.
     #[inline]
     pub fn pin_epoch(&self) -> QuiesceEpoch {
-        // current_epoch is never changed by any thread except the owning thread, so we're able to
-        // read it without synchronization.
-        let synch = synch(self.thread);
-        let synch = unsafe { synch.as_ref() };
-        let pin_epoch = synch.pin_epoch();
+        let pin_epoch = self.synch().pin_epoch();
         debug_assert!(
             pin_epoch.is_active(),
             "attempt to get pinned_epoch of thread that is not pinned"
@@ -430,7 +405,7 @@ impl<'a> PinRw<'a> {
     /// error. Returns true if the transaction committed successfully.
     #[inline]
     unsafe fn commit(self) -> bool {
-        let logs = &*logs(self.thread).as_ptr();
+        let logs = self.logs();
 
         if likely!(!logs.write_log.is_empty()) {
             self.commit_slow()
@@ -440,10 +415,9 @@ impl<'a> PinRw<'a> {
     }
 
     #[inline]
-    unsafe fn commit_empty_write_log(self) -> bool {
-        let logs = &mut *logs(self.thread).as_ptr();
-        let synch = synch(self.thread);
-        let synch = synch.as_ref();
+    unsafe fn commit_empty_write_log(mut self) -> bool {
+        let logs = self.logs_mut();
+        let synch = self.synch();
         mem::forget(self);
         // RWTx validates reads as they occur. As a result, if there are no writes, then we have
         // no work to do in our commit algorithm.
@@ -545,7 +519,7 @@ impl<'a> PinRw<'a> {
     }
 }
 
-impl Drop for PinRw<'_> {
+impl<'tcell> Drop for PinRw<'tcell> {
     #[inline(never)]
     #[cold]
     fn drop(&mut self) {
@@ -557,5 +531,51 @@ impl Drop for PinRw<'_> {
             logs.write_log.clear();
             synch(self.thread).as_ref().unpin(Relaxed);
         }
+    }
+}
+
+#[derive(Debug)]
+pub struct RWThreadKey<'tx, 'tcell> {
+    thread:  NonNull<Thread>,
+    phantom: PhantomData<&'tx mut PinRw<'tcell>>,
+}
+
+impl<'tx, 'tcell> RWThreadKey<'tx, 'tcell> {
+    #[inline]
+    fn new(pin: &'tx mut PinRw<'tcell>) -> Self {
+        RWThreadKey {
+            thread:  pin.thread,
+            phantom: PhantomData,
+        }
+    }
+
+    /// Returns a reference to the transaction logs (read/write/thread garbage).
+    #[inline]
+    pub fn synch(&self) -> &OwnedSynch {
+        //
+        unsafe { &*synch(self.thread).as_ptr() }
+    }
+
+    /// Returns a reference to the transaction logs (read/write/thread garbage).
+    #[inline]
+    pub fn logs(&self) -> &Logs {
+        unsafe { &*logs(self.thread).as_ptr() }
+    }
+
+    /// Returns a &mut to the transaction logs (read/write/thread garbage).
+    #[inline]
+    pub fn logs_mut(&mut self) -> &mut Logs {
+        unsafe { &mut *logs(self.thread).as_ptr() }
+    }
+
+    /// Gets the currently pinned epoch. Requires the thread pointer to still be valid.
+    #[inline]
+    pub fn pin_epoch(&self) -> QuiesceEpoch {
+        let pin_epoch = self.synch().pin_epoch();
+        debug_assert!(
+            pin_epoch.is_active(),
+            "attempt to get pinned_epoch of thread that is not pinned"
+        );
+        pin_epoch
     }
 }
