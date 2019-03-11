@@ -11,7 +11,7 @@ use crate::{
     internal::{
         alloc::dyn_vec::DynElemMut,
         tcell_erased::TCellErased,
-        thread::PinRef,
+        thread::{PinRef, PinRw},
         write_log::{bloom_hash, Contained, Entry, WriteEntryImpl},
     },
     tcell::TCell,
@@ -47,8 +47,10 @@ impl<'tx, 'tcell> std::ops::DerefMut for RWTxImpl<'tx, 'tcell> {
 
 impl<'tx, 'tcell> RWTxImpl<'tx, 'tcell> {
     #[inline]
-    fn new(pin_ref: PinRef<'tx, 'tcell>) -> Self {
-        RWTxImpl { pin_ref }
+    fn new(pin_rw: &'tx mut PinRw<'_, 'tcell>) -> Self {
+        RWTxImpl {
+            pin_ref: pin_rw.reborrow(),
+        }
     }
 
     #[inline]
@@ -203,8 +205,8 @@ impl<'tcell> !Sync for RWTx<'tcell> {}
 
 impl<'tcell> RWTx<'tcell> {
     #[inline]
-    pub(crate) fn new<'tx>(pin_ref: PinRef<'tx, 'tcell>) -> &'tx mut Self {
-        unsafe { mem::transmute(RWTxImpl::new(pin_ref)) }
+    pub(crate) fn new<'tx>(pin_rw: &'tx mut PinRw<'_, 'tcell>) -> &'tx mut Self {
+        unsafe { mem::transmute(RWTxImpl::new(pin_rw)) }
     }
 
     #[inline]

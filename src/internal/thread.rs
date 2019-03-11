@@ -273,7 +273,7 @@ pub struct PinRef<'tx, 'tcell> {
 impl<'tx, 'tcell> PinRef<'tx, 'tcell> {
     /// Returns a reference to the current threads Synch.
     #[inline]
-    fn reborrow(&mut self) -> PinRef<'_, 'tcell> {
+    pub fn reborrow(&mut self) -> PinRef<'_, 'tcell> {
         PinRef {
             thread_ref: self.thread_ref,
             phantom:    PhantomData,
@@ -392,7 +392,7 @@ impl<'tcell> Pin<'tcell> {
             self.pin_ref.logs_mut().validate_start_state();
             {
                 let mut pin = PinRw::new(&mut self);
-                let r = f(RWTx::new(pin.reborrow()));
+                let r = f(RWTx::new(&mut pin));
                 match r {
                     Ok(o) => {
                         if likely!(pin.commit()) {
@@ -409,8 +409,7 @@ impl<'tcell> Pin<'tcell> {
     }
 }
 
-#[derive(Debug)]
-struct PinRw<'tx, 'tcell> {
+pub struct PinRw<'tx, 'tcell> {
     pin_ref: PinRef<'tx, 'tcell>,
 }
 
