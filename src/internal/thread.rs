@@ -136,7 +136,7 @@ impl Logs {
     }
 
     #[inline]
-    fn validate_start_state(&mut self) {
+    fn validate_start_state(&self) {
         debug_assert!(self.read_log.is_empty());
         debug_assert!(self.write_log.is_empty());
         debug_assert!(self.garbage.is_speculative_bag_empty());
@@ -327,7 +327,16 @@ pub struct Pin<'tcell> {
 impl<'tcell> Drop for Pin<'tcell> {
     #[inline]
     fn drop(&mut self) {
-        self.pin_ref.synch().unpin(Release)
+        self.synch().unpin(Release)
+    }
+}
+
+impl<'tcell> std::ops::Deref for Pin<'tcell> {
+    type Target = PinRef<'tcell, 'tcell>;
+
+    #[inline]
+    fn deref(&self) -> &PinRef<'tcell, 'tcell> {
+        &self.pin_ref
     }
 }
 
@@ -356,13 +365,13 @@ impl<'tcell> Pin<'tcell> {
     fn repin(&mut self) {
         let now = EPOCH_CLOCK.now(Acquire);
         if let Some(now) = now {
-            self.pin_ref.synch().repin(now, Release);
+            self.synch().repin(now, Release);
         } else {
             process::abort()
         }
     }
 
-    /// Runs a read only transaction. Requires the thread to not be in a transaction.
+    /// Runs a read only transaction.
     #[inline]
     pub fn run_read<F, O>(mut self, mut f: F) -> O
     where
@@ -371,7 +380,7 @@ impl<'tcell> Pin<'tcell> {
         loop {
             stats::read_transaction();
 
-            let r = f(ReadTx::new(self.pin_ref.pin_epoch()));
+            let r = f(ReadTx::new(&mut self));
             match r {
                 Ok(o) => break o,
                 Err(Error::RETRY) => {}
@@ -381,7 +390,7 @@ impl<'tcell> Pin<'tcell> {
         }
     }
 
-    /// Runs a read-write transaction. Requires the thread to not be in a transaction.
+    /// Runs a read-write transaction.
     #[inline]
     pub fn run_rw<F, O>(mut self, mut f: F) -> O
     where
@@ -389,14 +398,14 @@ impl<'tcell> Pin<'tcell> {
     {
         loop {
             stats::write_transaction();
-            self.pin_ref.logs_mut().validate_start_state();
+            self.logs().validate_start_state();
             {
                 let mut pin = PinRw::new(&mut self);
                 let r = f(RWTx::new(&mut pin));
                 match r {
                     Ok(o) => {
                         if likely!(pin.commit()) {
-                            self.pin_ref.logs_mut().validate_start_state();
+                            self.logs().validate_start_state();
                             return o;
                         }
                     }

@@ -1,5 +1,5 @@
 use crate::{
-    internal::epoch::QuiesceEpoch,
+    internal::{epoch::QuiesceEpoch, thread::Pin},
     tcell::TCell,
     tx::{Error, Ordering, Read},
 };
@@ -19,10 +19,10 @@ impl<'tcell> !Sync for ReadTx<'tcell> {}
 
 impl<'tcell> ReadTx<'tcell> {
     #[inline]
-    pub(crate) fn new<'a>(pin_epoch: QuiesceEpoch) -> &'a Self {
+    pub(crate) fn new<'tx>(pin: &'tx mut Pin<'tcell>) -> &'tx Self {
         assert!(mem::align_of::<Self>() == 1, "unsafe alignment on ReadTx");
         // we smuggle the pinned epoch through as a reference
-        unsafe { mem::transmute(pin_epoch) }
+        unsafe { mem::transmute(pin.pin_epoch()) }
     }
 
     #[inline]
