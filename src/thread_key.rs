@@ -111,7 +111,11 @@ impl ThreadKey {
     where
         F: FnMut(&ReadTx<'tcell>) -> Result<O, Error>,
     {
-        self.thread.try_read(f).ok_or_else(|| TryReadErr::new())
+        Ok(self
+            .thread
+            .try_pin()
+            .ok_or_else(|| TryReadErr::new())?
+            .run_read(f))
     }
 
     /// Performs a transaction capabable of reading and writing.
@@ -143,7 +147,11 @@ impl ThreadKey {
     where
         F: FnMut(&mut RWTx<'tcell>) -> Result<O, Error>,
     {
-        self.thread.try_rw(f).ok_or_else(|| TryRWErr::new())
+        Ok(self
+            .thread
+            .try_pin()
+            .ok_or_else(|| TryRWErr::new())?
+            .run_rw(f))
     }
 }
 

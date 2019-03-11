@@ -27,12 +27,12 @@ impl<'tcell> ReadTx<'tcell> {
 
     #[inline]
     fn pin_epoch(&self) -> QuiesceEpoch {
-        // conver the reference back into the smuggled pinned epoch
+        // convert the reference back into the smuggled pinned epoch
         unsafe { mem::transmute(self) }
     }
 
     #[inline]
-    unsafe fn get_impl<T>(&self, tcell: &TCell<T>) -> Result<ManuallyDrop<T>, Error> {
+    unsafe fn get_impl<T>(&self, tcell: &'tcell TCell<T>) -> Result<ManuallyDrop<T>, Error> {
         // In a read only transaction, there is no read log, write log or gc.
         // The only thing that needs to be done is reading of the value, and then a check, to see if
         // that value was written before this transaction began.

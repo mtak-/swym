@@ -11,7 +11,7 @@ use crate::{
     internal::{
         alloc::dyn_vec::DynElemMut,
         tcell_erased::TCellErased,
-        thread::RWThreadKey,
+        thread::PinRef,
         write_log::{bloom_hash, Contained, Entry, WriteEntryImpl},
     },
     tcell::TCell,
@@ -26,32 +26,47 @@ use std::{
 
 #[derive(Debug)]
 struct RWTxImpl<'tx, 'tcell> {
-    thread_key: RWThreadKey<'tx, 'tcell>,
+    pin_ref: PinRef<'tx, 'tcell>,
+}
+
+impl<'tx, 'tcell> std::ops::Deref for RWTxImpl<'tx, 'tcell> {
+    type Target = PinRef<'tx, 'tcell>;
+
+    #[inline]
+    fn deref(&self) -> &PinRef<'tx, 'tcell> {
+        &self.pin_ref
+    }
+}
+
+impl<'tx, 'tcell> std::ops::DerefMut for RWTxImpl<'tx, 'tcell> {
+    #[inline]
+    fn deref_mut(&mut self) -> &mut PinRef<'tx, 'tcell> {
+        &mut self.pin_ref
+    }
 }
 
 impl<'tx, 'tcell> RWTxImpl<'tx, 'tcell> {
     #[inline]
-    fn new(thread_key: RWThreadKey<'tx, 'tcell>) -> Self {
-        RWTxImpl { thread_key }
+    fn new(pin_ref: PinRef<'tx, 'tcell>) -> Self {
+        RWTxImpl { pin_ref }
     }
 
     #[inline]
     fn rw_valid(&self, erased: &TCellErased, o: AtomicOrdering) -> bool {
-        self.thread_key
-            .pin_epoch()
+        self.pin_epoch()
             .read_write_valid_lockable(&erased.current_epoch, o)
     }
 
     #[inline(never)]
     #[cold]
     unsafe fn get_slow<T>(mut self, tcell: &TCell<T>) -> Result<ManuallyDrop<T>, Error> {
-        let logs = self.thread_key.logs();
+        let logs = self.logs();
         let found = logs.write_log.find(&tcell.erased);
         match found {
             None => {
                 let value = tcell.erased.read_acquire::<T>();
                 if likely!(self.rw_valid(&tcell.erased, Acquire)) {
-                    self.thread_key.logs_mut().read_log.push(&tcell.erased);
+                    self.logs_mut().read_log.push(&tcell.erased);
                     return Ok(value);
                 }
             }
@@ -67,16 +82,13 @@ impl<'tx, 'tcell> RWTxImpl<'tx, 'tcell> {
 
     #[inline]
     unsafe fn get_impl<T>(mut self, tcell: &TCell<T>) -> Result<ManuallyDrop<T>, Error> {
-        let logs = self.thread_key.logs();
+        let logs = self.logs();
         if likely!(!logs.read_log.next_push_allocates())
             && likely!(logs.write_log.contained(bloom_hash(&tcell.erased)) == Contained::No)
         {
             let value = tcell.erased.read_acquire::<T>();
             if likely!(self.rw_valid(&tcell.erased, Acquire)) {
-                self.thread_key
-                    .logs_mut()
-                    .read_log
-                    .push_unchecked(&tcell.erased);
+                self.logs_mut().read_log.push_unchecked(&tcell.erased);
                 return Ok(value);
             }
         }
@@ -86,7 +98,7 @@ impl<'tx, 'tcell> RWTxImpl<'tx, 'tcell> {
     #[inline(never)]
     #[cold]
     unsafe fn get_unlogged_slow<T>(self, tcell: &TCell<T>) -> Result<ManuallyDrop<T>, Error> {
-        let logs = self.thread_key.logs();
+        let logs = self.logs();
         let found = logs.write_log.find(&tcell.erased);
         match found {
             None => {
@@ -107,7 +119,7 @@ impl<'tx, 'tcell> RWTxImpl<'tx, 'tcell> {
 
     #[inline]
     unsafe fn get_unlogged_impl<T>(self, tcell: &TCell<T>) -> Result<ManuallyDrop<T>, Error> {
-        let logs = self.thread_key.logs();
+        let logs = self.logs();
         if likely!(logs.write_log.contained(bloom_hash(&tcell.erased)) == Contained::No) {
             let value = tcell.erased.read_acquire::<T>();
             if likely!(self.rw_valid(&tcell.erased, Acquire)) {
@@ -124,10 +136,10 @@ impl<'tx, 'tcell> RWTxImpl<'tx, 'tcell> {
         tcell: &TCell<T>,
         value: V,
     ) -> Result<(), SetError<T>> {
-        match self.thread_key.logs_mut().write_log.entry(&tcell.erased) {
+        match self.logs_mut().write_log.entry(&tcell.erased) {
             Entry::Vacant { write_log: _, hash } => {
                 if likely!(self.rw_valid(&tcell.erased, Relaxed)) {
-                    let logs = self.thread_key.logs_mut();
+                    let logs = self.logs_mut();
                     logs.write_log.push(&tcell.erased, value, hash);
                     if mem::needs_drop::<T>() {
                         logs.garbage.trash(tcell.erased.read_relaxed::<T>())
@@ -138,10 +150,7 @@ impl<'tx, 'tcell> RWTxImpl<'tx, 'tcell> {
             Entry::Occupied { mut entry, hash } => {
                 if V::REQUEST_TCELL_LIFETIME {
                     entry.deactivate();
-                    self.thread_key
-                        .logs_mut()
-                        .write_log
-                        .push(&tcell.erased, value, hash);
+                    self.logs_mut().write_log.push(&tcell.erased, value, hash);
                 } else {
                     DynElemMut::assign_unchecked(entry, WriteEntryImpl::new(&tcell.erased, value))
                 }
@@ -163,7 +172,7 @@ impl<'tx, 'tcell> RWTxImpl<'tx, 'tcell> {
         tcell: &TCell<T>,
         value: V,
     ) -> Result<(), SetError<T>> {
-        let logs = self.thread_key.logs();
+        let logs = self.logs();
         let hash = bloom_hash(&tcell.erased);
 
         if likely!(!logs.write_log.next_push_allocates::<V>())
@@ -171,7 +180,7 @@ impl<'tx, 'tcell> RWTxImpl<'tx, 'tcell> {
             && likely!(logs.write_log.contained(hash) == Contained::No)
             && likely!(self.rw_valid(&tcell.erased, Relaxed))
         {
-            let logs = self.thread_key.logs_mut();
+            let logs = self.logs_mut();
             logs.write_log.push_unchecked(&tcell.erased, value, hash);
             if mem::needs_drop::<T>() {
                 logs.garbage
@@ -194,8 +203,8 @@ impl<'tcell> !Sync for RWTx<'tcell> {}
 
 impl<'tcell> RWTx<'tcell> {
     #[inline]
-    pub(crate) fn new<'tx>(thread_key: RWThreadKey<'tx, 'tcell>) -> &'tx mut Self {
-        unsafe { mem::transmute(RWTxImpl::new(thread_key)) }
+    pub(crate) fn new<'tx>(pin_ref: PinRef<'tx, 'tcell>) -> &'tx mut Self {
+        unsafe { mem::transmute(RWTxImpl::new(pin_ref)) }
     }
 
     #[inline]
@@ -231,7 +240,6 @@ unsafe impl<'tcell> Write<'tcell> for RWTx<'tcell> {
     #[inline]
     fn _privatize<F: FnOnce() + Copy + Send + 'static>(&self, privatizer: F) {
         self.as_impl()
-            .thread_key
             .logs_mut()
             .garbage
             .trash(ManuallyDrop::new(After::new(privatizer, |p| p())));

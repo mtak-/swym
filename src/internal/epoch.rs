@@ -227,6 +227,23 @@ impl AtomicQuiesceEpoch {
     }
 
     #[inline]
+    pub fn repin(&self, epoch: QuiesceEpoch, o: Ordering) {
+        debug_assert!(
+            self.get(Relaxed).is_active(),
+            "already active AtomicQuiesceEpoch"
+        );
+        debug_assert!(
+            epoch.is_active(),
+            "cannot activate an AtomicQuiesceEpoch to the inactive state"
+        );
+        debug_assert!(
+            !lock_bit_set(epoch.0.get()),
+            "cannot activate an AtomicQuiesceEpoch to a locked state"
+        );
+        self.set(epoch, o);
+    }
+
+    #[inline]
     pub fn unpin(&self, o: Ordering) {
         debug_assert!(
             self.get(Relaxed).is_active(),

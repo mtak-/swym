@@ -113,6 +113,11 @@ impl OwnedSynch {
     }
 
     #[inline]
+    pub fn repin(&self, epoch: QuiesceEpoch, o: Ordering) {
+        self.inner.current_epoch.repin(epoch, o)
+    }
+
+    #[inline]
     pub fn unpin(&self, o: Ordering) {
         self.inner.current_epoch.unpin(o)
     }

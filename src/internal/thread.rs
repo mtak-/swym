@@ -227,22 +227,12 @@ impl ThreadKeyInner {
         unsafe { &*Thread::ref_count(self.thread_ref.thread).as_ptr() }
     }
 
-    /// Tries to run a read only transaction. Returns Some on success.
+    /// Tries to pin the current thread, returns None if already pinned.
+    ///
+    /// This makes mutable access to `Logs` safe, and is the only way to perform transactions.
     #[inline]
-    pub fn try_read<'tcell, F, O>(&'tcell self, f: F) -> Option<O>
-    where
-        F: FnMut(&ReadTx<'tcell>) -> Result<O, Error>,
-    {
-        self.thread_ref.try_pin().map(move |pin| pin.run_read(f))
-    }
-
-    /// Tries to run a read write transaction. Returns Some on success.
-    #[inline]
-    pub fn try_rw<'tcell, F, O>(&'tcell self, f: F) -> Option<O>
-    where
-        F: FnMut(&mut RWTx<'tcell>) -> Result<O, Error>,
-    {
-        self.thread_ref.try_pin().map(move |pin| pin.run_rw(f))
+    pub fn try_pin<'tcell>(&'tcell self) -> Option<Pin<'tcell>> {
+        Pin::try_new(self.thread_ref)
     }
 }
 
@@ -272,15 +262,10 @@ impl<'a> ThreadRef<'a> {
     fn is_pinned(&self) -> bool {
         self.synch().pin_epoch().is_active()
     }
-
-    #[inline]
-    fn try_pin<'tcell>(&'tcell self) -> Option<Pin<'tcell>> {
-        Pin::try_new(*self)
-    }
 }
 
 #[derive(Debug)]
-struct PinRef<'tx, 'tcell> {
+pub struct PinRef<'tx, 'tcell> {
     thread_ref: ThreadRef<'tcell>,
     phantom:    PhantomData<&'tx mut Pin<'tcell>>,
 }
@@ -335,8 +320,7 @@ impl<'tx, 'tcell> PinRef<'tx, 'tcell> {
     }
 }
 
-#[derive(Debug)]
-struct Pin<'tcell> {
+pub struct Pin<'tcell> {
     pin_ref: PinRef<'tcell, 'tcell>,
 }
 
@@ -372,7 +356,7 @@ impl<'tcell> Pin<'tcell> {
     fn repin(&mut self) {
         let now = EPOCH_CLOCK.now(Acquire);
         if let Some(now) = now {
-            self.pin_ref.synch().pin(now, Release);
+            self.pin_ref.synch().repin(now, Release);
         } else {
             process::abort()
         }
@@ -380,7 +364,7 @@ impl<'tcell> Pin<'tcell> {
 
     /// Runs a read only transaction. Requires the thread to not be in a transaction.
     #[inline]
-    fn run_read<F, O>(mut self, mut f: F) -> O
+    pub fn run_read<F, O>(mut self, mut f: F) -> O
     where
         F: FnMut(&ReadTx<'tcell>) -> Result<O, Error>,
     {
@@ -399,7 +383,7 @@ impl<'tcell> Pin<'tcell> {
 
     /// Runs a read-write transaction. Requires the thread to not be in a transaction.
     #[inline]
-    fn run_rw<F, O>(mut self, mut f: F) -> O
+    pub fn run_rw<F, O>(mut self, mut f: F) -> O
     where
         F: FnMut(&mut RWTx<'tcell>) -> Result<O, Error>,
     {
@@ -408,7 +392,7 @@ impl<'tcell> Pin<'tcell> {
             self.pin_ref.logs_mut().validate_start_state();
             {
                 let mut pin = PinRw::new(&mut self);
-                let r = f(RWTx::new(RWThreadKey::new(&mut pin)));
+                let r = f(RWTx::new(pin.reborrow()));
                 match r {
                     Ok(o) => {
                         if likely!(pin.commit()) {
@@ -571,37 +555,5 @@ impl<'tx, 'tcell> PinRw<'tx, 'tcell> {
         // on fail unlock the write set
         self.logs().write_log.unlock_entries();
         false
-    }
-}
-
-#[derive(Debug)]
-pub struct RWThreadKey<'tx, 'tcell> {
-    pin_ref: PinRef<'tx, 'tcell>,
-}
-
-impl<'tx, 'tcell> RWThreadKey<'tx, 'tcell> {
-    #[inline]
-    fn new(pin: &'tx mut PinRw<'_, 'tcell>) -> Self {
-        RWThreadKey {
-            pin_ref: pin.pin_ref.reborrow(),
-        }
-    }
-
-    /// Returns a reference to the transaction logs (read/write/thread garbage).
-    #[inline]
-    pub fn logs(&self) -> &Logs {
-        self.pin_ref.logs()
-    }
-
-    /// Returns a &mut to the transaction logs (read/write/thread garbage).
-    #[inline]
-    pub fn logs_mut(&mut self) -> &mut Logs {
-        self.pin_ref.logs_mut()
-    }
-
-    /// Gets the currently pinned epoch. Requires the thread pointer to still be valid.
-    #[inline]
-    pub fn pin_epoch(&self) -> QuiesceEpoch {
-        self.pin_ref.pin_epoch()
     }
 }
