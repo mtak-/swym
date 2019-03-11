@@ -20,7 +20,7 @@ impl<'tcell> !Sync for ReadTx<'tcell> {}
 impl<'tcell> ReadTx<'tcell> {
     #[inline]
     pub(crate) fn new<'a>(pin_epoch: QuiesceEpoch) -> &'a Self {
-        debug_assert!(mem::align_of::<Self>() == 1, "unsafe alignment on ReadTx");
+        assert!(mem::align_of::<Self>() == 1, "unsafe alignment on ReadTx");
         // we smuggle the pinned epoch through as a reference
         unsafe { mem::transmute(pin_epoch) }
     }
@@ -52,7 +52,7 @@ unsafe impl<'tcell> Read<'tcell> for ReadTx<'tcell> {
     #[inline]
     unsafe fn _get_unchecked<T>(
         &self,
-        tcell: &TCell<T>,
+        tcell: &'tcell TCell<T>,
         ordering: Ordering,
     ) -> Result<ManuallyDrop<T>, Error> {
         match ordering {

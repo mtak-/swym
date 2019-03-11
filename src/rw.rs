@@ -208,7 +208,7 @@ unsafe impl<'tcell> tx::Read<'tcell> for RWTx<'tcell> {
     #[inline]
     unsafe fn _get_unchecked<T>(
         &self,
-        tcell: &TCell<T>,
+        tcell: &'tcell TCell<T>,
         ordering: Ordering,
     ) -> Result<ManuallyDrop<T>, Error> {
         match ordering {
@@ -221,8 +221,8 @@ unsafe impl<'tcell> tx::Read<'tcell> for RWTx<'tcell> {
 unsafe impl<'tcell> Write<'tcell> for RWTx<'tcell> {
     #[inline]
     unsafe fn _set_unchecked<T: Send + 'static>(
-        &self,
-        tcell: &TCell<T>,
+        &mut self,
+        tcell: &'tcell TCell<T>,
         value: impl _TValue<T>,
     ) -> Result<(), SetError<T>> {
         self.as_impl().set_impl(tcell, value)

@@ -210,7 +210,7 @@ impl AtomicQuiesceEpoch {
     }
 
     #[inline]
-    pub fn activate(&self, epoch: QuiesceEpoch, o: Ordering) {
+    pub fn pin(&self, epoch: QuiesceEpoch, o: Ordering) {
         debug_assert!(
             !self.get(Relaxed).is_active(),
             "already active AtomicQuiesceEpoch"
@@ -227,7 +227,7 @@ impl AtomicQuiesceEpoch {
     }
 
     #[inline]
-    pub fn deactivate(&self, o: Ordering) {
+    pub fn unpin(&self, o: Ordering) {
         debug_assert!(
             self.get(Relaxed).is_active(),
             "attempt to deactive an already inactive AtomicQuiesceEpoch"

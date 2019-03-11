@@ -109,12 +109,12 @@ impl OwnedSynch {
 
     #[inline]
     pub fn pin(&self, epoch: QuiesceEpoch, o: Ordering) {
-        self.inner.current_epoch.activate(epoch, o)
+        self.inner.current_epoch.pin(epoch, o)
     }
 
     #[inline]
     pub fn unpin(&self, o: Ordering) {
-        self.inner.current_epoch.deactivate(o)
+        self.inner.current_epoch.unpin(o)
     }
 }
 
