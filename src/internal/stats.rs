@@ -132,12 +132,17 @@ impl Drop for ThreadStats {
 }
 
 thread_local! {
-    static THREAD_STAT: RefCell<ThreadStats> = RefCell::new(ThreadStats::default());
+    static THREAD_STAT: RefCell<ThreadStats> = {
+        #[cfg(feature = "stats")]
+        drop(&*GLOBAL); // initialize global now, else we may get panics on drop because lazy_static
+                        // uses thread_locals to initialize it.
+        RefCell::default()
+    };
 }
 
 #[cfg(feature = "stats")]
 lazy_static! {
-    static ref GLOBAL: Mutex<Stats> = Mutex::new(Stats::default());
+    static ref GLOBAL: Mutex<Stats> = Mutex::default();
 }
 
 pub fn print_stats() {

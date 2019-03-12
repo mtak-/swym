@@ -7,7 +7,6 @@ use crate::internal::{
     usize_aligned::{ForcedUsizeAligned, UsizeAligned},
 };
 use std::{
-    alloc::AllocErr,
     mem::{self, ManuallyDrop},
     num::NonZeroUsize,
     ptr::{self, NonNull},
@@ -157,11 +156,11 @@ pub struct WriteLog {
 
 impl WriteLog {
     #[inline]
-    pub fn new() -> Result<Self, AllocErr> {
-        Ok(WriteLog {
+    pub fn new() -> Self {
+        WriteLog {
             filter: 0,
-            data:   DynVec::new()?,
-        })
+            data:   DynVec::new(),
+        }
     }
 
     #[inline]
@@ -225,8 +224,8 @@ impl WriteLog {
     // biased against finding the tcell
     #[inline]
     pub fn find(&self, dest_tcell: &TCellErased) -> Option<&dyn WriteEntry> {
-        let hash = dumb_reference_hash(dest_tcell);
-        debug_assert!(hash.get() != 0, "bug in dumb_reference_hash algorithm");
+        let hash = bloom_hash(dest_tcell);
+        debug_assert!(hash.get() != 0, "bug in bloom_hash algorithm");
         if likely!(self.contained(hash) == Contained::No) {
             None
         } else {
@@ -257,7 +256,7 @@ impl WriteLog {
     // biased against finding the tcell
     #[inline]
     pub fn entry<'a>(&'a mut self, dest_tcell: &TCellErased) -> Entry<'a> {
-        let hash = dumb_reference_hash(dest_tcell);
+        let hash = bloom_hash(dest_tcell);
         debug_assert!(hash.get() != 0, "bug in dumb_reference_hash algorithm");
         if likely!(self.contained(hash) == Contained::No) {
             Entry::new_hash(self, hash)
@@ -268,7 +267,7 @@ impl WriteLog {
 
     #[inline]
     pub fn next_push_allocates<T>(&self) -> bool {
-        unsafe { self.data.next_push_allocates::<WriteEntryImpl<T>>() }
+        self.data.next_push_allocates::<WriteEntryImpl<T>>()
     }
 
     #[inline]
@@ -393,7 +392,7 @@ const fn calc_shift() -> usize {
 }
 
 #[inline]
-pub fn dumb_reference_hash(value: &TCellErased) -> NonZeroUsize {
+pub fn bloom_hash(value: &TCellErased) -> NonZeroUsize {
     const SHIFT: usize = calc_shift();
     let raw_hash: usize = value as *const TCellErased as usize >> SHIFT;
     let result = 1 << (raw_hash & (mem::size_of::<NonZeroUsize>() * 8 - 1));

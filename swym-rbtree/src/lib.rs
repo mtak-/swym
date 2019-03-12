@@ -8,7 +8,7 @@ use swym::{
     tcell::{Ref, TCell, View},
     thread_key,
     tx::{Borrow, Error, Ordering, Read, SetError},
-    RWTx,
+    RwTx,
 };
 
 pub struct RBTreeMapRaw<K, V> {
@@ -48,7 +48,7 @@ impl<K: Send + Sync + Ord + 'static, V: Send + Sync + 'static> RBTreeMapRaw<K, V
 
     pub fn entry<'tx, 'tcell>(
         &'tcell self,
-        tx: &'tx mut RWTx<'tcell>,
+        tx: &'tx mut RwTx<'tcell>,
         key: K,
     ) -> Result<Entry<'tx, 'tcell, K, V>, Error> {
         Ok(match self.root.location(tx, &key, Ordering::default())? {
@@ -88,9 +88,9 @@ impl<K: Send + Sync + Ord + 'static, V: Borrow + Send + Sync + 'static> RBTreeMa
 
     pub fn get_mut<'tx, 'tcell, Q>(
         &'tcell self,
-        tx: &'tx mut RWTx<'tcell>,
+        tx: &'tx mut RwTx<'tcell>,
         key: &Q,
-    ) -> Result<Option<View<'tcell, V, &'tx mut RWTx<'tcell>>>, Error>
+    ) -> Result<Option<View<'tcell, V, &'tx mut RwTx<'tcell>>>, Error>
     where
         K: std::borrow::Borrow<Q>,
         Q: Ord + ?Sized,
@@ -107,7 +107,7 @@ impl<K: Send + Sync + Ord + 'static, V: Borrow + Send + Sync + 'static> RBTreeMa
 impl<K: Send + Sync + Ord + 'static, V: Borrow + Clone + Send + Sync + 'static> RBTreeMapRaw<K, V> {
     pub fn insert<'tcell>(
         &'tcell self,
-        tx: &mut RWTx<'tcell>,
+        tx: &mut RwTx<'tcell>,
         key: K,
         value: V,
     ) -> Result<Option<V>, Error> {
@@ -126,7 +126,7 @@ impl<K: Send + Sync + Ord + 'static, V: Borrow + Clone + Send + Sync + 'static> 
 impl<K: Send + Sync + Ord + 'static, V: Borrow + Send + Sync + 'static> RBTreeMapRaw<K, V> {
     pub fn remove<'tcell, Q>(
         &'tcell self,
-        tx: &mut RWTx<'tcell>,
+        tx: &mut RwTx<'tcell>,
         key: &Q,
     ) -> Result<Option<Ref<'tcell, V>>, Error>
     where
@@ -161,7 +161,7 @@ impl<K, V> RBTreeMap<K, V> {
 impl<K: Send + Sync + Ord + 'static, V: Borrow + Send + Sync + 'static> RBTreeMap<K, V> {
     pub fn with<'tx, 'tcell>(
         &'tcell self,
-        tx: &'tx mut RWTx<'tcell>,
+        tx: &'tx mut RwTx<'tcell>,
     ) -> RBTreeWith<'tx, 'tcell, K, V> {
         RBTreeWith {
             tree: &self.raw,
@@ -220,7 +220,7 @@ impl<K: Send + Sync + Ord + 'static, V: Borrow + Send + Sync + 'static> RBTreeMa
 
 pub struct RBTreeWith<'tx, 'tcell, K, V> {
     pub tree: &'tcell RBTreeMapRaw<K, V>,
-    pub tx:   &'tx mut RWTx<'tcell>,
+    pub tx:   &'tx mut RwTx<'tcell>,
 }
 
 impl<'tx, 'tcell, K, V> RBTreeWith<'tx, 'tcell, K, V>
@@ -267,7 +267,7 @@ where
 pub struct VacantEntry<'tx, 'tcell, K, V> {
     location: VacantLocation<'tcell, K, TCell<V>>,
     tree:     &'tcell RBTreeMapRaw<K, V>,
-    tx:       &'tx mut RWTx<'tcell>,
+    tx:       &'tx mut RwTx<'tcell>,
     key:      K,
 }
 
@@ -296,7 +296,7 @@ where
 pub struct OccupiedEntry<'tx, 'tcell, K, V> {
     node: &'tcell RBNode<K, TCell<V>>,
     tree: &'tcell RBTreeMapRaw<K, V>,
-    tx:   &'tx mut RWTx<'tcell>,
+    tx:   &'tx mut RwTx<'tcell>,
     key:  K,
 }
 
@@ -309,11 +309,11 @@ where
         &self.key
     }
 
-    pub fn view<'a>(&'a mut self) -> View<'tcell, V, &'a mut RWTx<'tcell>> {
+    pub fn view<'a>(&'a mut self) -> View<'tcell, V, &'a mut RwTx<'tcell>> {
         self.node.value.view(self.tx)
     }
 
-    pub fn into_view(self) -> View<'tcell, V, &'tx mut RWTx<'tcell>> {
+    pub fn into_view(self) -> View<'tcell, V, &'tx mut RwTx<'tcell>> {
         self.node.value.view(self.tx)
     }
 
@@ -375,7 +375,7 @@ where
     #[inline]
     pub fn and_modify<F>(self, f: F) -> Self
     where
-        F: FnOnce(View<'tcell, V, &mut RWTx<'tcell>>),
+        F: FnOnce(View<'tcell, V, &mut RwTx<'tcell>>),
     {
         match self {
             Entry::Occupied(OccupiedEntry {
@@ -399,7 +399,7 @@ where
 
 pub enum Value<'tx, 'tcell, V> {
     Owned(&'tx mut V),
-    Shared(View<'tcell, V, &'tx mut RWTx<'tcell>>),
+    Shared(View<'tcell, V, &'tx mut RwTx<'tcell>>),
 }
 
 impl<'tx, 'tcell, V: Send + 'static> Value<'tx, 'tcell, V> {

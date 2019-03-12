@@ -32,6 +32,8 @@
 //!     b.set(tx, temp)?;
 //!     Ok(())
 //! });
+//! assert_eq!(b.into_inner(), 0);
+//! assert_eq!(thread_key.read(|tx| A.get(tx, Default::default())), 42);
 //! ```
 //!
 //! # Features
@@ -105,7 +107,7 @@ pub mod tx;
 
 pub use internal::stats::print_stats;
 pub use read::ReadTx;
-pub use rw::RWTx;
+pub use rw::RwTx;
 
 #[cfg(test)]
 mod memory {

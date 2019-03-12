@@ -13,10 +13,7 @@ fn insert(b: &mut Bencher) {
         let mut num = 0 as u64;
         for _ in 0..1_000 {
             num = num.wrapping_mul(17).wrapping_add(255);
-            map.atomic(|mut map| {
-                map.insert(num, !num)?;
-                Ok(())
-            });
+            map.insert(num, !num);
         }
     });
 }
@@ -31,19 +28,13 @@ fn insert_remove(b: &mut Bencher) {
                 let mut num = 0 as u64;
                 for _ in 0..1_000 {
                     num = num.wrapping_mul(17).wrapping_add(255);
-                    map.atomic(|mut map| {
-                        map.insert(num, !num)?;
-                        Ok(())
-                    })
+                    map.insert(num, !num);
                 }
 
                 let mut num = 0 as u64;
                 for _ in 0..1_000 {
                     num = num.wrapping_mul(17).wrapping_add(255);
-                    map.atomic(|mut map| {
-                        map.remove(&num)?;
-                        Ok(())
-                    });
+                    assert!(map.remove(&num).is_some());
                 }
             });
         });

@@ -30,15 +30,4 @@ mod read {
             }
         })
     }
-
-    #[bench]
-    fn unchecked_key(b: &mut Bencher) {
-        const ITER_COUNT: usize = 1_000_000;
-        let thread_key = thread_key::get();
-        b.iter(|| unsafe {
-            for _ in 0..ITER_COUNT {
-                thread_key.read_unchecked(|_| Ok(()))
-            }
-        })
-    }
 }

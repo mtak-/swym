@@ -178,11 +178,11 @@ impl Default for Ordering {
 /// # Notes
 ///
 /// Don't implement this trait.
-pub unsafe trait Read<'a> {
+pub unsafe trait Read<'tcell> {
     #[doc(hidden)]
     unsafe fn _get_unchecked<T>(
         &self,
-        tcell: &TCell<T>,
+        tcell: &'tcell TCell<T>,
         ordering: Ordering,
     ) -> Result<ManuallyDrop<T>, Error>;
 }
@@ -192,11 +192,11 @@ pub unsafe trait Read<'a> {
 /// # Notes
 ///
 /// Don't implement this trait.
-pub unsafe trait Write<'a> {
+pub unsafe trait Write<'tcell> {
     #[doc(hidden)]
     unsafe fn _set_unchecked<T: Send + 'static>(
-        &self,
-        tcell: &TCell<T>,
+        &mut self,
+        tcell: &'tcell TCell<T>,
         src: impl _TValue<T>,
     ) -> Result<(), SetError<T>>;
 
@@ -205,8 +205,8 @@ pub unsafe trait Write<'a> {
 }
 
 /// Trait for types that represent transactions with the ability to read and write.
-pub trait RW<'tcell>: Read<'tcell> + Write<'tcell> {}
-impl<'tcell, T: Read<'tcell> + Write<'tcell>> RW<'tcell> for T {}
+pub trait Rw<'tcell>: Read<'tcell> + Write<'tcell> {}
+impl<'tcell, T: Read<'tcell> + Write<'tcell>> Rw<'tcell> for T {}
 
 #[doc(hidden)]
 pub unsafe trait _TValue<T: 'static>: 'static {

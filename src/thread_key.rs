@@ -1,21 +1,10 @@
 //! Thread local state, [`thread_key::ThreadKey`], used to run transactions.
 //!
 //! A handle to the thread local state can be acquired by calling [`thread_key::get`].
-use crate::{
-    internal::{
-        epoch::QuiesceEpoch,
-        gc::GlobalThreadList,
-        thread::{Thread, ThreadKeyRaw},
-    },
-    read::ReadTx,
-    rw::RWTx,
-    tx::Error,
-};
+
+use crate::{internal::thread::ThreadKeyInner, read::ReadTx, rw::RwTx, tx::Error};
 use std::{
-    alloc::AllocErr,
     fmt::{self, Debug, Formatter},
-    ptr::NonNull,
-    sync::atomic::Ordering::Release,
     thread::AccessError,
 };
 
@@ -25,53 +14,25 @@ use std::{
 ///
 /// `ThreadKey`'s encapsulate the state required to perform transactions, and provides the necessary
 /// methods for running transactions.
+#[derive(Clone, Debug)]
 pub struct ThreadKey {
-    thread: ThreadKeyRaw,
+    thread: ThreadKeyInner,
 }
 
 impl ThreadKey {
     #[inline(never)]
     #[cold]
-    fn new() -> Result<Self, AllocErr> {
-        let thread = Box::new(Thread::new()?);
-        GlobalThreadList::instance()
-            .write()
-            .register((&thread.synch).into());
-        let thread = unsafe { ThreadKeyRaw::new(NonNull::new_unchecked(Box::into_raw(thread))) };
-        Ok(ThreadKey { thread })
-    }
-
-    #[inline(never)]
-    #[cold]
-    unsafe fn unregister(&self) {
-        let synch = self.thread.synch();
-        synch
-            .as_ref()
-            .current_epoch
-            .set(QuiesceEpoch::end_of_time(), Release);
-        self.thread
-            .tx_state()
-            .as_mut()
-            .garbage
-            .synch_and_collect_all(self.thread.synch().as_ref());
-        synch
-            .as_ref()
-            .current_epoch
-            .set(QuiesceEpoch::inactive(), Release);
-
-        tls::clear_tls();
-        GlobalThreadList::instance_unchecked()
-            .write()
-            .unregister(synch);
-        drop(Box::from_raw(self.thread.thread().as_ptr()))
-    }
-
-    #[inline]
-    pub(crate) fn as_raw(&self) -> ThreadKeyRaw {
-        ThreadKeyRaw::new(self.thread.thread())
+    fn new() -> Self {
+        ThreadKey {
+            thread: ThreadKeyInner::new(),
+        }
     }
 
     /// Performs a transaction capabable of only reading.
+    ///
+    /// # Panics
+    ///
+    /// Panics if there is already a running transaction on the current thread.
     ///
     /// # Examples
     ///
@@ -98,7 +59,7 @@ impl ThreadKey {
     ///
     /// # Panics
     ///
-    /// Panics if there is already a running transaction.
+    /// Panics if there is already a running transaction on the current thread.
     ///
     /// # Examples
     ///
@@ -119,7 +80,7 @@ impl ThreadKey {
     #[inline]
     pub fn rw<'tcell, F, O>(&'tcell self, f: F) -> O
     where
-        F: FnMut(&mut RWTx<'tcell>) -> Result<O, Error>,
+        F: FnMut(&mut RwTx<'tcell>) -> Result<O, Error>,
     {
         self.try_rw(f)
             .expect("nested transactions are not yet supported")
@@ -150,21 +111,18 @@ impl ThreadKey {
     where
         F: FnMut(&ReadTx<'tcell>) -> Result<O, Error>,
     {
-        let raw = self.as_raw();
-        unsafe {
-            if likely!(!raw.synch().as_mut().current_epoch.is_active_unsync()) {
-                Ok(raw.read_slow(f))
-            } else {
-                Err(TryReadErr::new())
-            }
-        }
+        Ok(self
+            .thread
+            .try_pin()
+            .ok_or_else(|| TryReadErr::new())?
+            .run_read(f))
     }
 
     /// Performs a transaction capabable of reading and writing.
     ///
     /// # Errors
     ///
-    /// Returns a [`TryRWErr`] if a transaction is already running on the current thread.
+    /// Returns a [`TryRwErr`] if a transaction is already running on the current thread.
     ///
     /// # Examples
     ///
@@ -185,129 +143,22 @@ impl ThreadKey {
     /// assert_eq!(prev_x, "gonna be overwritten");
     /// ```
     #[inline]
-    pub fn try_rw<'tcell, F, O>(&'tcell self, f: F) -> Result<O, TryRWErr>
+    pub fn try_rw<'tcell, F, O>(&'tcell self, f: F) -> Result<O, TryRwErr>
     where
-        F: FnMut(&mut RWTx<'tcell>) -> Result<O, Error>,
+        F: FnMut(&mut RwTx<'tcell>) -> Result<O, Error>,
     {
-        let raw = self.as_raw();
-        unsafe {
-            if likely!(!raw.synch().as_mut().current_epoch.is_active_unsync()) {
-                Ok(raw.rw_slow(f))
-            } else {
-                Err(TryRWErr::new())
-            }
-        }
-    }
-
-    /// Performs a transaction capabable of only reading.
-    ///
-    /// # Safety
-    ///
-    /// If the thread is currently in a transaction, this results in undefined behavior.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use swym::{tcell::TCell, thread_key};
-    ///
-    /// let x = TCell::new(String::from("not gonna be overwritten"));
-    ///
-    /// let thread_key = thread_key::get();
-    ///
-    /// unsafe {
-    ///     let x_clone =
-    ///         thread_key.read_unchecked(|tx| Ok(x.borrow(tx, Default::default())?.to_owned()));
-    ///     assert_eq!(x_clone, "not gonna be overwritten");
-    /// }
-    /// ```
-    #[inline]
-    pub unsafe fn read_unchecked<'tcell, F, O>(&'tcell self, f: F) -> O
-    where
-        F: FnMut(&ReadTx<'tcell>) -> Result<O, Error>,
-    {
-        let raw = self.as_raw();
-        debug_assert!(
-            !raw.synch().as_mut().current_epoch.is_active_unsync(),
-            "`rw_unchecked` called during a transaction",
-        );
-        raw.read_slow(f)
-    }
-
-    /// Performs a transaction capabable of reading and writing.
-    ///
-    /// # Safety
-    ///
-    /// If the thread is currently in a transaction, this results in undefined behavior.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use swym::{tcell::TCell, thread_key};
-    ///
-    /// let x = TCell::new(String::from("gonna be overwritten"));
-    ///
-    /// let thread_key = thread_key::get();
-    ///
-    /// unsafe {
-    ///     let prev_x = thread_key.rw_unchecked(|tx| {
-    ///         let prev_x = x.borrow(tx, Default::default())?.to_owned();
-    ///         x.set(tx, "overwritten".to_owned())?;
-    ///         Ok(prev_x)
-    ///     });
-    ///     assert_eq!(prev_x, "gonna be overwritten");
-    /// }
-    /// ```
-    #[inline]
-    pub unsafe fn rw_unchecked<'tcell, F, O>(&'tcell self, f: F) -> O
-    where
-        F: FnMut(&mut RWTx<'tcell>) -> Result<O, Error>,
-    {
-        let raw = self.as_raw();
-        debug_assert!(
-            !raw.synch().as_mut().current_epoch.is_active_unsync(),
-            "`rw_unchecked` called during a transaction",
-        );
-        raw.rw_slow(f)
-    }
-}
-
-impl Clone for ThreadKey {
-    #[inline]
-    fn clone(&self) -> Self {
-        unsafe {
-            let ref_count = self.thread.ref_count();
-            let ref_count = ref_count.as_ref();
-            let count = ref_count.get();
-            debug_assert!(count > 0, "attempt to clone a deallocated `ThreadKey`");
-            ref_count.set(count + 1);
-            ThreadKey {
-                thread: self.as_raw(),
-            }
-        }
-    }
-}
-
-impl Drop for ThreadKey {
-    #[inline]
-    fn drop(&mut self) {
-        unsafe {
-            let ref_count = self.thread.ref_count();
-            let ref_count = ref_count.as_ref();
-            let count = ref_count.get();
-            debug_assert!(count > 0, "double free on ThreadKey attempted");
-            if count == 1 {
-                self.unregister()
-            } else {
-                ref_count.set(count - 1);
-            }
-        }
+        Ok(self
+            .thread
+            .try_pin()
+            .ok_or_else(|| TryRwErr::new())?
+            .run_rw(f))
     }
 }
 
 #[inline(never)]
 #[cold]
 fn new_thread_key() -> ThreadKey {
-    ThreadKey::new().expect("Failed to allocate `Thread`")
+    ThreadKey::new()
 }
 
 #[inline(never)]
@@ -321,7 +172,7 @@ thread_local! {
 }
 
 #[cfg(not(target_thread_local))]
-mod tls {
+pub(crate) mod tls {
     use super::*;
 
     #[inline(never)]
@@ -336,27 +187,26 @@ mod tls {
 }
 
 #[cfg(target_thread_local)]
-mod tls {
-    use super::{err_into_thread_key, NonNull, ThreadKey, ThreadKeyRaw, THREAD_KEY};
-    use crate::internal::thread::Thread;
-    use std::{mem, ptr};
+pub(crate) mod tls {
+    use super::{err_into_thread_key, ThreadKey, THREAD_KEY};
+    use std::{cell::Cell, mem, ptr::NonNull};
 
     #[thread_local]
-    static mut TLS: *mut Thread = ptr::null_mut();
+    static TLS: Cell<Option<NonNull<usize>>> = Cell::new(None);
 
     #[inline]
     pub fn clear_tls() {
-        unsafe {
-            TLS = ptr::null_mut();
-        }
+        TLS.set(None)
     }
 
     #[inline(never)]
     #[cold]
     fn thread_key_impl() -> ThreadKey {
         THREAD_KEY
-            .try_with(|thread_key| unsafe {
-                TLS = thread_key.as_raw().thread().as_ptr();
+            .try_with(|thread_key| {
+                TLS.set(Some(unsafe {
+                    mem::transmute_copy::<ThreadKey, _>(thread_key)
+                }));
                 thread_key.clone()
             })
             .unwrap_or_else(err_into_thread_key)
@@ -364,17 +214,13 @@ mod tls {
 
     #[inline]
     pub fn thread_key() -> ThreadKey {
-        unsafe {
-            let tls = TLS;
-            if likely!(!tls.is_null()) {
-                let thread_key = ThreadKey {
-                    thread: ThreadKeyRaw::new(NonNull::new_unchecked(tls)),
-                };
+        match TLS.get() {
+            Some(thread) => {
+                let thread_key: ThreadKey = unsafe { mem::transmute(thread) };
                 mem::forget(thread_key.clone()); // bump ref_count since we created ThreadKey through other means
                 thread_key
-            } else {
-                thread_key_impl()
             }
+            None => thread_key_impl(),
         }
     }
 }
@@ -419,26 +265,26 @@ impl Debug for TryReadErr {
 
 impl TryReadErr {
     #[inline]
-    pub(crate) fn new() -> Self {
+    fn new() -> Self {
         TryReadErr { _private: () }
     }
 }
 
 /// Error type indicating that the read-write transaction failed to even start due to nesting.
-pub struct TryRWErr {
+pub struct TryRwErr {
     _private: (),
 }
 
-impl Debug for TryRWErr {
+impl Debug for TryRwErr {
     #[cold]
     fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
-        formatter.pad("TryRWErr { .. }")
+        formatter.pad("TryRwErr { .. }")
     }
 }
 
-impl TryRWErr {
+impl TryRwErr {
     #[inline]
-    pub(crate) fn new() -> Self {
-        TryRWErr { _private: () }
+    fn new() -> Self {
+        TryRwErr { _private: () }
     }
 }

@@ -3,7 +3,7 @@ use crate::internal::{
     epoch::QuiesceEpoch,
     gc::{
         queued::{FnOnceish, Queued},
-        quiesce::Synch,
+        quiesce::OwnedSynch,
     },
 };
 use std::{
@@ -12,7 +12,7 @@ use std::{
 };
 
 // TODO: measure to see what works best in practice.
-const UNUSED_BAG_COUNT: NonZeroUsize = unsafe { NonZeroUsize::new_unchecked(64) };
+const UNUSED_BAG_COUNT: usize = 64;
 
 /// A contiguous container of trash.
 struct Bag {
@@ -23,7 +23,7 @@ impl Bag {
     #[inline]
     fn new() -> Self {
         Bag {
-            queued: DynVec::new().unwrap(),
+            queued: DynVec::new(),
         }
     }
 
@@ -37,13 +37,12 @@ impl Bag {
     }
 
     #[inline]
-    unsafe fn collect(&mut self) {
-        assume!(
-            !self.queued.is_empty(),
-            "unexpectedly collecting an empty bag"
-        );
-        for mut closure in self.queued.drain() {
-            closure.call()
+    fn collect(&mut self) {
+        // the closures are only safe to call once, drain ensures, that is the case
+        unsafe {
+            for mut closure in self.queued.drain() {
+                closure.call()
+            }
         }
     }
 }
@@ -62,15 +61,15 @@ struct UnusedBags {
 impl UnusedBags {
     #[inline]
     fn new() -> Self {
+        // We add 1 here because FVec allocates on the push when it becomes full, instead of the
+        // push after
+        let capacity = NonZeroUsize::new(UNUSED_BAG_COUNT + 1).unwrap();
         let mut result = UnusedBags {
-            bags: unsafe {
-                FVec::with_capacity(NonZeroUsize::new_unchecked(UNUSED_BAG_COUNT.get() + 1))
-                    .unwrap()
-            },
+            bags: FVec::with_capacity(capacity),
         };
 
         unsafe {
-            for _ in 0..UNUSED_BAG_COUNT.get() {
+            for _ in 0..UNUSED_BAG_COUNT {
                 result.bags.push_unchecked(Bag::new());
             }
         }
@@ -86,12 +85,19 @@ impl UnusedBags {
     }
 
     /// Runs collect on a bag, and puts it back into the collection.
+    ///
+    /// Bag must have been acquired using `self.open_bag_unchecked()`
     #[inline]
     unsafe fn recycle_bag_unchecked(&mut self, bag: Bag) {
+        // to ensure that a bag is never "lost", the `collect()`, which runs arbitrary user code,
+        // must be called after the bag has been pushed
         self.bags.push_unchecked(bag);
         let bag = self.bags.back_unchecked();
-
-        // collect after pushing, so that we don't lose a bag on panic
+        debug_assert!(
+            !bag.queued.is_empty(),
+            "unexpectedly collecting an empty bag"
+        );
+        // the Drain iter, leaves the bag empty, even if there is a panic
         bag.collect();
         debug_assert!(bag.queued.is_empty(), "bag not empty after collection");
     }
@@ -101,7 +107,7 @@ impl UnusedBags {
 #[repr(C)]
 pub struct ThreadGarbage {
     /// The bag that new trash will be pushed to.
-    current_bag: Bag,
+    speculative_bag: Bag,
 
     /// Bags that have been queued up for collection.
     sealed_bags: FVec<SealedBag>,
@@ -114,40 +120,43 @@ impl ThreadGarbage {
     #[inline]
     pub fn new() -> Self {
         let mut unused_bags = UnusedBags::new();
-        let current_bag = unsafe { unused_bags.open_bag_unchecked() };
-
+        debug_assert!(!unused_bags.bags.is_empty());
+        let speculative_bag = unsafe { unused_bags.open_bag_unchecked() };
+        let sealed_capacity = NonZeroUsize::new(UNUSED_BAG_COUNT).unwrap();
         ThreadGarbage {
-            current_bag,
-            sealed_bags: FVec::with_capacity(UNUSED_BAG_COUNT).unwrap(),
+            speculative_bag,
+            sealed_bags: FVec::with_capacity(sealed_capacity),
             unused_bags,
         }
     }
 
-    /// Checks if there is any trash in the currently active bag.
+    /// Checks if there is any speculative trash.
     #[inline]
-    pub fn is_current_epoch_empty(&self) -> bool {
-        self.current_bag.queued.is_empty()
+    pub fn is_speculative_bag_empty(&self) -> bool {
+        self.speculative_bag.queued.is_empty()
     }
 
-    /// Leaks all the trash in the current bag.
+    /// Leaks all the trash in the speculative bag.
     ///
     /// When running a transaction, trash is queued up speculatively. If the transaction fails, none
     /// of the garbage that was queued up should be collected.
     #[inline]
-    pub fn leak_current_epoch(&mut self) {
-        self.current_bag.queued.clear_no_drop()
+    pub fn abort_speculative_garbage(&mut self) {
+        self.speculative_bag.queued.clear_no_drop()
     }
 
     /// Used to help move allocations out of the fast path.
     #[inline]
     pub fn next_trash_allocates<T: 'static + Send>(&self) -> bool {
-        unsafe { self.current_bag.queued.next_push_allocates::<Queued<T>>() }
+        self.speculative_bag
+            .queued
+            .next_push_allocates::<Queued<T>>()
     }
 
     /// Queues value up to be dropped should the current transaction succeed.
     #[inline]
     pub fn trash<T: 'static + Send>(&mut self, value: ManuallyDrop<T>) {
-        unsafe { self.current_bag.queued.push(Queued::new(value)) }
+        self.speculative_bag.queued.push(Queued::new(value))
     }
 
     /// Queues value up to be dropped should the current transaction succeed.
@@ -155,31 +164,31 @@ impl ThreadGarbage {
     /// Assumes that the current bag has a large enough capacity to store the new garbage.
     #[inline]
     pub unsafe fn trash_unchecked<T: 'static + Send>(&mut self, value: ManuallyDrop<T>) {
-        self.current_bag.queued.push_unchecked(Queued::new(value))
+        self.speculative_bag
+            .queued
+            .push_unchecked(Queued::new(value))
     }
 
     /// Ends the speculative garbage queuing, and commits the current_bag's garbage to be collected
-    /// at some point.
+    /// at some point. May modify synch's current_epoch.
     ///
     /// This potentially will cause garbage collection to happen.
-    ///
-    /// Synch should be owned by the current thread.
     #[inline]
-    pub unsafe fn seal_with_epoch(&mut self, synch: &Synch, quiesce_epoch: QuiesceEpoch) {
+    pub unsafe fn seal_with_epoch(&mut self, synch: &OwnedSynch, quiesce_epoch: QuiesceEpoch) {
         debug_assert!(
             quiesce_epoch.is_active(),
             "attempt to seal with an \"inactive\" epoch"
         );
-        if unlikely!(!self.is_current_epoch_empty()) {
+        if unlikely!(!self.is_speculative_bag_empty()) {
             self.seal_with_epoch_slow(synch, quiesce_epoch)
         }
     }
 
     /// If the current bag was not empty, we have real work to do.
     #[inline(never)]
-    unsafe fn seal_with_epoch_slow(&mut self, synch: &Synch, quiesce_epoch: QuiesceEpoch) {
+    unsafe fn seal_with_epoch_slow(&mut self, synch: &OwnedSynch, quiesce_epoch: QuiesceEpoch) {
         let new_bag = self.unused_bags.open_bag_unchecked();
-        let prev_bag = mem::replace(&mut self.current_bag, new_bag);
+        let prev_bag = mem::replace(&mut self.speculative_bag, new_bag);
         let sealed_bag = prev_bag.seal(quiesce_epoch);
         self.sealed_bags.push_unchecked(sealed_bag);
 
@@ -194,28 +203,26 @@ impl ThreadGarbage {
     /// collecting more.
     #[inline(never)]
     #[cold]
-    unsafe fn synch_and_collect(&mut self, synch: &Synch) {
+    unsafe fn synch_and_collect(&mut self, synch: &OwnedSynch) {
         self.synch_and_collect_impl(synch, self.earliest_epoch_unchecked())
     }
 
-    /// This is guaranteed to collect all of the garbage that has been queued.
+    /// This is guaranteed to collect all of the garbage that has been queued. May modify synch's
+    /// current_epoch.
     ///
     /// It is used in the destructor for ThreadKey.
     #[inline(never)]
     #[cold]
-    pub unsafe fn synch_and_collect_all(&mut self, synch: &Synch) {
+    pub unsafe fn synch_and_collect_all(&mut self, synch: &OwnedSynch) {
         if !self.sealed_bags.is_empty() {
             self.synch_and_collect_impl(synch, self.latest_epoch_unchecked())
         }
     }
 
     /// Synchronizes with all the other threads participating in the STM, then collects the garbage.
+    /// Modifies synch's current_epoch.
     #[inline]
-    unsafe fn synch_and_collect_impl(&mut self, synch: &Synch, quiesce_epoch: QuiesceEpoch) {
-        debug_assert!(
-            synch.is_quiesced(quiesce_epoch),
-            "attempt to collect garbage while active"
-        );
+    unsafe fn synch_and_collect_impl(&mut self, synch: &OwnedSynch, quiesce_epoch: QuiesceEpoch) {
         // we want to collect atleast through quiesce_epoch, but it's possible that `quiesce` can
         // detect that even more garbage is able to be collected.
         let collect_epoch = synch.freeze_list().quiesce(quiesce_epoch);
@@ -227,10 +234,10 @@ impl ThreadGarbage {
     #[cold]
     pub unsafe fn collect(&mut self, max_epoch: QuiesceEpoch) {
         debug_assert!(
-            self.is_current_epoch_empty(),
+            self.is_speculative_bag_empty(),
             "`collect` called while current bag is not empty"
         );
-        assume!(
+        debug_assert!(
             !self.sealed_bags.is_empty(),
             "`collect` called with no sealed bags"
         );
@@ -269,7 +276,7 @@ impl ThreadGarbage {
 impl Drop for ThreadGarbage {
     fn drop(&mut self) {
         debug_assert!(
-            self.current_bag.queued.is_empty(),
+            self.speculative_bag.queued.is_empty(),
             "dropping the thread garbage while the current bag is not empty"
         );
         debug_assert!(
