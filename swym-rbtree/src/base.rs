@@ -5,7 +5,7 @@ use std::ptr;
 use swym::{
     tcell::TCell,
     tptr::TPtr,
-    tx::{Error, Ordering, Read, Write, RW},
+    tx::{Error, Ordering, Read, Write, Rw},
 };
 use RBRef::{Null, Valid};
 
@@ -363,7 +363,7 @@ impl<K: Ord + Send + Sync + 'static, V: Send + Sync + 'static> RBNode<K, V> {
 
     pub fn insert_fixup<'tcell>(
         mut self: Box<Self>,
-        tx: &mut impl RW<'tcell>,
+        tx: &mut impl Rw<'tcell>,
         parent: &'tcell Self,
         insert_on_left: bool,
     ) -> Result<RepairResult<'tcell, Self>, Error> {
@@ -485,7 +485,7 @@ impl<K: Ord + Send + Sync + 'static, V: Send + Sync + 'static> RBNode<K, V> {
 
     fn partial_rotate_right_red_helper<'tcell>(
         &'tcell self,
-        tx: &mut impl RW<'tcell>,
+        tx: &mut impl Rw<'tcell>,
         left: &'tcell Self,
         left_right: &'tcell Self,
     ) -> Result<(), Error> {
@@ -498,7 +498,7 @@ impl<K: Ord + Send + Sync + 'static, V: Send + Sync + 'static> RBNode<K, V> {
 
     fn partial_rotate_left_red_helper<'tcell>(
         &'tcell self,
-        tx: &mut impl RW<'tcell>,
+        tx: &mut impl Rw<'tcell>,
         right: &'tcell Self,
         right_left: &'tcell Self,
     ) -> Result<(), Error> {
@@ -511,7 +511,7 @@ impl<K: Ord + Send + Sync + 'static, V: Send + Sync + 'static> RBNode<K, V> {
 
     fn rotate_left_red_helper<'tcell>(
         &'tcell self,
-        tx: &mut impl RW<'tcell>,
+        tx: &mut impl Rw<'tcell>,
         right: &'tcell Self,
         right_left: RBRef<'tcell, K, V>,
     ) -> Result<Option<&'tcell Self>, Error> {
@@ -539,7 +539,7 @@ impl<K: Ord + Send + Sync + 'static, V: Send + Sync + 'static> RBNode<K, V> {
 
     fn rotate_right_red_helper<'tcell>(
         &'tcell self,
-        tx: &mut impl RW<'tcell>,
+        tx: &mut impl Rw<'tcell>,
         left: &'tcell Self,
         left_right: RBRef<'tcell, K, V>,
     ) -> Result<Option<&'tcell Self>, Error> {
@@ -567,7 +567,7 @@ impl<K: Ord + Send + Sync + 'static, V: Send + Sync + 'static> RBNode<K, V> {
 
     fn insert_case4<'tcell>(
         &'tcell self,
-        tx: &mut impl RW<'tcell>,
+        tx: &mut impl Rw<'tcell>,
         parent: &'tcell Self,
         gp: &'tcell Self,
         uncle_on_left: bool,
@@ -605,7 +605,7 @@ impl<K: Ord + Send + Sync + 'static, V: Send + Sync + 'static> RBNode<K, V> {
 
     fn insert_case4_mut<'tcell>(
         mut self: Box<Self>,
-        tx: &mut impl RW<'tcell>,
+        tx: &mut impl Rw<'tcell>,
         parent: &'tcell Self,
         gp: &'tcell Self,
         uncle_on_left: bool,
@@ -688,7 +688,7 @@ impl<K: Ord + Send + Sync + 'static, V: Send + Sync + 'static> RBNode<K, V> {
 
     pub fn remove_nofix<'tcell>(
         &'tcell self,
-        tx: &mut impl RW<'tcell>,
+        tx: &mut impl Rw<'tcell>,
     ) -> Result<(Option<RBRef<'tcell, K, V>>, RBRef<'tcell, K, V>), Error> {
         let mut new_root = None;
         let mut rebalance = Null;
@@ -786,7 +786,7 @@ impl<K: Ord + Send + Sync + 'static, V: Send + Sync + 'static> RBNode<K, V> {
     pub fn remove_fixup<'tcell>(
         &'tcell self,
         // parent
-        tx: &mut impl RW<'tcell>,
+        tx: &mut impl Rw<'tcell>,
     ) -> Result<Option<&'tcell Self>, Error> {
         let mut result = None;
         let mut node: RBRef<'_, K, V> = Null;
@@ -1202,7 +1202,7 @@ impl<K: Send + Sync + Ord + 'static, V: Send + Sync + 'static> RBRoot<K, V> {
 
     pub fn insert<'tx, 'tcell>(
         &'tcell self,
-        tx: &'tx mut impl RW<'tcell>,
+        tx: &'tx mut impl Rw<'tcell>,
         key: K,
         value: V,
         location: VacantLocation<'tcell, K, V>,
@@ -1234,7 +1234,7 @@ impl<K: Send + Sync + Ord + 'static, V: Send + Sync + 'static> RBRoot<K, V> {
 
     pub fn remove<'tcell>(
         &'tcell self,
-        tx: &mut impl RW<'tcell>,
+        tx: &mut impl Rw<'tcell>,
         node: &'tcell RBNode<K, V>,
     ) -> Result<&'tcell V, Error> {
         let value = &node.value;

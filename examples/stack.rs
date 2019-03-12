@@ -3,7 +3,7 @@ use swym::{
     tcell::{Ref, TCell},
     thread_key,
     tptr::TPtr,
-    tx::{Borrow, Error, Ordering, Read, RW},
+    tx::{Borrow, Error, Ordering, Read, Rw},
 };
 
 #[global_allocator]
@@ -42,7 +42,7 @@ impl<T> TStack<T> {
 }
 
 impl<T: 'static + Send + Sync + Borrow> TStack<T> {
-    fn push<'tcell>(&'tcell self, tx: &mut impl RW<'tcell>, value: T) -> Result<(), Error> {
+    fn push<'tcell>(&'tcell self, tx: &mut impl Rw<'tcell>, value: T) -> Result<(), Error> {
         // the `next` pointer of our new node will be the current head pointer
         let next = self.head.as_ptr(tx, Ordering::Read)?;
 
@@ -59,7 +59,7 @@ impl<T: 'static + Send + Sync + Borrow> TStack<T> {
 
     fn pop<'tcell, 'tx>(
         &'tcell self,
-        tx: &'tx mut impl RW<'tcell>,
+        tx: &'tx mut impl Rw<'tcell>,
     ) -> Result<Option<Ref<'tx, T>>, Error> {
         // get a pointer to the node we wish to pop
         let to_pop = self.head.as_ptr(tx, Ordering::default())?;
