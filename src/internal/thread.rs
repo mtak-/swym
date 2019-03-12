@@ -2,7 +2,6 @@ use crate::{
     internal::{
         epoch::{QuiesceEpoch, EPOCH_CLOCK},
         gc::{GlobalSynchList, OwnedSynch, ThreadGarbage},
-        pointer::PtrExt,
         read_log::ReadLog,
         stats,
         write_log::WriteLog,
@@ -12,10 +11,13 @@ use crate::{
     tx::Error,
 };
 use std::{
-    cell::Cell,
+    cell::{Cell, UnsafeCell},
+    fmt::{self, Debug, Formatter},
     marker::PhantomData,
-    mem, process,
-    ptr::NonNull,
+    mem,
+    ops::{Deref, DerefMut},
+    process,
+    ptr::{self, NonNull},
     sync::atomic::Ordering::{Acquire, Release},
 };
 
@@ -28,11 +30,11 @@ use std::{
 /// TODO: It's possible we don't need reference counting, if read/try_read/rw/try_rw are made free
 /// functions. But, doing so, makes 'tcell lifetimes hard/impossible to create.
 #[repr(C, align(64))]
-struct Thread {
+pub struct Thread {
     /// Contains the Read/Write logs plus the ThreadGarbage. This field needs to be referenced
     /// mutably, and the uniqueness requirement of pinning guarantees that we dont violate any
     /// aliasing rules.
-    logs: Logs,
+    logs: UnsafeCell<Logs>,
 
     /// The part of a Thread that is visible to other threads in swym (an atomic epoch, and sharded
     /// lock).
@@ -47,49 +49,24 @@ impl Thread {
     #[cold]
     fn new() -> Self {
         Thread {
-            logs:      Logs::new(),
+            logs:      UnsafeCell::new(Logs::new()),
             synch:     OwnedSynch::new(),
             ref_count: Cell::new(1),
         }
     }
 
-    /// Given a pointer to a thread, we want to be able to create pointers to its members without
-    /// going through a &mut. Going through an &mut would violate rusts aliasing rules, because
-    /// Synch might be borrowed immutably by other threads performing garbage collection.
+    /// Returns whether the thread is pinned.
+    #[inline]
+    fn is_pinned(&self) -> bool {
+        self.synch.current_epoch().is_active()
+    }
+
+    /// Tries to pin the current thread, returns None if already pinned.
     ///
-    /// These free functions handle the `offset_of` logic for creating member pointers.
-
-    /// Returns a raw pointer to the transaction logs (read/write/thread garbage).
+    /// This makes mutable access to `Logs` safe, and is the only way to perform transactions.
     #[inline]
-    fn logs(thread: NonNull<Self>) -> NonNull<Logs> {
-        // relies on repr(C) on Thread
-        thread.cast()
-    }
-
-    /// Returns a raw pointer to the shared state of the thread (sharded lock and atomic epoch).
-    #[inline]
-    fn synch(thread: NonNull<Self>) -> NonNull<OwnedSynch> {
-        // relies on repr(C) on Thread
-        unsafe {
-            Self::logs(thread)
-                .add(1) // synch is the field immediately after tx logs
-                .assume_aligned() // assume_aligned here, makes align_next optimize away on most (all?) platforms
-                .cast::<OwnedSynch>()
-                .align_next() // adjusts the pointer in the case that Synchs alignment is > TxLogs
-        }
-    }
-
-    /// Returns a raw pointer to the reference count.
-    #[inline]
-    fn ref_count(thread: NonNull<Self>) -> NonNull<Cell<usize>> {
-        // relies on repr(C) on Thread
-        unsafe {
-            Self::synch(thread)
-                .add(1) // ref_count is the field immediately after tx logs
-                .assume_aligned() // assume_aligned here, makes align_next optimize away on most (all?) platforms
-                .cast::<Cell<usize>>()
-                .align_next() // adjusts the pointer in the case that Cell<usize> alignment is > Synch
-        }
+    pub fn try_pin<'tcell>(&'tcell self) -> Option<Pin<'tcell>> {
+        Pin::try_new(self)
     }
 }
 
@@ -151,20 +128,34 @@ impl Drop for Logs {
 }
 
 /// Reference counted pointer to Thread.
-#[derive(Debug)]
 pub struct ThreadKeyInner {
-    thread_ref: ThreadRef<'static>,
+    thread: NonNull<Thread>,
+}
+
+impl Debug for ThreadKeyInner {
+    #[cold]
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        formatter.pad("ThreadKeyInner { .. }")
+    }
+}
+
+impl Deref for ThreadKeyInner {
+    type Target = Thread;
+
+    #[inline]
+    fn deref(&self) -> &Thread {
+        unsafe { self.thread.as_ref() }
+    }
 }
 
 impl Clone for ThreadKeyInner {
     #[inline]
     fn clone(&self) -> Self {
-        let ref_count = self.ref_count();
-        let count = ref_count.get();
+        let count = self.ref_count.get();;
         debug_assert!(count > 0, "attempt to clone a deallocated `ThreadKey`");
-        ref_count.set(count + 1);
+        self.ref_count.set(count + 1);
         ThreadKeyInner {
-            thread_ref: self.thread_ref,
+            thread: self.thread,
         }
     }
 }
@@ -172,37 +163,33 @@ impl Clone for ThreadKeyInner {
 impl Drop for ThreadKeyInner {
     #[inline]
     fn drop(&mut self) {
-        let ref_count = self.ref_count();
-        let count = ref_count.get();
+        let count = self.ref_count.get();
         debug_assert!(count > 0, "double free on `ThreadKey` attempted");
         if likely!(count != 1) {
-            ref_count.set(count - 1)
+            self.ref_count.set(count - 1)
         } else {
             // this is safe as long as the reference counting logic is safe
             unsafe {
-                dealloc(self.thread_ref.thread);
+                dealloc(self.thread);
             }
 
             #[inline(never)]
             #[cold]
-            unsafe fn dealloc(this: NonNull<Thread>) {
-                let synch = Thread::synch(this);
-                let synch = synch.as_ref();
-
+            unsafe fn dealloc(mut this_ptr: NonNull<Thread>) {
+                let this = this_ptr.as_mut();
                 // All thread garbage must be collected before the Thread is dropped.
-                Thread::logs(this)
-                    .as_mut()
+                (&mut *this.logs.get())
                     .garbage
-                    .synch_and_collect_all(synch);
+                    .synch_and_collect_all(&this.synch);
 
                 // fullfilling the promise we made in `Self::new`. we must unregister before
                 // deallocation, or there will be UB
                 GlobalSynchList::instance_unchecked()
                     .write()
-                    .unregister(synch);
+                    .unregister(&this.synch);
                 // clear the cached #[thread_local] pointer to `this`
                 crate::thread_key::tls::clear_tls();
-                drop(Box::from_raw(this.as_ptr()))
+                drop(Box::from_raw(this_ptr.as_ptr()))
             }
         }
     }
@@ -216,58 +203,21 @@ impl ThreadKeyInner {
             // here we promise to never move or drop our thread until we unregister it.
             GlobalSynchList::instance().write().register(&thread.synch);
             ThreadKeyInner {
-                thread_ref: ThreadRef::new(&*Box::into_raw(thread)),
+                thread: NonNull::new_unchecked(Box::into_raw(thread)),
             }
         }
     }
-
-    #[inline]
-    fn ref_count(&self) -> &Cell<usize> {
-        // this is safe as long as the reference counting logic is safe
-        unsafe { &*Thread::ref_count(self.thread_ref.thread).as_ptr() }
-    }
-
-    /// Tries to pin the current thread, returns None if already pinned.
-    ///
-    /// This makes mutable access to `Logs` safe, and is the only way to perform transactions.
-    #[inline]
-    pub fn try_pin<'tcell>(&'tcell self) -> Option<Pin<'tcell>> {
-        Pin::try_new(self.thread_ref)
-    }
 }
 
-#[derive(Copy, Clone, Debug)]
-struct ThreadRef<'a> {
-    thread:  NonNull<Thread>,
-    phantom: PhantomData<&'a Thread>,
-}
-
-impl<'a> ThreadRef<'a> {
-    #[inline]
-    fn new(thread: &'a Thread) -> Self {
-        ThreadRef {
-            thread:  thread.into(),
-            phantom: PhantomData,
-        }
-    }
-
-    /// Returns a reference to the current threads Synch.
-    #[inline]
-    fn synch(&self) -> &OwnedSynch {
-        unsafe { &*Thread::synch(self.thread).as_ptr() }
-    }
-
-    /// Returns whether the thread is pinned.
-    #[inline]
-    fn is_pinned(&self) -> bool {
-        self.synch().pin_epoch().is_active()
-    }
-}
-
-#[derive(Debug)]
 pub struct PinRef<'tx, 'tcell> {
-    thread_ref: ThreadRef<'tcell>,
-    phantom:    PhantomData<&'tx mut Pin<'tcell>>,
+    thread:  &'tx Thread,
+    phantom: PhantomData<fn(&'tcell ())>,
+}
+
+impl<'tx, 'tcell> Debug for PinRef<'tx, 'tcell> {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        formatter.pad("PinRef { .. }")
+    }
 }
 
 impl<'tx, 'tcell> PinRef<'tx, 'tcell> {
@@ -275,33 +225,33 @@ impl<'tx, 'tcell> PinRef<'tx, 'tcell> {
     #[inline]
     pub fn reborrow(&mut self) -> PinRef<'_, 'tcell> {
         PinRef {
-            thread_ref: self.thread_ref,
-            phantom:    PhantomData,
+            thread:  self.thread,
+            phantom: PhantomData,
         }
     }
 
     /// Returns a reference to the current threads Synch.
     #[inline]
     fn synch(&self) -> &OwnedSynch {
-        self.thread_ref.synch()
+        &self.thread.synch
     }
 
     /// Returns a reference to the transaction logs (read/write/thread garbage).
     #[inline]
     pub fn logs(&self) -> &Logs {
-        unsafe { &*Thread::logs(self.thread_ref.thread).as_ptr() }
+        unsafe { &*self.thread.logs.get() }
     }
 
     /// Returns a &mut to the transaction logs (read/write/thread garbage).
     #[inline]
     pub fn logs_mut(&mut self) -> &mut Logs {
-        unsafe { &mut *Thread::logs(self.thread_ref.thread).as_ptr() }
+        unsafe { &mut *self.thread.logs.get() }
     }
 
     /// Gets the currently pinned epoch.
     #[inline]
     pub fn pin_epoch(&self) -> QuiesceEpoch {
-        let pin_epoch = self.synch().pin_epoch();
+        let pin_epoch = self.synch().current_epoch();
         debug_assert!(
             pin_epoch.is_active(),
             "attempt to get pinned_epoch of thread that is not pinned"
@@ -311,12 +261,7 @@ impl<'tx, 'tcell> PinRef<'tx, 'tcell> {
 
     #[inline]
     fn into_inner(self) -> (&'tx OwnedSynch, &'tx mut Logs) {
-        unsafe {
-            (
-                &mut *Thread::synch(self.thread_ref.thread).as_ptr(),
-                &mut *Thread::logs(self.thread_ref.thread).as_ptr(),
-            )
-        }
+        (&self.thread.synch, unsafe { &mut *self.thread.logs.get() })
     }
 }
 
@@ -331,7 +276,7 @@ impl<'tcell> Drop for Pin<'tcell> {
     }
 }
 
-impl<'tcell> std::ops::Deref for Pin<'tcell> {
+impl<'tcell> Deref for Pin<'tcell> {
     type Target = PinRef<'tcell, 'tcell>;
 
     #[inline]
@@ -342,14 +287,14 @@ impl<'tcell> std::ops::Deref for Pin<'tcell> {
 
 impl<'tcell> Pin<'tcell> {
     #[inline]
-    fn try_new(thread_ref: ThreadRef<'tcell>) -> Option<Pin<'tcell>> {
-        if likely!(!thread_ref.is_pinned()) {
+    fn try_new(thread: &'tcell Thread) -> Option<Pin<'tcell>> {
+        if likely!(!thread.is_pinned()) {
             let now = EPOCH_CLOCK.now(Acquire);
             if let Some(now) = now {
-                thread_ref.synch().pin(now, Release);
+                thread.synch.pin(now, Release);
                 Some(Pin {
                     pin_ref: PinRef {
-                        thread_ref,
+                        thread,
                         phantom: PhantomData,
                     },
                 })
@@ -433,7 +378,7 @@ impl<'tx, 'tcell> Drop for PinRw<'tx, 'tcell> {
     }
 }
 
-impl<'tx, 'tcell> std::ops::Deref for PinRw<'tx, 'tcell> {
+impl<'tx, 'tcell> Deref for PinRw<'tx, 'tcell> {
     type Target = PinRef<'tx, 'tcell>;
 
     #[inline]
@@ -442,7 +387,7 @@ impl<'tx, 'tcell> std::ops::Deref for PinRw<'tx, 'tcell> {
     }
 }
 
-impl<'tx, 'tcell> std::ops::DerefMut for PinRw<'tx, 'tcell> {
+impl<'tx, 'tcell> DerefMut for PinRw<'tx, 'tcell> {
     #[inline]
     fn deref_mut(&mut self) -> &mut PinRef<'tx, 'tcell> {
         &mut self.pin_ref
@@ -458,8 +403,8 @@ impl<'tx, 'tcell> PinRw<'tx, 'tcell> {
     }
 
     #[inline]
-    fn into_inner(self) -> (&'tx OwnedSynch, &'tx mut Logs) {
-        let pin_ref = unsafe { std::ptr::read(&self.pin_ref) };
+    unsafe fn into_inner(self) -> (&'tx OwnedSynch, &'tx mut Logs) {
+        let pin_ref = ptr::read(&self.pin_ref);
         mem::forget(self);
         pin_ref.into_inner()
     }
@@ -544,7 +489,7 @@ impl<'tx, 'tcell> PinRw<'tx, 'tcell> {
 
         let sync_epoch = EPOCH_CLOCK.fetch_and_tick();
         debug_assert!(
-            synch.pin_epoch() <= sync_epoch,
+            synch.current_epoch() <= sync_epoch,
             "`EpochClock::fetch_and_tick` returned an earlier time than expected"
         );
 

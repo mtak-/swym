@@ -100,7 +100,7 @@ impl OwnedSynch {
 
     /// Gets the value of the currently pinned epoch (or returns an inactive epoch).
     #[inline]
-    pub fn pin_epoch(&self) -> QuiesceEpoch {
+    pub fn current_epoch(&self) -> QuiesceEpoch {
         let epoch_ptr =
             &self.inner.current_epoch as *const AtomicQuiesceEpoch as *const QuiesceEpoch;
         // safe since we only allow mutation through OwnedSynch (which is not sync)

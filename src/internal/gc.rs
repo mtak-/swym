@@ -15,9 +15,9 @@
 //!         - Then Freeze the global thread list, and iterate through the list of threads checking
 //!           their pinned epochs.
 //!         - If a threads pinned epoch is <= the epoch of the oldest bag, we wait for it to change.
-//!         - Else we if the epoch is lower than any other observed epoch we record it.
+//!         - Else if the epoch is lower than any other observed epoch we record it.
 //!         - After iterating we now know the oldest pinned epoch.
-//!         - Then we collect all bags with epochs < than that epoch (and are guarnateed to atleast
+//!         - Then we collect all bags with epochs < than that epoch (and are guaranteed to atleast
 //!           collect the oldest bag).
 //! 3. Unpin the current thread (set current_epoch to INACTIVE)
 
