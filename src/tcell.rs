@@ -44,7 +44,7 @@
 
 use crate::{
     internal::{tcell_erased::TCellErased, usize_aligned::UsizeAligned},
-    tx::{AssertBorrow, Borrow, Error, Ordering, Read, SetError, Write, _TValue, RW},
+    tx::{AssertBorrow, Borrow, Error, Ordering, Read, Rw, SetError, Write, _TValue},
 };
 use std::{
     cell::UnsafeCell,
@@ -316,7 +316,7 @@ impl<T: 'static + Send> TCell<T> {
 impl<T: 'static + Borrow + Clone + Send> TCell<T> {
     pub fn replace<'tcell, 'tx>(
         &'tcell self,
-        tx: &'tx mut impl RW<'tcell>,
+        tx: &'tx mut impl Rw<'tcell>,
         value: T,
     ) -> Result<T, SetError<T>> {
         let prev = match self.borrow(tx, Ordering::Read) {
@@ -355,7 +355,7 @@ impl<'tx, T> Ref<'tx, T> {
     }
 
     #[inline]
-    pub unsafe fn upcast<'tcell>(this: Self, _: &'tx impl RW<'tcell>) -> Ref<'tcell, T> {
+    pub unsafe fn upcast<'tcell>(this: Self, _: &'tx impl Rw<'tcell>) -> Ref<'tcell, T> {
         Ref {
             snapshot: this.snapshot,
             lifetime: PhantomData,

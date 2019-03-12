@@ -25,11 +25,11 @@ use std::{
 };
 
 #[derive(Debug)]
-struct RWTxImpl<'tx, 'tcell> {
+struct RwTxImpl<'tx, 'tcell> {
     pin_ref: PinRef<'tx, 'tcell>,
 }
 
-impl<'tx, 'tcell> std::ops::Deref for RWTxImpl<'tx, 'tcell> {
+impl<'tx, 'tcell> std::ops::Deref for RwTxImpl<'tx, 'tcell> {
     type Target = PinRef<'tx, 'tcell>;
 
     #[inline]
@@ -38,17 +38,17 @@ impl<'tx, 'tcell> std::ops::Deref for RWTxImpl<'tx, 'tcell> {
     }
 }
 
-impl<'tx, 'tcell> std::ops::DerefMut for RWTxImpl<'tx, 'tcell> {
+impl<'tx, 'tcell> std::ops::DerefMut for RwTxImpl<'tx, 'tcell> {
     #[inline]
     fn deref_mut(&mut self) -> &mut PinRef<'tx, 'tcell> {
         &mut self.pin_ref
     }
 }
 
-impl<'tx, 'tcell> RWTxImpl<'tx, 'tcell> {
+impl<'tx, 'tcell> RwTxImpl<'tx, 'tcell> {
     #[inline]
     fn new(pin_rw: &'tx mut PinRw<'_, 'tcell>) -> Self {
-        RWTxImpl {
+        RwTxImpl {
             pin_ref: pin_rw.reborrow(),
         }
     }
@@ -198,24 +198,24 @@ impl<'tx, 'tcell> RWTxImpl<'tx, 'tcell> {
 /// A read write transaction.
 //
 // No instances of this type are ever created. References to values of this type are created by
-// transmuting RWTxImpl's.
-pub struct RWTx<'tcell>(PhantomData<fn(&'tcell ())>);
-impl<'tcell> !Send for RWTx<'tcell> {}
-impl<'tcell> !Sync for RWTx<'tcell> {}
+// transmuting RwTxImpl's.
+pub struct RwTx<'tcell>(PhantomData<fn(&'tcell ())>);
+impl<'tcell> !Send for RwTx<'tcell> {}
+impl<'tcell> !Sync for RwTx<'tcell> {}
 
-impl<'tcell> RWTx<'tcell> {
+impl<'tcell> RwTx<'tcell> {
     #[inline]
     pub(crate) fn new<'tx>(pin_rw: &'tx mut PinRw<'_, 'tcell>) -> &'tx mut Self {
-        unsafe { mem::transmute(RWTxImpl::new(pin_rw)) }
+        unsafe { mem::transmute(RwTxImpl::new(pin_rw)) }
     }
 
     #[inline]
-    fn as_impl(&self) -> RWTxImpl<'_, 'tcell> {
+    fn as_impl(&self) -> RwTxImpl<'_, 'tcell> {
         unsafe { mem::transmute(self) }
     }
 }
 
-unsafe impl<'tcell> tx::Read<'tcell> for RWTx<'tcell> {
+unsafe impl<'tcell> tx::Read<'tcell> for RwTx<'tcell> {
     #[inline]
     unsafe fn _get_unchecked<T>(
         &self,
@@ -229,7 +229,7 @@ unsafe impl<'tcell> tx::Read<'tcell> for RWTx<'tcell> {
     }
 }
 
-unsafe impl<'tcell> Write<'tcell> for RWTx<'tcell> {
+unsafe impl<'tcell> Write<'tcell> for RwTx<'tcell> {
     #[inline]
     unsafe fn _set_unchecked<T: Send + 'static>(
         &mut self,

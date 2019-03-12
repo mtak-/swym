@@ -107,7 +107,7 @@ pub mod tx;
 
 pub use internal::stats::print_stats;
 pub use read::ReadTx;
-pub use rw::RWTx;
+pub use rw::RwTx;
 
 #[cfg(test)]
 mod memory {

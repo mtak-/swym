@@ -2,7 +2,7 @@
 //!
 //! A handle to the thread local state can be acquired by calling [`thread_key::get`].
 
-use crate::{internal::thread::ThreadKeyInner, read::ReadTx, rw::RWTx, tx::Error};
+use crate::{internal::thread::ThreadKeyInner, read::ReadTx, rw::RwTx, tx::Error};
 use std::{
     fmt::{self, Debug, Formatter},
     thread::AccessError,
@@ -80,7 +80,7 @@ impl ThreadKey {
     #[inline]
     pub fn rw<'tcell, F, O>(&'tcell self, f: F) -> O
     where
-        F: FnMut(&mut RWTx<'tcell>) -> Result<O, Error>,
+        F: FnMut(&mut RwTx<'tcell>) -> Result<O, Error>,
     {
         self.try_rw(f)
             .expect("nested transactions are not yet supported")
@@ -122,7 +122,7 @@ impl ThreadKey {
     ///
     /// # Errors
     ///
-    /// Returns a [`TryRWErr`] if a transaction is already running on the current thread.
+    /// Returns a [`TryRwErr`] if a transaction is already running on the current thread.
     ///
     /// # Examples
     ///
@@ -143,14 +143,14 @@ impl ThreadKey {
     /// assert_eq!(prev_x, "gonna be overwritten");
     /// ```
     #[inline]
-    pub fn try_rw<'tcell, F, O>(&'tcell self, f: F) -> Result<O, TryRWErr>
+    pub fn try_rw<'tcell, F, O>(&'tcell self, f: F) -> Result<O, TryRwErr>
     where
-        F: FnMut(&mut RWTx<'tcell>) -> Result<O, Error>,
+        F: FnMut(&mut RwTx<'tcell>) -> Result<O, Error>,
     {
         Ok(self
             .thread
             .try_pin()
-            .ok_or_else(|| TryRWErr::new())?
+            .ok_or_else(|| TryRwErr::new())?
             .run_rw(f))
     }
 }
@@ -271,20 +271,20 @@ impl TryReadErr {
 }
 
 /// Error type indicating that the read-write transaction failed to even start due to nesting.
-pub struct TryRWErr {
+pub struct TryRwErr {
     _private: (),
 }
 
-impl Debug for TryRWErr {
+impl Debug for TryRwErr {
     #[cold]
     fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
-        formatter.pad("TryRWErr { .. }")
+        formatter.pad("TryRwErr { .. }")
     }
 }
 
-impl TryRWErr {
+impl TryRwErr {
     #[inline]
     fn new() -> Self {
-        TryRWErr { _private: () }
+        TryRwErr { _private: () }
     }
 }

@@ -7,7 +7,7 @@ use crate::{
         write_log::WriteLog,
     },
     read::ReadTx,
-    rw::RWTx,
+    rw::RwTx,
     tx::Error,
 };
 use std::{
@@ -25,7 +25,7 @@ use std::{
 ///
 /// Synch is aliased in the GlobalSynchList of the garbage collector by a NonNull<Synch> pointer.
 /// This strongly hints that Synch and TxLogs should not be stored in the same struct; however, it
-/// is an optimization win for RWTx to only have one pointer to all of the threads state.
+/// is an optimization win for RwTx to only have one pointer to all of the threads state.
 ///
 /// TODO: It's possible we don't need reference counting, if read/try_read/rw/try_rw are made free
 /// functions. But, doing so, makes 'tcell lifetimes hard/impossible to create.
@@ -339,14 +339,14 @@ impl<'tcell> Pin<'tcell> {
     #[inline]
     pub fn run_rw<F, O>(mut self, mut f: F) -> O
     where
-        F: FnMut(&mut RWTx<'tcell>) -> Result<O, Error>,
+        F: FnMut(&mut RwTx<'tcell>) -> Result<O, Error>,
     {
         loop {
             stats::write_transaction();
             self.logs().validate_start_state();
             {
                 let mut pin = PinRw::new(&mut self);
-                let r = f(RWTx::new(&mut pin));
+                let r = f(RwTx::new(&mut pin));
                 match r {
                     Ok(o) => {
                         if likely!(pin.commit()) {
@@ -423,7 +423,7 @@ impl<'tx, 'tcell> PinRw<'tx, 'tcell> {
     #[inline]
     unsafe fn commit_empty_write_log(self) -> bool {
         let (_, logs) = self.into_inner();
-        // RWTx validates reads as they occur. As a result, if there are no writes, then we have
+        // RwTx validates reads as they occur. As a result, if there are no writes, then we have
         // no work to do in our commit algorithm.
         //
         // On the off chance we do have garbage, with an empty write log. Then there's no way

@@ -205,8 +205,8 @@ pub unsafe trait Write<'tcell> {
 }
 
 /// Trait for types that represent transactions with the ability to read and write.
-pub trait RW<'tcell>: Read<'tcell> + Write<'tcell> {}
-impl<'tcell, T: Read<'tcell> + Write<'tcell>> RW<'tcell> for T {}
+pub trait Rw<'tcell>: Read<'tcell> + Write<'tcell> {}
+impl<'tcell, T: Read<'tcell> + Write<'tcell>> Rw<'tcell> for T {}
 
 #[doc(hidden)]
 pub unsafe trait _TValue<T: 'static>: 'static {
