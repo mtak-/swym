@@ -14,7 +14,7 @@ use crate::{
         thread::{PinRef, PinRw},
         write_log::{bloom_hash, Contained, Entry, WriteEntryImpl},
     },
-    tcell::TCell,
+    tcell::{Ref, TCell},
     tx::{self, Error, Ordering, SetError, Write, _TValue},
 };
 use std::{
@@ -61,21 +61,23 @@ impl<'tx, 'tcell> RwTxImpl<'tx, 'tcell> {
 
     #[inline(never)]
     #[cold]
-    unsafe fn get_slow<T>(mut self, tcell: &TCell<T>) -> Result<ManuallyDrop<T>, Error> {
+    fn borrow_slow<T>(mut self, tcell: &'tcell TCell<T>) -> Result<Ref<'tx, T>, Error> {
         let logs = self.logs();
         let found = logs.write_log.find(&tcell.erased);
-        match found {
-            None => {
-                let value = tcell.erased.read_acquire::<T>();
-                if likely!(self.rw_valid(&tcell.erased, Acquire)) {
-                    self.logs_mut().read_log.push(&tcell.erased);
-                    return Ok(value);
+        unsafe {
+            match found {
+                None => {
+                    let value = Ref::new(tcell.erased.read_acquire::<T>());
+                    if likely!(self.rw_valid(&tcell.erased, Acquire)) {
+                        self.logs_mut().read_log.push(&tcell.erased);
+                        return Ok(value);
+                    }
                 }
-            }
-            Some(entry) => {
-                let value = entry.read::<T>();
-                if likely!(self.rw_valid(&tcell.erased, Relaxed)) {
-                    return Ok(value);
+                Some(entry) => {
+                    let value = Ref::new(entry.read::<T>());
+                    if likely!(self.rw_valid(&tcell.erased, Relaxed)) {
+                        return Ok(value);
+                    }
                 }
             }
         }
@@ -83,36 +85,41 @@ impl<'tx, 'tcell> RwTxImpl<'tx, 'tcell> {
     }
 
     #[inline]
-    unsafe fn get_impl<T>(mut self, tcell: &TCell<T>) -> Result<ManuallyDrop<T>, Error> {
+    fn borrow_impl<T>(mut self, tcell: &'tcell TCell<T>) -> Result<Ref<'tx, T>, Error> {
         let logs = self.logs();
         if likely!(!logs.read_log.next_push_allocates())
             && likely!(logs.write_log.contained(bloom_hash(&tcell.erased)) == Contained::No)
         {
-            let value = tcell.erased.read_acquire::<T>();
-            if likely!(self.rw_valid(&tcell.erased, Acquire)) {
-                self.logs_mut().read_log.push_unchecked(&tcell.erased);
-                return Ok(value);
+            unsafe {
+                let value = Ref::new(tcell.erased.read_acquire::<T>());
+                if likely!(self.rw_valid(&tcell.erased, Acquire)) {
+                    self.logs_mut().read_log.push_unchecked(&tcell.erased);
+                    return Ok(value);
+                }
             }
         }
-        self.get_slow(tcell)
+
+        self.borrow_slow(tcell)
     }
 
     #[inline(never)]
     #[cold]
-    unsafe fn get_unlogged_slow<T>(self, tcell: &TCell<T>) -> Result<ManuallyDrop<T>, Error> {
+    fn borrow_unlogged_slow<T>(self, tcell: &TCell<T>) -> Result<Ref<'tx, T>, Error> {
         let logs = self.logs();
         let found = logs.write_log.find(&tcell.erased);
-        match found {
-            None => {
-                let value = tcell.erased.read_acquire::<T>();
-                if likely!(self.rw_valid(&tcell.erased, Acquire)) {
-                    return Ok(value);
+        unsafe {
+            match found {
+                None => {
+                    let value = Ref::new(tcell.erased.read_acquire::<T>());
+                    if likely!(self.rw_valid(&tcell.erased, Acquire)) {
+                        return Ok(value);
+                    }
                 }
-            }
-            Some(entry) => {
-                let value = entry.read::<T>();
-                if likely!(self.rw_valid(&tcell.erased, Relaxed)) {
-                    return Ok(value);
+                Some(entry) => {
+                    let value = Ref::new(entry.read::<T>());
+                    if likely!(self.rw_valid(&tcell.erased, Relaxed)) {
+                        return Ok(value);
+                    }
                 }
             }
         }
@@ -120,15 +127,17 @@ impl<'tx, 'tcell> RwTxImpl<'tx, 'tcell> {
     }
 
     #[inline]
-    unsafe fn get_unlogged_impl<T>(self, tcell: &TCell<T>) -> Result<ManuallyDrop<T>, Error> {
+    fn borrow_unlogged_impl<T>(self, tcell: &'tcell TCell<T>) -> Result<Ref<'tx, T>, Error> {
         let logs = self.logs();
         if likely!(logs.write_log.contained(bloom_hash(&tcell.erased)) == Contained::No) {
-            let value = tcell.erased.read_acquire::<T>();
-            if likely!(self.rw_valid(&tcell.erased, Acquire)) {
-                return Ok(value);
+            unsafe {
+                let value = Ref::new(tcell.erased.read_acquire::<T>());
+                if likely!(self.rw_valid(&tcell.erased, Acquire)) {
+                    return Ok(value);
+                }
             }
         }
-        self.get_unlogged_slow(tcell)
+        self.borrow_unlogged_slow(tcell)
     }
 
     #[inline(never)]
@@ -215,16 +224,20 @@ impl<'tcell> RwTx<'tcell> {
     }
 }
 
-unsafe impl<'tcell> tx::Read<'tcell> for RwTx<'tcell> {
+impl<'tcell> tx::Read<'tcell> for RwTx<'tcell> {
     #[inline]
-    unsafe fn _get_unchecked<T>(
-        &self,
+    fn borrow<'tx, T>(
+        &'tx self,
         tcell: &'tcell TCell<T>,
         ordering: Ordering,
-    ) -> Result<ManuallyDrop<T>, Error> {
-        match ordering {
-            Ordering::ReadWrite => self.as_impl().get_impl(tcell),
-            Ordering::Read => self.as_impl().get_unlogged_impl(tcell),
+    ) -> Result<Ref<'tx, T>, Error> {
+        if mem::size_of::<T>() != 0 {
+            match ordering {
+                Ordering::ReadWrite => self.as_impl().borrow_impl(tcell),
+                Ordering::Read => self.as_impl().borrow_unlogged_impl(tcell),
+            }
+        } else {
+            Ok(Ref::new(unsafe { mem::zeroed() }))
         }
     }
 }

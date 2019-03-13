@@ -199,14 +199,7 @@ impl<T: Borrow> TCell<T> {
         tx: &'tx impl Read<'tcell>,
         ordering: Ordering,
     ) -> Result<Ref<'tx, T>, Error> {
-        unsafe {
-            Ok(if mem::size_of::<T>() != 0 {
-                let snapshot = tx._get_unchecked(self, ordering)?;
-                Ref::new(snapshot)
-            } else {
-                mem::zeroed()
-            })
-        }
+        tx.borrow(self, ordering)
     }
 }
 
@@ -347,7 +340,7 @@ impl<'tx, T: Debug> Debug for Ref<'tx, T> {
 
 impl<'tx, T> Ref<'tx, T> {
     #[inline]
-    fn new(snapshot: ManuallyDrop<T>) -> Self {
+    pub fn new(snapshot: ManuallyDrop<T>) -> Self {
         Ref {
             snapshot,
             lifetime: PhantomData,
@@ -355,7 +348,7 @@ impl<'tx, T> Ref<'tx, T> {
     }
 
     #[inline]
-    pub unsafe fn upcast<'tcell>(this: Self, _: &'tx impl Rw<'tcell>) -> Ref<'tcell, T> {
+    pub unsafe fn downcast<'tcell>(this: Self, _: &'tx impl Rw<'tcell>) -> Ref<'tcell, T> {
         Ref {
             snapshot: this.snapshot,
             lifetime: PhantomData,

@@ -1,10 +1,9 @@
 //! Functionality for working with transactions.
 
-use crate::tcell::TCell;
+use crate::tcell::{Ref, TCell};
 use std::{
     cell::UnsafeCell,
     fmt::{self, Debug, Formatter},
-    mem::ManuallyDrop,
     ops::{Deref, DerefMut},
 };
 
@@ -178,13 +177,13 @@ impl Default for Ordering {
 /// # Notes
 ///
 /// Don't implement this trait.
-pub unsafe trait Read<'tcell> {
+pub trait Read<'tcell> {
     #[doc(hidden)]
-    unsafe fn _get_unchecked<T>(
-        &self,
+    fn borrow<'tx, T: Borrow>(
+        &'tx self,
         tcell: &'tcell TCell<T>,
         ordering: Ordering,
-    ) -> Result<ManuallyDrop<T>, Error>;
+    ) -> Result<Ref<'tx, T>, Error>;
 }
 
 /// Trait for types that represent transactions with the ability to write.

@@ -139,7 +139,7 @@ impl<K: Send + Sync + Ord + 'static, V: Borrow + Send + Sync + 'static> RBTreeMa
             Location::Occupied { node } => {
                 let v = self.root.remove(tx, node)?;
                 Ok(Some(unsafe {
-                    Ref::upcast(v.borrow(tx, Ordering::default())?, tx)
+                    Ref::downcast(v.borrow(tx, Ordering::default())?, tx)
                 }))
             }
         }
