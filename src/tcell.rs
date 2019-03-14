@@ -50,7 +50,7 @@ use std::{
     cell::UnsafeCell,
     fmt::{self, Debug, Formatter},
     marker::PhantomData,
-    mem::{self, ManuallyDrop},
+    mem::ManuallyDrop,
     ops::{Deref, DerefMut},
     ptr,
 };
@@ -242,17 +242,7 @@ impl<T: 'static + Send> TCell<T> {
         tx: &mut impl Write<'tcell>,
         value: impl _TValue<T>,
     ) -> Result<(), SetError<T>> {
-        assert_eq!(
-            mem::size_of_val(&value),
-            mem::size_of::<T>(),
-            "swym currently requires undo callbacks to be zero sized"
-        );
-        unsafe {
-            if mem::size_of::<T>() != 0 {
-                tx._set_unchecked(self, value)?;
-            }
-        }
-        Ok(())
+        tx.set(self, value)
     }
 
     /// Sets the contained value.

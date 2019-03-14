@@ -4,20 +4,20 @@ use crate::internal::{
     stats,
     tcell_erased::TCellErased,
 };
-use std::{num::NonZeroUsize, ptr::NonNull, sync::atomic::Ordering::Relaxed};
+use std::{num::NonZeroUsize, sync::atomic::Ordering::Relaxed};
 
-const READ_SIZE: NonZeroUsize = unsafe { NonZeroUsize::new_unchecked(1024) };
+const READ_CAPACITY: usize = 1024;
 
 #[derive(Debug)]
-pub struct ReadLog {
-    data: FVec<ReadEntry>,
+pub struct ReadLog<'tcell> {
+    data: FVec<ReadEntry<'tcell>>,
 }
 
-impl ReadLog {
+impl<'tcell> ReadLog<'tcell> {
     #[inline]
     pub fn new() -> Self {
         ReadLog {
-            data: FVec::with_capacity(READ_SIZE),
+            data: FVec::with_capacity(NonZeroUsize::new(READ_CAPACITY).unwrap()),
         }
     }
 
@@ -32,12 +32,12 @@ impl ReadLog {
     }
 
     #[inline]
-    pub fn push(&mut self, erased: &TCellErased) {
+    pub fn push(&mut self, erased: &'tcell TCellErased) {
         self.data.push(ReadEntry::new(erased))
     }
 
     #[inline]
-    pub unsafe fn push_unchecked(&mut self, erased: &TCellErased) {
+    pub unsafe fn push_unchecked(&mut self, erased: &'tcell TCellErased) {
         self.data.push_unchecked(ReadEntry::new(erased))
     }
 
@@ -53,7 +53,7 @@ impl ReadLog {
     }
 
     #[inline]
-    pub unsafe fn get_unchecked(&self, i: usize) -> &ReadEntry {
+    pub unsafe fn get_unchecked(&self, i: usize) -> &ReadEntry<'tcell> {
         self.data.get_unchecked(i)
     }
 
@@ -63,16 +63,16 @@ impl ReadLog {
     }
 
     #[inline]
-    pub fn iter(&self) -> Iter<'_, ReadEntry> {
+    fn iter(&self) -> Iter<'_, ReadEntry<'tcell>> {
         self.data.iter()
     }
 
     #[inline]
-    pub unsafe fn validate_reads(&self, pin_epoch: QuiesceEpoch) -> bool {
+    pub fn validate_reads(&self, pin_epoch: QuiesceEpoch) -> bool {
         for logged_read in self.iter() {
-            if unlikely!(!pin_epoch
-                .read_write_valid_lockable(&logged_read.src.as_ref().current_epoch, Relaxed))
-            {
+            if unlikely!(
+                !pin_epoch.read_write_valid_lockable(&logged_read.src.current_epoch, Relaxed)
+            ) {
                 return false;
             }
         }
@@ -81,17 +81,13 @@ impl ReadLog {
 }
 
 #[derive(Copy, Clone, Debug)]
-pub struct ReadEntry {
-    pub src: NonNull<TCellErased>,
+pub struct ReadEntry<'tcell> {
+    pub src: &'tcell TCellErased,
 }
 
-impl ReadEntry {
+impl<'tcell> ReadEntry<'tcell> {
     #[inline]
-    pub const fn new(src: &TCellErased) -> Self {
-        unsafe {
-            ReadEntry {
-                src: NonNull::new_unchecked(src as *const _ as _),
-            }
-        }
+    pub const fn new(src: &'tcell TCellErased) -> Self {
+        ReadEntry { src }
     }
 }

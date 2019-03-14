@@ -191,16 +191,16 @@ pub trait Read<'tcell> {
 /// # Notes
 ///
 /// Don't implement this trait.
-pub unsafe trait Write<'tcell> {
+pub trait Write<'tcell> {
     #[doc(hidden)]
-    unsafe fn _set_unchecked<T: Send + 'static>(
+    fn set<T: Send + 'static>(
         &mut self,
         tcell: &'tcell TCell<T>,
         src: impl _TValue<T>,
     ) -> Result<(), SetError<T>>;
 
     #[doc(hidden)]
-    fn _privatize<F: FnOnce() + Copy + Send + 'static>(&self, privatizer: F);
+    fn _privatize<F: FnOnce() + Copy + Send + 'static>(&mut self, privatizer: F);
 }
 
 /// Trait for types that represent transactions with the ability to read and write.

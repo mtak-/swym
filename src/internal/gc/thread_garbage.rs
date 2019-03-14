@@ -68,10 +68,8 @@ impl UnusedBags {
             bags: FVec::with_capacity(capacity),
         };
 
-        unsafe {
-            for _ in 0..UNUSED_BAG_COUNT {
-                result.bags.push_unchecked(Bag::new());
-            }
+        for _ in 0..UNUSED_BAG_COUNT {
+            result.bags.push(Bag::new());
         }
         result
     }

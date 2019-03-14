@@ -47,7 +47,7 @@ impl SynchList {
     }
 
     #[inline]
-    pub(super) fn iter<'a>(&'a self) -> impl Iterator<Item = &Synch> + 'a {
+    pub(super) fn iter<'a>(&'a self) -> impl Iterator<Item = &'a Synch> {
         self.synchs.iter().map(|p| unsafe {
             // register requires that Synchs aren't moved or dropped until after unregister is
             // called

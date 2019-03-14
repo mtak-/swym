@@ -5,7 +5,7 @@ use std::ptr;
 use swym::{
     tcell::TCell,
     tptr::TPtr,
-    tx::{Error, Ordering, Read, Write, Rw},
+    tx::{Error, Ordering, Read, Rw, Write},
 };
 use RBRef::{Null, Valid};
 

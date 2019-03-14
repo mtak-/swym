@@ -34,7 +34,7 @@ pub struct Thread {
     /// Contains the Read/Write logs plus the ThreadGarbage. This field needs to be referenced
     /// mutably, and the uniqueness requirement of pinning guarantees that we dont violate any
     /// aliasing rules.
-    logs: UnsafeCell<Logs>,
+    logs: UnsafeCell<Logs<'static>>,
 
     /// The part of a Thread that is visible to other threads in swym (an atomic epoch, and sharded
     /// lock).
@@ -72,13 +72,13 @@ impl Thread {
 
 // TODO: optimize memory layout
 #[repr(C)]
-pub struct Logs {
-    pub read_log:  ReadLog,
-    pub write_log: WriteLog,
+pub struct Logs<'tcell> {
+    pub read_log:  ReadLog<'tcell>,
+    pub write_log: WriteLog<'tcell>,
     pub garbage:   ThreadGarbage,
 }
 
-impl Logs {
+impl<'tcell> Logs<'tcell> {
     #[inline]
     fn new() -> Self {
         Logs {
@@ -96,7 +96,7 @@ impl Logs {
                 debug_assert!(i < self.read_log.len(), "bug in `remove_writes_from_reads`");
                 if self
                     .write_log
-                    .find(self.read_log.get_unchecked(i).src.as_ref())
+                    .find(self.read_log.get_unchecked(i).src)
                     .is_some()
                 {
                     let l = self.read_log.len();
@@ -121,7 +121,7 @@ impl Logs {
 }
 
 #[cfg(debug_assertions)]
-impl Drop for Logs {
+impl<'tcell> Drop for Logs<'tcell> {
     fn drop(&mut self) {
         self.validate_start_state();
     }
@@ -238,14 +238,8 @@ impl<'tx, 'tcell> PinRef<'tx, 'tcell> {
 
     /// Returns a reference to the transaction logs (read/write/thread garbage).
     #[inline]
-    pub fn logs(&self) -> &Logs {
+    pub fn logs(&self) -> &Logs<'tcell> {
         unsafe { &*self.thread.logs.get() }
-    }
-
-    /// Returns a &mut to the transaction logs (read/write/thread garbage).
-    #[inline]
-    pub fn logs_mut(&mut self) -> &mut Logs {
-        unsafe { &mut *self.thread.logs.get() }
     }
 
     /// Gets the currently pinned epoch.
@@ -260,8 +254,53 @@ impl<'tx, 'tcell> PinRef<'tx, 'tcell> {
     }
 
     #[inline]
-    fn into_inner(self) -> (&'tx OwnedSynch, &'tx mut Logs) {
-        (&self.thread.synch, unsafe { &mut *self.thread.logs.get() })
+    fn into_inner(self) -> (&'tx OwnedSynch, &'tx mut Logs<'tcell>) {
+        unsafe {
+            (
+                &self.thread.synch,
+                &mut *(self.thread.logs.get() as *const _ as *mut _),
+            )
+        }
+    }
+}
+
+pub struct PinMutRef<'tx, 'tcell> {
+    pin_ref: PinRef<'tx, 'tcell>,
+}
+
+impl<'tx, 'tcell> Deref for PinMutRef<'tx, 'tcell> {
+    type Target = PinRef<'tx, 'tcell>;
+
+    #[inline]
+    fn deref(&self) -> &PinRef<'tx, 'tcell> {
+        &self.pin_ref
+    }
+}
+
+impl<'tx, 'tcell> Debug for PinMutRef<'tx, 'tcell> {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        formatter.pad("PinMutRef { .. }")
+    }
+}
+
+impl<'tx, 'tcell> PinMutRef<'tx, 'tcell> {
+    /// Returns a reference to the current threads Synch.
+    #[inline]
+    pub fn reborrow(&mut self) -> PinMutRef<'_, 'tcell> {
+        PinMutRef {
+            pin_ref: self.pin_ref.reborrow(),
+        }
+    }
+
+    /// Returns a &mut to the transaction logs (read/write/thread garbage).
+    #[inline]
+    pub fn logs_mut(&mut self) -> &mut Logs<'tcell> {
+        unsafe { &mut *(self.pin_ref.thread.logs.get() as *const _ as *mut _) }
+    }
+
+    #[inline]
+    fn into_inner(self) -> (&'tx OwnedSynch, &'tx mut Logs<'tcell>) {
+        self.pin_ref.into_inner()
     }
 }
 
@@ -364,7 +403,7 @@ impl<'tcell> Pin<'tcell> {
 }
 
 pub struct PinRw<'tx, 'tcell> {
-    pin_ref: PinRef<'tx, 'tcell>,
+    pin_ref: PinMutRef<'tx, 'tcell>,
 }
 
 impl<'tx, 'tcell> Drop for PinRw<'tx, 'tcell> {
@@ -379,17 +418,17 @@ impl<'tx, 'tcell> Drop for PinRw<'tx, 'tcell> {
 }
 
 impl<'tx, 'tcell> Deref for PinRw<'tx, 'tcell> {
-    type Target = PinRef<'tx, 'tcell>;
+    type Target = PinMutRef<'tx, 'tcell>;
 
     #[inline]
-    fn deref(&self) -> &PinRef<'tx, 'tcell> {
+    fn deref(&self) -> &PinMutRef<'tx, 'tcell> {
         &self.pin_ref
     }
 }
 
 impl<'tx, 'tcell> DerefMut for PinRw<'tx, 'tcell> {
     #[inline]
-    fn deref_mut(&mut self) -> &mut PinRef<'tx, 'tcell> {
+    fn deref_mut(&mut self) -> &mut PinMutRef<'tx, 'tcell> {
         &mut self.pin_ref
     }
 }
@@ -398,12 +437,14 @@ impl<'tx, 'tcell> PinRw<'tx, 'tcell> {
     #[inline]
     fn new(pin: &'tx mut Pin<'tcell>) -> Self {
         PinRw {
-            pin_ref: pin.pin_ref.reborrow(),
+            pin_ref: PinMutRef {
+                pin_ref: pin.pin_ref.reborrow(),
+            },
         }
     }
 
     #[inline]
-    unsafe fn into_inner(self) -> (&'tx OwnedSynch, &'tx mut Logs) {
+    unsafe fn into_inner(self) -> (&'tx OwnedSynch, &'tx mut Logs<'tcell>) {
         let pin_ref = ptr::read(&self.pin_ref);
         mem::forget(self);
         pin_ref.into_inner()

@@ -11,7 +11,7 @@ use crate::{
     internal::{
         alloc::dyn_vec::DynElemMut,
         tcell_erased::TCellErased,
-        thread::{PinRef, PinRw},
+        thread::{PinMutRef, PinRw},
         write_log::{bloom_hash, Contained, Entry, WriteEntryImpl},
     },
     tcell::{Ref, TCell},
@@ -26,21 +26,21 @@ use std::{
 
 #[derive(Debug)]
 struct RwTxImpl<'tx, 'tcell> {
-    pin_ref: PinRef<'tx, 'tcell>,
+    pin_ref: PinMutRef<'tx, 'tcell>,
 }
 
 impl<'tx, 'tcell> std::ops::Deref for RwTxImpl<'tx, 'tcell> {
-    type Target = PinRef<'tx, 'tcell>;
+    type Target = PinMutRef<'tx, 'tcell>;
 
     #[inline]
-    fn deref(&self) -> &PinRef<'tx, 'tcell> {
+    fn deref(&self) -> &PinMutRef<'tx, 'tcell> {
         &self.pin_ref
     }
 }
 
 impl<'tx, 'tcell> std::ops::DerefMut for RwTxImpl<'tx, 'tcell> {
     #[inline]
-    fn deref_mut(&mut self) -> &mut PinRef<'tx, 'tcell> {
+    fn deref_mut(&mut self) -> &mut PinMutRef<'tx, 'tcell> {
         &mut self.pin_ref
     }
 }
@@ -142,45 +142,50 @@ impl<'tx, 'tcell> RwTxImpl<'tx, 'tcell> {
 
     #[inline(never)]
     #[cold]
-    unsafe fn set_slow<T: 'static + Send, V: _TValue<T>>(
+    fn set_slow<T: 'static + Send, V: _TValue<T>>(
         mut self,
-        tcell: &TCell<T>,
+        tcell: &'tcell TCell<T>,
         value: V,
     ) -> Result<(), SetError<T>> {
-        match self.logs_mut().write_log.entry(&tcell.erased) {
-            Entry::Vacant { write_log: _, hash } => {
-                if likely!(self.rw_valid(&tcell.erased, Relaxed)) {
-                    let logs = self.logs_mut();
-                    logs.write_log.push(&tcell.erased, value, hash);
-                    if mem::needs_drop::<T>() {
-                        logs.garbage.trash(tcell.erased.read_relaxed::<T>())
+        unsafe {
+            match self.logs_mut().write_log.entry(&tcell.erased) {
+                Entry::Vacant { write_log: _, hash } => {
+                    if likely!(self.rw_valid(&tcell.erased, Relaxed)) {
+                        let logs = self.logs_mut();
+                        logs.write_log.push(&tcell.erased, value, hash);
+                        if mem::needs_drop::<T>() {
+                            logs.garbage.trash(tcell.erased.read_relaxed::<T>())
+                        }
+                        return Ok(());
+                    }
+                }
+                Entry::Occupied { mut entry, hash } => {
+                    if V::REQUEST_TCELL_LIFETIME {
+                        entry.deactivate();
+                        self.logs_mut().write_log.push(&tcell.erased, value, hash);
+                    } else {
+                        DynElemMut::assign_unchecked(
+                            entry,
+                            WriteEntryImpl::new(&tcell.erased, value),
+                        )
                     }
                     return Ok(());
                 }
-            }
-            Entry::Occupied { mut entry, hash } => {
-                if V::REQUEST_TCELL_LIFETIME {
-                    entry.deactivate();
-                    self.logs_mut().write_log.push(&tcell.erased, value, hash);
-                } else {
-                    DynElemMut::assign_unchecked(entry, WriteEntryImpl::new(&tcell.erased, value))
-                }
-                return Ok(());
-            }
-        };
+            };
 
-        let casted = mem::transmute_copy(&value);
-        mem::forget(value);
-        Err(SetError {
-            value: casted,
-            error: Error::RETRY,
-        })
+            let casted = mem::transmute_copy(&value);
+            mem::forget(value);
+            Err(SetError {
+                value: casted,
+                error: Error::RETRY,
+            })
+        }
     }
 
     #[inline]
-    unsafe fn set_impl<T: Send + 'static, V: _TValue<T>>(
+    fn set_impl<T: Send + 'static, V: _TValue<T>>(
         mut self,
-        tcell: &TCell<T>,
+        tcell: &'tcell TCell<T>,
         value: V,
     ) -> Result<(), SetError<T>> {
         let logs = self.logs();
@@ -192,10 +197,12 @@ impl<'tx, 'tcell> RwTxImpl<'tx, 'tcell> {
             && likely!(self.rw_valid(&tcell.erased, Relaxed))
         {
             let logs = self.logs_mut();
-            logs.write_log.push_unchecked(&tcell.erased, value, hash);
-            if mem::needs_drop::<T>() {
-                logs.garbage
-                    .trash_unchecked(tcell.erased.read_relaxed::<T>())
+            unsafe {
+                logs.write_log.push_unchecked(&tcell.erased, value, hash);
+                if mem::needs_drop::<T>() {
+                    logs.garbage
+                        .trash_unchecked(tcell.erased.read_relaxed::<T>())
+                }
             }
             Ok(())
         } else {
@@ -242,18 +249,27 @@ impl<'tcell> tx::Read<'tcell> for RwTx<'tcell> {
     }
 }
 
-unsafe impl<'tcell> Write<'tcell> for RwTx<'tcell> {
+impl<'tcell> Write<'tcell> for RwTx<'tcell> {
     #[inline]
-    unsafe fn _set_unchecked<T: Send + 'static>(
+    fn set<T: Send + 'static>(
         &mut self,
         tcell: &'tcell TCell<T>,
         value: impl _TValue<T>,
     ) -> Result<(), SetError<T>> {
-        self.as_impl().set_impl(tcell, value)
+        assert_eq!(
+            mem::size_of_val(&value),
+            mem::size_of::<T>(),
+            "swym currently requires undo callbacks to be zero sized"
+        );
+        if mem::size_of::<T>() != 0 {
+            self.as_impl().set_impl(tcell, value)
+        } else {
+            Ok(())
+        }
     }
 
     #[inline]
-    fn _privatize<F: FnOnce() + Copy + Send + 'static>(&self, privatizer: F) {
+    fn _privatize<F: FnOnce() + Copy + Send + 'static>(&mut self, privatizer: F) {
         self.as_impl()
             .logs_mut()
             .garbage

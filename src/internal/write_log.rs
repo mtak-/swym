@@ -15,23 +15,23 @@ use std::{
 };
 
 #[repr(C)]
-pub struct WriteEntryImpl<T> {
-    dest:    Option<NonNull<TCellErased>>,
+pub struct WriteEntryImpl<'tcell, T> {
+    dest:    Option<&'tcell TCellErased>,
     pending: ForcedUsizeAligned<T>,
 }
 
-impl<T> WriteEntryImpl<T> {
+impl<'tcell, T> WriteEntryImpl<'tcell, T> {
     #[inline]
-    pub const fn new(dest: &TCellErased, pending: T) -> Self {
+    pub const fn new(dest: &'tcell TCellErased, pending: T) -> Self {
         WriteEntryImpl {
-            dest:    Some(unsafe { NonNull::new_unchecked(dest as *const _ as _) }),
+            dest:    Some(dest),
             pending: ForcedUsizeAligned::new(pending),
         }
     }
 }
 
 pub unsafe trait WriteEntry {}
-unsafe impl<T> WriteEntry for WriteEntryImpl<T> {}
+unsafe impl<'tcell, T> WriteEntry for WriteEntryImpl<'tcell, T> {}
 
 impl<'a> dyn WriteEntry + 'a {
     #[inline]
@@ -149,12 +149,12 @@ pub enum Contained {
 /// TODO: WriteLog is very very slow if the bloom filter fails.
 /// probably worth looking into some true hashmaps
 #[repr(C)]
-pub struct WriteLog {
+pub struct WriteLog<'tcell> {
     filter: usize,
-    data:   DynVec<dyn WriteEntry>,
+    data:   DynVec<dyn WriteEntry + 'tcell>,
 }
 
-impl WriteLog {
+impl<'tcell> WriteLog<'tcell> {
     #[inline]
     pub fn new() -> Self {
         WriteLog {
@@ -234,7 +234,11 @@ impl WriteLog {
     }
 
     #[inline(never)]
-    fn entry_slow<'a>(&'a mut self, dest_tcell: &TCellErased, hash: NonZeroUsize) -> Entry<'a> {
+    fn entry_slow<'a>(
+        &'a mut self,
+        dest_tcell: &TCellErased,
+        hash: NonZeroUsize,
+    ) -> Entry<'a, 'tcell> {
         match self
             .data
             .iter_mut()
@@ -255,7 +259,7 @@ impl WriteLog {
 
     // biased against finding the tcell
     #[inline]
-    pub fn entry<'a>(&'a mut self, dest_tcell: &TCellErased) -> Entry<'a> {
+    pub fn entry<'a>(&'a mut self, dest_tcell: &TCellErased) -> Entry<'a, 'tcell> {
         let hash = bloom_hash(dest_tcell);
         debug_assert!(hash.get() != 0, "bug in dumb_reference_hash algorithm");
         if likely!(self.contained(hash) == Contained::No) {
@@ -267,23 +271,23 @@ impl WriteLog {
 
     #[inline]
     pub fn next_push_allocates<T>(&self) -> bool {
-        self.data.next_push_allocates::<WriteEntryImpl<T>>()
+        self.data.next_push_allocates::<WriteEntryImpl<'tcell, T>>()
     }
 
     #[inline]
-    pub unsafe fn push<T: 'static>(
+    pub fn push<T: 'static>(
         &mut self,
-        dest_tcell: &TCellErased,
+        dest_tcell: &'tcell TCellErased,
         val: T,
         hash: NonZeroUsize,
     ) {
-        {
-            let _ptr = dest_tcell as *const TCellErased;
-            debug_assert!(
-                self.data.iter().find(|x| x.is_dest_tcell(&*_ptr)).is_none(),
-                "attempt to add `TCell` to the `WriteLog` twice"
-            );
-        }
+        debug_assert!(
+            self.data
+                .iter()
+                .find(|x| x.is_dest_tcell(dest_tcell))
+                .is_none(),
+            "attempt to add `TCell` to the `WriteLog` twice"
+        );
 
         self.filter |= hash.get();
         self.data.push(WriteEntryImpl::new(dest_tcell, val));
@@ -292,17 +296,17 @@ impl WriteLog {
     #[inline]
     pub unsafe fn push_unchecked<T: 'static>(
         &mut self,
-        dest_tcell: &TCellErased,
+        dest_tcell: &'tcell TCellErased,
         val: T,
         hash: NonZeroUsize,
     ) {
-        {
-            let _ptr = dest_tcell as *const TCellErased;
-            debug_assert!(
-                self.data.iter().find(|x| x.is_dest_tcell(&*_ptr)).is_none(),
-                "attempt to add `TCell` to the `WriteLog` twice"
-            );
-        }
+        debug_assert!(
+            self.data
+                .iter()
+                .find(|x| x.is_dest_tcell(dest_tcell))
+                .is_none(),
+            "attempt to add `TCell` to the `WriteLog` twice"
+        );
 
         self.filter |= hash.get();
         self.data
@@ -357,25 +361,25 @@ impl WriteLog {
     }
 }
 
-pub enum Entry<'a> {
+pub enum Entry<'a, 'tcell> {
     Vacant {
-        write_log: &'a mut WriteLog,
+        write_log: &'a mut WriteLog<'tcell>,
         hash:      NonZeroUsize,
     },
     Occupied {
-        entry: DynElemMut<'a, dyn WriteEntry>,
+        entry: DynElemMut<'a, dyn WriteEntry + 'tcell>,
         hash:  NonZeroUsize,
     },
 }
 
-impl<'a> Entry<'a> {
+impl<'a, 'tcell> Entry<'a, 'tcell> {
     #[inline]
-    fn new_hash(write_log: &'a mut WriteLog, hash: NonZeroUsize) -> Self {
+    fn new_hash(write_log: &'a mut WriteLog<'tcell>, hash: NonZeroUsize) -> Self {
         Entry::Vacant { write_log, hash }
     }
 
     #[inline]
-    fn new_occupied(entry: DynElemMut<'a, dyn WriteEntry>, hash: NonZeroUsize) -> Self {
+    fn new_occupied(entry: DynElemMut<'a, dyn WriteEntry + 'tcell>, hash: NonZeroUsize) -> Self {
         Entry::Occupied { entry, hash }
     }
 }

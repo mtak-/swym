@@ -103,7 +103,7 @@ impl OwnedSynch {
     pub fn current_epoch(&self) -> QuiesceEpoch {
         let epoch_ptr =
             &self.inner.current_epoch as *const AtomicQuiesceEpoch as *const QuiesceEpoch;
-        // safe since we only allow mutation through OwnedSynch (which is not sync)
+        // safe since we only allow mutation through OwnedSynch (which does not implement sync)
         unsafe { *epoch_ptr }
     }
 
