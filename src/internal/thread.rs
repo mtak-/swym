@@ -96,7 +96,7 @@ impl<'tcell> Logs<'tcell> {
                 debug_assert!(i < self.read_log.len(), "bug in `remove_writes_from_reads`");
                 if self
                     .write_log
-                    .find(self.read_log.get_unchecked(i).src)
+                    .find(self.read_log.get_unchecked(i))
                     .is_some()
                 {
                     let l = self.read_log.len();
@@ -252,16 +252,6 @@ impl<'tx, 'tcell> PinRef<'tx, 'tcell> {
         );
         pin_epoch
     }
-
-    #[inline]
-    fn into_inner(self) -> (&'tx OwnedSynch, &'tx mut Logs<'tcell>) {
-        unsafe {
-            (
-                &self.thread.synch,
-                &mut *(self.thread.logs.get() as *const _ as *mut _),
-            )
-        }
-    }
 }
 
 pub struct PinMutRef<'tx, 'tcell> {
@@ -300,7 +290,9 @@ impl<'tx, 'tcell> PinMutRef<'tx, 'tcell> {
 
     #[inline]
     fn into_inner(self) -> (&'tx OwnedSynch, &'tx mut Logs<'tcell>) {
-        self.pin_ref.into_inner()
+        let synch = &self.pin_ref.thread.synch;
+        let logs = unsafe { &mut *(self.pin_ref.thread.logs.get() as *const _ as *mut _) };
+        (synch, logs)
     }
 }
 
@@ -384,7 +376,7 @@ impl<'tcell> Pin<'tcell> {
             stats::write_transaction();
             self.logs().validate_start_state();
             {
-                let mut pin = PinRw::new(&mut self);
+                let mut pin = unsafe { PinRw::new(&mut self) };
                 let r = f(RwTx::new(&mut pin));
                 match r {
                     Ok(o) => {
@@ -434,8 +426,9 @@ impl<'tx, 'tcell> DerefMut for PinRw<'tx, 'tcell> {
 }
 
 impl<'tx, 'tcell> PinRw<'tx, 'tcell> {
+    /// It is not safe to mem::forget PinRw
     #[inline]
-    fn new(pin: &'tx mut Pin<'tcell>) -> Self {
+    unsafe fn new(pin: &'tx mut Pin<'tcell>) -> Self {
         PinRw {
             pin_ref: PinMutRef {
                 pin_ref: pin.pin_ref.reborrow(),

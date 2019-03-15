@@ -195,6 +195,11 @@ impl AtomicQuiesceEpoch {
     }
 
     #[inline]
+    pub fn is_quiesced(&self, quiesce_epoch: QuiesceEpoch, o: Ordering) -> bool {
+        self.get(o) > quiesce_epoch
+    }
+
+    #[inline]
     pub fn get(&self, o: Ordering) -> QuiesceEpoch {
         unsafe { QuiesceEpoch::new_unchecked(self.0.load(o)) }
     }

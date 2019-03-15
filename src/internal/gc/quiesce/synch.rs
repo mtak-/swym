@@ -46,7 +46,7 @@ impl Synch {
     #[inline]
     pub fn is_quiesced(&self, quiesce_epoch: QuiesceEpoch) -> bool {
         // TODO: acquire seems unneeded, but syncs with release in activate_epoch
-        self.current_epoch.get(Acquire) > quiesce_epoch
+        self.current_epoch.is_quiesced(quiesce_epoch, Acquire)
     }
 
     /// Waits until the thread owning this Synch is no longer accessing data that existed before

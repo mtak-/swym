@@ -1,6 +1,4 @@
-#![cfg(target_arch = "x86_64")]
-
-mod ffi {
+mod intrinsics {
     extern "C" {
         #[link_name = "llvm.x86.xbegin"]
         pub fn xbegin() -> i32;
@@ -18,23 +16,23 @@ mod ffi {
 
 #[inline]
 pub unsafe fn xbegin() -> i32 {
-    ffi::xbegin()
+    intrinsics::xbegin()
 }
 
 #[inline]
 pub unsafe fn xend() {
-    ffi::xend()
+    intrinsics::xend()
 }
 
 #[inline]
 pub unsafe fn xabort(a: i8) -> ! {
-    ffi::xabort(a);
+    intrinsics::xabort(a);
     std::hint::unreachable_unchecked()
 }
 
 #[inline]
 pub unsafe fn xtest() -> i32 {
-    ffi::xtest()
+    intrinsics::xtest()
 }
 
 pub const _XBEGIN_STARTED: i32 = !0 as i32;
@@ -49,4 +47,64 @@ pub const _XABORT_NESTED: i32 = 1i32 << 5;
 #[inline(always)]
 pub const fn _XABORT_CODE(x: i32) -> i32 {
     ((x) >> 24) & 0xFFi32
+}
+
+#[repr(transparent)]
+#[derive(PartialEq, Eq, Ord, PartialOrd, Copy, Clone, Debug, Hash)]
+pub struct BeginCode(i32);
+
+impl BeginCode {
+    pub const STARTED: Self = BeginCode(_XBEGIN_STARTED);
+    pub const RETRY: Self = BeginCode(_XABORT_RETRY);
+    pub const CONFLICT: Self = BeginCode(_XABORT_CONFLICT);
+    pub const CAPACITY: Self = BeginCode(_XABORT_CAPACITY);
+    pub const DEBUG: Self = BeginCode(_XABORT_DEBUG);
+    pub const NESTED: Self = BeginCode(_XABORT_NESTED);
+
+    #[inline]
+    pub fn is_explicit(&self) -> bool {
+        self.0 & _XABORT_EXPLICIT != 0
+    }
+
+    #[inline]
+    pub fn abort_code(&self) -> Option<AbortCode> {
+        if self.is_explicit() {
+            Some(AbortCode(_XABORT_CODE(self.0) as _))
+        } else {
+            None
+        }
+    }
+}
+
+#[repr(transparent)]
+#[derive(PartialEq, Eq, Ord, PartialOrd, Copy, Clone, Debug, Hash)]
+pub struct TestCode(i32);
+
+#[repr(transparent)]
+#[derive(PartialEq, Eq, Ord, PartialOrd, Copy, Clone, Debug, Hash)]
+pub struct AbortCode(i8);
+
+#[inline]
+pub unsafe fn begin() -> BeginCode {
+    BeginCode(xbegin())
+}
+
+#[inline]
+pub unsafe fn abort(a: AbortCode) -> ! {
+    xabort(a.0)
+}
+
+#[inline]
+pub unsafe fn test() -> TestCode {
+    TestCode(xtest())
+}
+
+#[inline]
+pub unsafe fn end() {
+    xend()
+}
+
+#[inline]
+pub const fn htm_supported() -> bool {
+    true
 }
