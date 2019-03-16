@@ -79,6 +79,7 @@
 #![feature(core_intrinsics)]
 #![feature(dropck_eyepatch)]
 #![feature(fn_traits)]
+#![feature(maybe_uninit)]
 #![feature(non_exhaustive)]
 #![feature(optin_builtin_traits)]
 #![feature(ptr_offset_from)]

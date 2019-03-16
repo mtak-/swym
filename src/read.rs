@@ -41,7 +41,7 @@ impl<'tcell> Read<'tcell> for ReadTx<'tcell> {
                 // In a read only transaction, there is no read log, write log or gc.
                 // The only thing that needs to be done is reading of the value, and then a check,
                 // to see if that value was written before this transaction began.x
-                let value = Ref::new(tcell.erased.read_acquire::<T>());
+                let value = Ref::new(tcell.erased.optimistic_read_acquire::<T>());
                 if likely!(self
                     .pin_epoch()
                     .read_write_valid_lockable(&tcell.erased.current_epoch, Acquire))

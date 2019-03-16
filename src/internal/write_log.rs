@@ -4,7 +4,7 @@ use crate::internal::{
     pointer::PtrExt,
     stats,
     tcell_erased::TCellErased,
-    usize_aligned::{ForcedUsizeAligned, UsizeAligned},
+    usize_aligned::ForcedUsizeAligned,
 };
 use std::{
     mem::{self, ManuallyDrop},
@@ -33,7 +33,7 @@ impl<'tcell, T> WriteEntryImpl<'tcell, T> {
 pub unsafe trait WriteEntry {}
 unsafe impl<'tcell, T> WriteEntry for WriteEntryImpl<'tcell, T> {}
 
-impl<'a> dyn WriteEntry + 'a {
+impl<'tcell> dyn WriteEntry + 'tcell {
     #[inline]
     fn tcell(&self) -> Option<&'_ TCellErased> {
         let ptr = unsafe { *self.tcell_ptr().as_ptr() };
@@ -74,17 +74,16 @@ impl<'a> dyn WriteEntry + 'a {
     #[inline]
     pub unsafe fn read<T>(&self) -> ManuallyDrop<T> {
         debug_assert!(
-            mem::size_of_val(self) == mem::size_of::<UsizeAligned<T>>() + mem::size_of::<usize>(),
+            mem::size_of_val(self) == mem::size_of::<WriteEntryImpl<'tcell, T>>(),
             "destination size error during `WriteEntry::read`"
         );
         assert!(
             mem::size_of::<T>() > 0,
             "`WriteEntry` performing a read of size 0 unexpectedly"
         );
-        let mut value: UsizeAligned<ManuallyDrop<T>> = mem::uninitialized();
-        let slice = value.as_mut();
-        self.pending().copy_to_n(slice.as_mut_ptr(), slice.len());
-        value.into_inner()
+        let downcast = &(&*(self as *const _ as *const WriteEntryImpl<'tcell, T>)).pending
+            as *const ForcedUsizeAligned<T>;
+        PtrExt::read_as::<_>(downcast)
     }
 
     #[inline]

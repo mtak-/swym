@@ -2,7 +2,7 @@ use crate::internal::{
     epoch::EpochLock, pointer::PtrExt, seq_storage, usize_aligned::UsizeAligned,
 };
 use std::{
-    mem::{self, ManuallyDrop},
+    mem::{self, ManuallyDrop, MaybeUninit},
     num::NonZeroUsize,
     ptr::NonNull,
     sync::atomic::{
@@ -34,7 +34,32 @@ impl TCellErased {
     }
 
     #[inline]
-    unsafe fn read_usize<T>(&self, ordering: Ordering) -> ManuallyDrop<T> {
+    pub unsafe fn optimistic_read_acquire<T>(&self) -> ManuallyDrop<T> {
+        // optimizes much better than slices
+        if mem::size_of::<T>() <= mem::size_of::<usize>() {
+            self.optimistic_read_usize::<T>(Acquire)
+        } else {
+            let mut a: UsizeAligned<MaybeUninit<ManuallyDrop<T>>> =
+                UsizeAligned::new(MaybeUninit::uninitialized());
+            self.load_acquire(a.as_mut());
+            a.into_inner().into_initialized()
+        }
+    }
+
+    #[inline]
+    pub unsafe fn optimistic_read_relaxed<T>(&self) -> ManuallyDrop<T> {
+        if mem::size_of::<T>() <= mem::size_of::<usize>() {
+            self.optimistic_read_usize::<T>(Relaxed)
+        } else {
+            let mut a: UsizeAligned<MaybeUninit<ManuallyDrop<T>>> =
+                UsizeAligned::new(MaybeUninit::uninitialized());
+            self.load_relaxed(a.as_mut());
+            a.into_inner().into_initialized()
+        }
+    }
+
+    #[inline]
+    unsafe fn optimistic_read_usize<T>(&self, ordering: Ordering) -> ManuallyDrop<T> {
         debug_assert!(
             mem::size_of::<T>() <= mem::size_of::<usize>(),
             "attempt to read a > sizeof(usize) type as a usized type"
@@ -42,34 +67,6 @@ impl TCellErased {
         let ptr = self.as_atomic_ptr(NonZeroUsize::new_unchecked(1));
         let a: UsizeAligned<ManuallyDrop<T>> = mem::transmute_copy(&ptr.as_ref().load(ordering));
         a.into_inner()
-    }
-
-    #[inline]
-    pub unsafe fn read_inconsistent<T>(&self) -> ManuallyDrop<T> {
-        self.read_usize::<T>(Relaxed)
-    }
-
-    #[inline]
-    pub unsafe fn read_acquire<T>(&self) -> ManuallyDrop<T> {
-        // optimizes much better than slices
-        if mem::size_of::<T>() <= mem::size_of::<usize>() {
-            self.read_usize::<T>(Acquire)
-        } else {
-            let mut a: UsizeAligned<ManuallyDrop<T>> = mem::uninitialized();
-            self.load_acquire(a.as_mut());
-            a.into_inner()
-        }
-    }
-
-    #[inline]
-    pub unsafe fn read_relaxed<T>(&self) -> ManuallyDrop<T> {
-        if mem::size_of::<T>() <= mem::size_of::<usize>() {
-            self.read_inconsistent()
-        } else {
-            let mut a: UsizeAligned<ManuallyDrop<T>> = mem::uninitialized();
-            self.load_relaxed(a.as_mut());
-            a.into_inner()
-        }
     }
 
     #[inline]
@@ -95,13 +92,17 @@ impl TCellErased {
             len > 0,
             "`store_release` does not work for zero sized types"
         );
+        debug_assert!(
+            self.current_epoch.is_locked(Relaxed),
+            "storing a value into TCellErased while not holding the lock"
+        );
         let len = NonZeroUsize::new_unchecked(len);
         seq_storage::store_nonoverlapping_release(self.as_atomic_ptr(len), src)
     }
 
     // UsizeAligned<T> is immediately _before_ TCellErased in memory
     #[inline]
-    pub unsafe fn as_atomic_ptr(&self, len: NonZeroUsize) -> NonNull<AtomicUsize> {
+    unsafe fn as_atomic_ptr(&self, len: NonZeroUsize) -> NonNull<AtomicUsize> {
         assume!(len.get() > 0);
         NonNull::from(self).cast().sub(len.get())
     }

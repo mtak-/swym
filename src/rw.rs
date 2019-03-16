@@ -67,7 +67,7 @@ impl<'tx, 'tcell> RwTxImpl<'tx, 'tcell> {
         unsafe {
             match found {
                 None => {
-                    let value = Ref::new(tcell.erased.read_acquire::<T>());
+                    let value = Ref::new(tcell.erased.optimistic_read_acquire::<T>());
                     if likely!(self.rw_valid(&tcell.erased, Acquire)) {
                         self.logs_mut().read_log.push(&tcell.erased);
                         return Ok(value);
@@ -91,7 +91,7 @@ impl<'tx, 'tcell> RwTxImpl<'tx, 'tcell> {
             && likely!(logs.write_log.contained(bloom_hash(&tcell.erased)) == Contained::No)
         {
             unsafe {
-                let value = Ref::new(tcell.erased.read_acquire::<T>());
+                let value = Ref::new(tcell.erased.optimistic_read_acquire::<T>());
                 if likely!(self.rw_valid(&tcell.erased, Acquire)) {
                     self.logs_mut().read_log.push_unchecked(&tcell.erased);
                     return Ok(value);
@@ -110,7 +110,7 @@ impl<'tx, 'tcell> RwTxImpl<'tx, 'tcell> {
         unsafe {
             match found {
                 None => {
-                    let value = Ref::new(tcell.erased.read_acquire::<T>());
+                    let value = Ref::new(tcell.erased.optimistic_read_acquire::<T>());
                     if likely!(self.rw_valid(&tcell.erased, Acquire)) {
                         return Ok(value);
                     }
@@ -131,7 +131,7 @@ impl<'tx, 'tcell> RwTxImpl<'tx, 'tcell> {
         let logs = self.logs();
         if likely!(logs.write_log.contained(bloom_hash(&tcell.erased)) == Contained::No) {
             unsafe {
-                let value = Ref::new(tcell.erased.read_acquire::<T>());
+                let value = Ref::new(tcell.erased.optimistic_read_acquire::<T>());
                 if likely!(self.rw_valid(&tcell.erased, Acquire)) {
                     return Ok(value);
                 }
@@ -154,7 +154,8 @@ impl<'tx, 'tcell> RwTxImpl<'tx, 'tcell> {
                         let logs = self.logs_mut();
                         logs.write_log.push(&tcell.erased, value, hash);
                         if mem::needs_drop::<T>() {
-                            logs.garbage.trash(tcell.erased.read_relaxed::<T>())
+                            logs.garbage
+                                .trash(tcell.erased.optimistic_read_relaxed::<T>())
                         }
                         return Ok(());
                     }
@@ -201,7 +202,7 @@ impl<'tx, 'tcell> RwTxImpl<'tx, 'tcell> {
                 logs.write_log.push_unchecked(&tcell.erased, value, hash);
                 if mem::needs_drop::<T>() {
                     logs.garbage
-                        .trash_unchecked(tcell.erased.read_relaxed::<T>())
+                        .trash_unchecked(tcell.erased.optimistic_read_relaxed::<T>())
                 }
             }
             Ok(())

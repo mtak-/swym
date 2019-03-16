@@ -130,6 +130,11 @@ impl EpochLock {
     }
 
     #[inline]
+    pub fn is_locked(&self, o: Ordering) -> bool {
+        lock_bit_set(self.0.load(o))
+    }
+
+    #[inline]
     #[must_use]
     pub fn try_lock(&self, max_expected: QuiesceEpoch, so: Ordering, fo: Ordering) -> bool {
         debug_assert!(
@@ -153,7 +158,7 @@ impl EpochLock {
     #[inline]
     pub unsafe fn unlock_as_epoch(&self, epoch: QuiesceEpoch, o: Ordering) {
         debug_assert!(
-            lock_bit_set(self.0.load(Relaxed)),
+            self.is_locked(Relaxed),
             "attempt to unlock an unlocked EpochLock"
         );
         debug_assert!(
@@ -173,13 +178,13 @@ impl EpochLock {
         // TODO: bench this?
         // we have the lock exclusively, other threads _cannot_ mutate it, so this is safe
         // x86_64 should wind up with a `bzhiq` after these shenanigans (tighter instructions)
-        let prev = *(*(&self.0 as *const AtomicStorage as *mut AtomicStorage)).get_mut();
+        let prev = *(&self.0 as *const AtomicStorage as *const NonZeroStorage);
         assume!(
-            lock_bit_set(prev),
+            lock_bit_set(prev.get()),
             "lock bit unexpectedly not set on `EpochLock`"
         );
         self.unlock_as_epoch(
-            QuiesceEpoch(NonZeroStorage::new_unchecked(toggle_lock_bit(prev))),
+            QuiesceEpoch(NonZeroStorage::new_unchecked(toggle_lock_bit(prev.get()))),
             o,
         );
     }
