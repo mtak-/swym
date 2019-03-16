@@ -6,11 +6,13 @@ pub unsafe fn _assume(b: bool) {
 
 #[inline(always)]
 pub fn _unlikely(b: bool) -> bool {
+    // not actually unsafe to say a bool is probably false
     unsafe { std::intrinsics::unlikely(b) }
 }
 
 #[inline(always)]
 pub fn _likely(b: bool) -> bool {
+    // not actually unsafe to say a bool is probably true
     unsafe { std::intrinsics::likely(b) }
 }
 

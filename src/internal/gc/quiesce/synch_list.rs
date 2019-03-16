@@ -2,7 +2,7 @@ use crate::internal::{
     alloc::FVec,
     gc::quiesce::synch::{OwnedSynch, Synch},
 };
-use std::ptr::NonNull;
+use std::{iter::TrustedLen, ptr::NonNull};
 
 /// A list of pointers to each threads Synch (sharded lock and current epoch)
 pub struct SynchList {
@@ -47,7 +47,10 @@ impl SynchList {
     }
 
     #[inline]
-    pub(super) fn iter<'a>(&'a self) -> impl Iterator<Item = &'a Synch> {
+    pub(super) fn iter<'a>(
+        &'a self,
+    ) -> impl ExactSizeIterator<Item = &'a Synch> + DoubleEndedIterator<Item = &'a Synch> + TrustedLen
+    {
         self.synchs.iter().map(|p| unsafe {
             // register requires that Synchs aren't moved or dropped until after unregister is
             // called

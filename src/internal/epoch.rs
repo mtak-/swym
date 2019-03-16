@@ -1,3 +1,29 @@
+//! swym uses 3 different types of epochs to perform synchronization: EpochClock,
+//! ThreadEpoch, and EpochLock. The common language between these three types, is the unsychronized
+//! QuiesceEpoch. Below is a rough explanation of how these three synchronization types interact.
+//!
+//! - The EpochClock is a singleton, which holds the current "time".
+//! - Each transactional memory location contains an EpochLock which holds the "time" at which the
+//!   memory location was last written if unlocked. If locked, the location is currently being
+//!   modified.
+//! - Each thread holds a ThreadEpoch which contains the "time" that the thread is currently reading
+//!   from or a sentinel "INACTIVE_EPOCH", if the thread isn't doing anything transactional.
+//!
+//! These three types interact as follows.
+//! - An inactive thread reads the current "time" from the EpochClock and stores it in its
+//!   ThreadEpoch - pinning the thread.
+//! - It then proceeds to read from transactional memory locations and check the EpochLock's "time"
+//!   to ensure that the value is not locked, and was written before the thread was pinned.
+//! - In order to write to one or more locations
+//!     - the thread acquires the locations EpochLock(s)
+//!     - writes the new values
+//!     - bumps current time on the EpochClock
+//!     - the thread then atomically unlocks the locations EpochLocks, and sets their new modified
+//!       time to the bumped EpochClock time.
+//!
+//! ThreadEpoch also plays a role in garbage collection. That is more thoroughly explained in
+//! `internal/gc.rs`
+
 use std::{
     fmt::{self, Debug, Formatter},
     mem,
@@ -12,8 +38,14 @@ type Storage = usize;
 type NonZeroStorage = NonZeroUsize;
 type AtomicStorage = AtomicUsize;
 
+/// ThreadEpoch will hold this value when not pinned. It is conveniently greater than all
+/// other epochs.
 const INACTIVE_EPOCH: Storage = !0;
+
+/// The most significant bit is used to represent whether an EpochLock is locked or not.
 const LOCK_BIT: Storage = 1 << (mem::size_of::<Storage>() as Storage * 8 - 1);
+
+/// The beginning of time is the value 1.
 const FIRST: Storage = 1;
 
 #[inline]
@@ -31,10 +63,16 @@ const fn toggle_lock_bit(e: Storage) -> Storage {
     e ^ LOCK_BIT
 }
 
+/// NonZero representation of epochs. This is assumed to never have the lock bit set unless it
+/// contains the INACTIVE_EPOCH.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct QuiesceEpoch(NonZeroStorage);
 
 impl QuiesceEpoch {
+    /// Creates a new QuiesceEpoch.
+    ///
+    /// The epoch passed in should not have it's lock bit set, unless it is the inactive epoch. It
+    /// is UB to pass in a value of 0.
     #[inline]
     unsafe fn new_unchecked(epoch: Storage) -> Self {
         debug_assert!(
@@ -48,6 +86,9 @@ impl QuiesceEpoch {
         QuiesceEpoch(NonZeroStorage::new_unchecked(epoch))
     }
 
+    /// Creates a new QuiesceEpoch. Returns None if epoch is 0, else it returns Some.
+    ///
+    /// The epoch passed in should not have it's lock bit set, unless it is the inactive epoch.
     #[inline]
     fn new(epoch: Storage) -> Option<Self> {
         debug_assert!(
@@ -61,11 +102,14 @@ impl QuiesceEpoch {
         NonZeroStorage::new(epoch).map(QuiesceEpoch)
     }
 
+    /// Returns the maximum value that a QuiesceEpoch can hold. This is useful for finding the
+    /// minimum of a set of epochs.
     #[inline]
     pub fn max_value() -> Self {
-        QuiesceEpoch::new(!0).unwrap()
+        QuiesceEpoch::new(INACTIVE_EPOCH).unwrap()
     }
 
+    /// The last epoch that is still a valid "time" (e.g. not locked).
     #[inline]
     fn end_of_time() -> Self {
         let r = QuiesceEpoch::new(!LOCK_BIT).unwrap();
@@ -76,16 +120,23 @@ impl QuiesceEpoch {
         r
     }
 
+    /// Returns true if "self" epoch can read from epochs of the "target" epoch.
+    ///
+    /// Essentially, does the target epoch come before self.
     #[inline]
     fn read_write_valid(self, target: NonZeroStorage) -> bool {
         self.0 >= target
     }
 
+    /// Returns true if "self" epoch can read from epochs of the "target" EpochLock - see above.
+    ///
+    /// If the target EpochLock is locked, this returns false.
     #[inline]
     pub fn read_write_valid_lockable(self, target: &EpochLock, o: Ordering) -> bool {
         self.read_write_valid(target.load_raw(o))
     }
 
+    /// Returns true if self is not the INACTIVE_EPOCH.
     #[inline]
     pub fn is_active(self) -> bool {
         self.0.get() != INACTIVE_EPOCH
@@ -102,6 +153,11 @@ impl QuiesceEpoch {
     }
 }
 
+/// An atomic QuiesceEpoch, where the MSB is used as a lock. It should never contain the inactive
+/// epoch.
+///
+/// This is used to protect transactional memory locations. All transactional memory locations start
+/// out in the FIRST epoch.
 pub struct EpochLock(AtomicStorage);
 
 impl Debug for EpochLock {
@@ -117,6 +173,7 @@ impl Debug for EpochLock {
 }
 
 impl EpochLock {
+    /// Creates a new EpochLock initialized to the FIRST epoch.
     #[inline]
     pub const fn first() -> Self {
         EpochLock(AtomicStorage::new(FIRST))
@@ -126,14 +183,21 @@ impl EpochLock {
     fn load_raw(&self, o: Ordering) -> NonZeroStorage {
         let value = self.0.load(o);
         debug_assert!(value != 0, "`EpochLock` unexpectedly had 0 as the `Epoch`");
+        // The only way to set the value in the EpochLock is with a QuiesceEpoch, which is always
+        // NonZero, therefore, loads will always be NonZero.
         unsafe { NonZeroStorage::new_unchecked(value) }
     }
 
+    /// Returns true if the lock is currently held.
     #[inline]
     pub fn is_locked(&self, o: Ordering) -> bool {
         lock_bit_set(self.0.load(o))
     }
 
+    /// Attempts to lock the EpochLock, returning true on success, or false if the lock is already
+    /// held, or if the lock contains an epoch greater than the max_expected epoch.
+    ///
+    /// This is allowed to fail spuriously.
     #[inline]
     #[must_use]
     pub fn try_lock(&self, max_expected: QuiesceEpoch, so: Ordering, fo: Ordering) -> bool {
@@ -154,7 +218,9 @@ impl EpochLock {
             })
     }
 
-    // UB if not locked by calling thread
+    /// Unlocks the EpochLock as the specified epoch (basically self.set(epoch)). It is required
+    /// that the calling thread hold the lock, and that the epoch passed in does not have it's lock
+    /// bit set, and is not inactive.
     #[inline]
     pub unsafe fn unlock_as_epoch(&self, epoch: QuiesceEpoch, o: Ordering) {
         debug_assert!(
@@ -172,7 +238,9 @@ impl EpochLock {
         self.0.store(epoch.0.get(), o);
     }
 
-    // UB if not locked by calling thread
+    /// Unlocks the EpochLock. It is required that the calling thread hold the lock.
+    ///
+    /// This does not modify any bit of the EpochLock except the lock bit.
     #[inline]
     pub unsafe fn unlock(&self, o: Ordering) {
         // TODO: bench this?
@@ -190,84 +258,108 @@ impl EpochLock {
     }
 }
 
+/// This holds the most recent epoch that a thread may currently be accessing, or INACTIVE_EPOCH if
+/// the thread is not currently accessing any transactional memory locations.
+///
+/// Thread's are able to read from any EpochLock whose value is <= it's ThreadEpoch.
 #[derive(Debug)]
-pub struct AtomicQuiesceEpoch(AtomicStorage);
+pub struct ThreadEpoch(AtomicStorage);
 
-impl AtomicQuiesceEpoch {
+impl ThreadEpoch {
     #[inline]
     pub fn inactive() -> Self {
-        AtomicQuiesceEpoch(AtomicStorage::new(INACTIVE_EPOCH))
+        ThreadEpoch(AtomicStorage::new(INACTIVE_EPOCH))
     }
 
+    /// Returns true if this thread might be accessing values in quiesce_epoch.
     #[inline]
     pub fn is_quiesced(&self, quiesce_epoch: QuiesceEpoch, o: Ordering) -> bool {
         self.get(o) > quiesce_epoch
     }
 
+    /// Gets the pinned epoch or returns the inactive epoch.
     #[inline]
     pub fn get(&self, o: Ordering) -> QuiesceEpoch {
+        // The only way to set the contained value is with a QuiesceEpoch, which is NonZero,
+        // therefore, loads will always be NonZero.
         unsafe { QuiesceEpoch::new_unchecked(self.0.load(o)) }
     }
 
+    /// Sets the contained epoch.
     #[inline]
     fn set(&self, value: QuiesceEpoch, o: Ordering) {
         self.0.store(value.0.get(), o)
     }
 
+    /// Yet another sentinel value used to mark a thread that is currently collecting garbage. This
+    /// epoch is considered "active" to prevent garbage collection from starting transactions, and
+    /// punt on all things reentrancy.
     #[inline]
     pub fn set_collect_epoch(&self) {
         self.set(QuiesceEpoch::end_of_time(), Release)
     }
 
+    /// Pins the ThreadEpoch to epoch.
+    ///
+    /// Requires that self is not currently pinned, epoch does not have it's lock bit set, and is
+    /// not the INACTIVE_EPOCH.
     #[inline]
     pub fn pin(&self, epoch: QuiesceEpoch, o: Ordering) {
-        debug_assert!(
-            !self.get(Relaxed).is_active(),
-            "already active AtomicQuiesceEpoch"
-        );
+        debug_assert!(!self.get(Relaxed).is_active(), "already active ThreadEpoch");
         debug_assert!(
             epoch.is_active(),
-            "cannot activate an AtomicQuiesceEpoch to the inactive state"
+            "cannot activate an ThreadEpoch to the inactive state"
         );
         debug_assert!(
             !lock_bit_set(epoch.0.get()),
-            "cannot activate an AtomicQuiesceEpoch to a locked state"
+            "cannot activate an ThreadEpoch to a locked state"
         );
         self.set(epoch, o);
     }
 
+    /// Repins the ThreadEpoch to a later epoch.
+    ///
+    /// Requires that self is currently pinned, epoch does not have it's lock bit set, is
+    /// not the INACTIVE_EPOCH, and is not an epoch earlier than the currently pinned epoch.
     #[inline]
     pub fn repin(&self, epoch: QuiesceEpoch, o: Ordering) {
         debug_assert!(
             self.get(Relaxed).is_active(),
-            "already active AtomicQuiesceEpoch"
+            "attempt to repin an inactive ThreadEpoch"
+        );
+        debug_assert!(
+            epoch >= self.get(Relaxed),
+            "attempt to repin ThreadEpoch to an earlier epoch than the currently pinned epoch."
         );
         debug_assert!(
             epoch.is_active(),
-            "cannot activate an AtomicQuiesceEpoch to the inactive state"
+            "cannot activate an ThreadEpoch to the inactive state"
         );
         debug_assert!(
             !lock_bit_set(epoch.0.get()),
-            "cannot activate an AtomicQuiesceEpoch to a locked state"
+            "cannot activate an v to a locked state"
         );
         self.set(epoch, o);
     }
 
+    /// Unpins the ThreadEpoch, putting it into the INACTIVE_EPOCH.
     #[inline]
     pub fn unpin(&self, o: Ordering) {
         debug_assert!(
             self.get(Relaxed).is_active(),
-            "attempt to deactive an already inactive AtomicQuiesceEpoch"
+            "attempt to deactive an already inactive ThreadEpochs"
         );
         self.set(QuiesceEpoch::new(INACTIVE_EPOCH).unwrap(), o)
     }
 }
 
+/// A monotonically increasing clock.
 #[derive(Debug)]
 pub struct EpochClock(AtomicStorage);
 
-// TODO: stick this in GlobalSynchList?
-pub static EPOCH_CLOCK: EpochClock = EpochClock::new();
+/// The world clock. The source of truth, and synchronization for swym. Every write transaction
+/// bumps this during a successful commit.
+pub static EPOCH_CLOCK: EpochClock = EpochClock::new(); // TODO: stick this in GlobalSynchList?
 
 impl EpochClock {
     #[inline]
@@ -275,10 +367,12 @@ impl EpochClock {
         EpochClock(AtomicStorage::new(FIRST))
     }
 
+    /// Returns the current epoch.
     #[inline]
     pub fn now(&self, o: Ordering) -> Option<QuiesceEpoch> {
         let epoch = self.0.load(o);
         if likely!(!lock_bit_set(epoch)) {
+            // See fetch and tick for justification.
             Some(unsafe { QuiesceEpoch::new_unchecked(epoch) })
         } else {
             // Program would probly have to be running for several centuries, see below.
@@ -286,7 +380,7 @@ impl EpochClock {
         }
     }
 
-    // increments the clock, and returns the previous epoch
+    /// Increments the clock, and returns the previous epoch
     #[inline]
     pub fn fetch_and_tick(&self) -> QuiesceEpoch {
         // To calculate how long overflow will take:
