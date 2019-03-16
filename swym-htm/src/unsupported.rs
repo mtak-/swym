@@ -15,12 +15,22 @@ impl BeginCode {
     pub const NESTED: Self = BeginCode(0);
 
     #[inline]
-    pub fn is_explicit(&self) -> bool {
+    pub fn is_explicit_abort(&self) -> bool {
         unsupported()
     }
 
     #[inline]
-    pub fn abort_code(&self) -> Option<AbortCode> {
+    pub fn is_retry(&self) -> bool {
+        unsupported()
+    }
+
+    #[inline]
+    pub fn is_conflict(&self) -> bool {
+        unsupported()
+    }
+
+    #[inline]
+    pub fn is_capacity(&self) -> bool {
         unsupported()
     }
 }
@@ -28,8 +38,22 @@ impl BeginCode {
 #[derive(PartialEq, Eq, Ord, PartialOrd, Copy, Clone, Debug, Hash)]
 pub struct TestCode(i8);
 
+impl TestCode {
+    #[inline]
+    pub fn in_transaction(&self) -> bool {
+        false
+    }
+}
+
 #[derive(PartialEq, Eq, Ord, PartialOrd, Copy, Clone, Debug, Hash)]
 pub struct AbortCode(i8);
+
+impl AbortCode {
+    #[inline]
+    pub fn new(code: i8) -> Self {
+        AbortCode(code)
+    }
+}
 
 #[inline]
 pub unsafe fn begin() -> BeginCode {
@@ -37,7 +61,7 @@ pub unsafe fn begin() -> BeginCode {
 }
 
 #[inline]
-pub unsafe fn abort(_: AbortCode) -> ! {
+pub unsafe fn abort() {
     unsupported()
 }
 
