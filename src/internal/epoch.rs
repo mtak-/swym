@@ -30,7 +30,7 @@ use std::{
     num::NonZeroUsize,
     sync::atomic::{
         AtomicUsize,
-        Ordering::{self, Relaxed, Release},
+        Ordering::{self, Acquire, Relaxed, Release},
     },
 };
 
@@ -132,8 +132,8 @@ impl QuiesceEpoch {
     ///
     /// If the target EpochLock is locked, this returns false.
     #[inline]
-    pub fn read_write_valid_lockable(self, target: &EpochLock, o: Ordering) -> bool {
-        self.read_write_valid(target.load_raw(o))
+    pub fn read_write_valid_lockable(self, target: &EpochLock) -> bool {
+        self.read_write_valid(target.load_raw(Relaxed))
     }
 
     /// Returns true if self is not the INACTIVE_EPOCH.
@@ -200,7 +200,7 @@ impl EpochLock {
     /// This is allowed to fail spuriously.
     #[inline]
     #[must_use]
-    pub fn try_lock(&self, max_expected: QuiesceEpoch, so: Ordering, fo: Ordering) -> bool {
+    pub fn try_lock(&self, max_expected: QuiesceEpoch) -> bool {
         debug_assert!(
             max_expected.is_active(),
             "invalid max_expected epoch sent to `EpochLock::try_lock`"
@@ -213,7 +213,12 @@ impl EpochLock {
                     "lock bit unexpectedly set on `EpochLock`"
                 );
                 self.0
-                    .compare_exchange(actual.get(), toggle_lock_bit(actual.get()), so, fo)
+                    .compare_exchange(
+                        actual.get(),
+                        toggle_lock_bit(actual.get()),
+                        Relaxed,
+                        Relaxed,
+                    )
                     .is_ok()
             })
     }
@@ -222,7 +227,7 @@ impl EpochLock {
     /// that the calling thread hold the lock, and that the epoch passed in does not have it's lock
     /// bit set, and is not inactive.
     #[inline]
-    pub unsafe fn unlock_as_epoch(&self, epoch: QuiesceEpoch, o: Ordering) {
+    pub unsafe fn unlock_publish(&self, epoch: QuiesceEpoch) {
         debug_assert!(
             self.is_locked(Relaxed),
             "attempt to unlock an unlocked EpochLock"
@@ -235,26 +240,20 @@ impl EpochLock {
             !lock_bit_set(epoch.0.get()),
             "attempt to unlock an EpochLock with a locked epoch"
         );
-        self.0.store(epoch.0.get(), o);
+        self.0.store(epoch.0.get(), Release);
     }
 
     /// Unlocks the EpochLock. It is required that the calling thread hold the lock.
     ///
     /// This does not modify any bit of the EpochLock except the lock bit.
     #[inline]
-    pub unsafe fn unlock(&self, o: Ordering) {
-        // TODO: bench this?
-        // we have the lock exclusively, other threads _cannot_ mutate it, so this is safe
-        // x86_64 should wind up with a `bzhiq` after these shenanigans (tighter instructions)
-        let prev = *(&self.0 as *const AtomicStorage as *const NonZeroStorage);
+    pub unsafe fn unlock_undo(&self) {
+        let prev = self.load_raw(Relaxed);
         assume!(
             lock_bit_set(prev.get()),
             "lock bit unexpectedly not set on `EpochLock`"
         );
-        self.unlock_as_epoch(
-            QuiesceEpoch(NonZeroStorage::new_unchecked(toggle_lock_bit(prev.get()))),
-            o,
-        );
+        self.0.store(toggle_lock_bit(prev.get()), Relaxed);
     }
 }
 
@@ -369,8 +368,8 @@ impl EpochClock {
 
     /// Returns the current epoch.
     #[inline]
-    pub fn now(&self, o: Ordering) -> Option<QuiesceEpoch> {
-        let epoch = self.0.load(o);
+    pub fn now(&self) -> Option<QuiesceEpoch> {
+        let epoch = self.0.load(Acquire);
         if cfg!(target_pointer_width = "64") || likely!(!lock_bit_set(epoch)) {
             // See fetch and tick for justification.
             unsafe {

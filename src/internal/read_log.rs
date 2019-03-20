@@ -4,7 +4,7 @@
 //! checking that the reads are still valid (validate_reads).
 
 use crate::internal::{alloc::FVec, epoch::QuiesceEpoch, stats, tcell_erased::TCellErased};
-use std::{num::NonZeroUsize, sync::atomic::Ordering::Relaxed};
+use std::num::NonZeroUsize;
 
 const READ_CAPACITY: usize = 1024;
 
@@ -70,8 +70,7 @@ impl<'tcell> ReadLog<'tcell> {
     #[inline]
     pub fn validate_reads(&self, pin_epoch: QuiesceEpoch) -> bool {
         for logged_read in self.iter() {
-            if unlikely!(!pin_epoch.read_write_valid_lockable(&logged_read.current_epoch, Relaxed))
-            {
+            if unlikely!(!pin_epoch.read_write_valid_lockable(&logged_read.current_epoch)) {
                 return false;
             }
         }

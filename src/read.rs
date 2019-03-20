@@ -47,13 +47,14 @@ impl<'tcell> Read<'tcell> for ReadTx<'tcell> {
                 let value = Ref::new(tcell.erased.optimistic_read_acquire::<T>());
                 if likely!(self
                     .pin_epoch()
-                    .read_write_valid_lockable(&tcell.erased.current_epoch, Acquire))
+                    .read_write_valid_lockable(&tcell.erased.current_epoch))
                 {
                     Ok(value)
                 } else {
                     Err(Error::RETRY)
                 }
             } else {
+                // If the type is zero sized, there's no need to any synchronization.
                 Ok(Ref::new(mem::zeroed()))
             }
         }

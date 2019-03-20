@@ -53,9 +53,9 @@ impl<'tx, 'tcell> RwTxImpl<'tx, 'tcell> {
     }
 
     #[inline]
-    fn rw_valid(&self, erased: &TCellErased, o: AtomicOrdering) -> bool {
+    fn rw_valid(&self, erased: &TCellErased) -> bool {
         self.pin_epoch()
-            .read_write_valid_lockable(&erased.current_epoch, o)
+            .read_write_valid_lockable(&erased.current_epoch)
     }
 
     #[inline(never)]
@@ -67,14 +67,14 @@ impl<'tx, 'tcell> RwTxImpl<'tx, 'tcell> {
             match found {
                 None => {
                     let value = Ref::new(tcell.erased.optimistic_read_acquire::<T>());
-                    if likely!(self.rw_valid(&tcell.erased, Acquire)) {
+                    if likely!(self.rw_valid(&tcell.erased)) {
                         self.logs_mut().read_log.push(&tcell.erased);
                         return Ok(value);
                     }
                 }
                 Some(entry) => {
                     let value = Ref::new(entry.read::<T>());
-                    if likely!(self.rw_valid(&tcell.erased, Relaxed)) {
+                    if likely!(self.rw_valid(&tcell.erased)) {
                         return Ok(value);
                     }
                 }
@@ -91,7 +91,7 @@ impl<'tx, 'tcell> RwTxImpl<'tx, 'tcell> {
         {
             unsafe {
                 let value = Ref::new(tcell.erased.optimistic_read_acquire::<T>());
-                if likely!(self.rw_valid(&tcell.erased, Acquire)) {
+                if likely!(self.rw_valid(&tcell.erased)) {
                     self.logs_mut().read_log.push_unchecked(&tcell.erased);
                     return Ok(value);
                 }
@@ -110,13 +110,13 @@ impl<'tx, 'tcell> RwTxImpl<'tx, 'tcell> {
             match found {
                 None => {
                     let value = Ref::new(tcell.erased.optimistic_read_acquire::<T>());
-                    if likely!(self.rw_valid(&tcell.erased, Acquire)) {
+                    if likely!(self.rw_valid(&tcell.erased)) {
                         return Ok(value);
                     }
                 }
                 Some(entry) => {
                     let value = Ref::new(entry.read::<T>());
-                    if likely!(self.rw_valid(&tcell.erased, Relaxed)) {
+                    if likely!(self.rw_valid(&tcell.erased)) {
                         return Ok(value);
                     }
                 }
@@ -131,7 +131,7 @@ impl<'tx, 'tcell> RwTxImpl<'tx, 'tcell> {
         if likely!(logs.write_log.contained(bloom_hash(&tcell.erased)) == Contained::No) {
             unsafe {
                 let value = Ref::new(tcell.erased.optimistic_read_acquire::<T>());
-                if likely!(self.rw_valid(&tcell.erased, Acquire)) {
+                if likely!(self.rw_valid(&tcell.erased)) {
                     return Ok(value);
                 }
             }
@@ -149,7 +149,7 @@ impl<'tx, 'tcell> RwTxImpl<'tx, 'tcell> {
         unsafe {
             match self.logs_mut().write_log.entry(&tcell.erased) {
                 Entry::Vacant { write_log: _, hash } => {
-                    if likely!(self.rw_valid(&tcell.erased, Relaxed)) {
+                    if likely!(self.rw_valid(&tcell.erased)) {
                         let logs = self.logs_mut();
                         logs.write_log.push(&tcell.erased, value, hash);
                         if mem::needs_drop::<T>() {
@@ -194,7 +194,7 @@ impl<'tx, 'tcell> RwTxImpl<'tx, 'tcell> {
         if likely!(!logs.write_log.next_push_allocates::<V>())
             && (!mem::needs_drop::<T>() || likely!(!logs.garbage.next_trash_allocates::<T>()))
             && likely!(logs.write_log.contained(hash) == Contained::No)
-            && likely!(self.rw_valid(&tcell.erased, Relaxed))
+            && likely!(self.rw_valid(&tcell.erased))
         {
             let logs = self.logs_mut();
             unsafe {

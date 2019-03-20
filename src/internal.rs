@@ -9,7 +9,6 @@ pub mod frw_lock;
 pub mod gc;
 pub mod pointer;
 pub mod read_log;
-pub mod seq_storage;
 pub mod stats;
 pub mod tcell_erased;
 pub mod thread;

@@ -18,7 +18,7 @@ use std::{
     ops::{Deref, DerefMut},
     process,
     ptr::{self, NonNull},
-    sync::atomic::Ordering::{Acquire, Release},
+    sync::atomic::Ordering::Release,
 };
 
 /// Intrusive reference counted thread local data.
@@ -320,7 +320,7 @@ impl<'tcell> Pin<'tcell> {
     #[inline]
     fn try_new(thread: &'tcell Thread) -> Option<Pin<'tcell>> {
         if likely!(!thread.is_pinned()) {
-            let now = EPOCH_CLOCK.now(Acquire);
+            let now = EPOCH_CLOCK.now();
             if let Some(now) = now {
                 thread.synch.pin(now, Release);
                 Some(Pin {
@@ -339,7 +339,7 @@ impl<'tcell> Pin<'tcell> {
 
     #[inline]
     fn repin(&mut self) {
-        let now = EPOCH_CLOCK.now(Acquire);
+        let now = EPOCH_CLOCK.now();
         if let Some(now) = now {
             self.synch().repin(now, Release);
         } else {

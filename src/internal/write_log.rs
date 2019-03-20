@@ -11,7 +11,7 @@ use std::{
     num::NonZeroUsize,
     ptr::{self, NonNull},
     raw::TraitObject,
-    sync::atomic::Ordering::{Acquire, Relaxed, Release},
+    sync::atomic::Ordering::Release,
 };
 
 #[repr(C)]
@@ -94,7 +94,7 @@ impl<'tcell> dyn WriteEntry + 'tcell {
     #[must_use]
     pub fn try_lock(&self, pin_epoch: QuiesceEpoch) -> bool {
         match self.tcell() {
-            Some(tcell) => tcell.current_epoch.try_lock(pin_epoch, Acquire, Relaxed),
+            Some(tcell) => tcell.current_epoch.try_lock(pin_epoch),
             None => true,
         }
     }
@@ -102,7 +102,7 @@ impl<'tcell> dyn WriteEntry + 'tcell {
     #[inline]
     pub unsafe fn unlock(&self) {
         match self.tcell() {
-            Some(tcell) => tcell.current_epoch.unlock(Release),
+            Some(tcell) => tcell.current_epoch.unlock_undo(),
             None => {}
         }
     }
@@ -121,8 +121,8 @@ impl<'tcell> dyn WriteEntry + 'tcell {
                     len > 0,
                     "`WriteEntry` performing a write of size 0 unexpectedly"
                 );
-                let src = std::slice::from_raw_parts(self.pending().as_ptr(), len);
-                tcell.store_release(src)
+                self.pending()
+                    .copy_to_n(NonNull::from(*tcell).cast().sub(len), len);
             }
             None => {}
         }
@@ -131,7 +131,7 @@ impl<'tcell> dyn WriteEntry + 'tcell {
     #[inline]
     pub unsafe fn publish(&self, publish_epoch: QuiesceEpoch) {
         match self.tcell() {
-            Some(tcell) => tcell.current_epoch.unlock_as_epoch(publish_epoch, Release),
+            Some(tcell) => tcell.current_epoch.unlock_publish(publish_epoch),
             None => {}
         }
     }
@@ -338,6 +338,7 @@ impl<'tcell> WriteLog<'tcell> {
 
     #[inline]
     pub unsafe fn perform_writes(&self) {
+        std::sync::atomic::fence(Release);
         for entry in &self.data {
             entry.perform_write();
         }
