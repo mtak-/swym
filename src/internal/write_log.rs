@@ -229,7 +229,9 @@ impl<'tcell> WriteLog<'tcell> {
             .iter_mut()
             .find(|entry| entry.is_dest_tcell(dest_tcell))
         {
-            // TODO: borrow checker is wrong, polonius accepts this without mem::transmute
+            // TODO: Borrow checker is a little off here. Without the transmute, the code does not
+            // compile. But, replacing either branch's return with `unimplemented` compiles.
+            // polonius would fix this.
             Some(entry) => {
                 stats::bloom_success_slow();
                 stats::double_write();

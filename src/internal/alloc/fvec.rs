@@ -12,6 +12,8 @@ use std::{
     ptr::{self, NonNull},
 };
 
+const START_SIZE: NonZeroUsize = unsafe { NonZeroUsize::new_unchecked(1024) };
+
 #[repr(C)]
 pub struct FVec<T, A = DefaultAlloc>
 where
@@ -27,7 +29,7 @@ where
 unsafe impl<T: Send, A: Alloc + Send> Send for FVec<T, A> {}
 unsafe impl<T: Sync, A: Alloc + Sync> Sync for FVec<T, A> {}
 
-unsafe impl<#[may_dangle] T, A: Alloc> Drop for FVec<T, A> {
+impl<T, A: Alloc> Drop for FVec<T, A> {
     #[inline]
     fn drop(&mut self) {
         self.validate();
@@ -620,13 +622,7 @@ pub struct DrainWhile<'a, T, F: FnMut(&mut T) -> bool, A: Alloc> {
     f:   F,
 }
 
-unsafe impl<
-        'a,
-        #[may_dangle] T: 'a,
-        #[may_dangle] F: FnMut(&mut T) -> bool,
-        #[may_dangle] A: 'a + Alloc,
-    > Drop for DrainWhile<'a, T, F, A>
-{
+impl<'a, T: 'a, F: FnMut(&mut T) -> bool, A: 'a + Alloc> Drop for DrainWhile<'a, T, F, A> {
     #[inline]
     fn drop(&mut self) {
         self.v.validate();
@@ -678,7 +674,7 @@ pub struct IntoIter<T, A: Alloc> {
     phantom:   PhantomData<T>,
 }
 
-unsafe impl<#[may_dangle] T, A: Alloc> Drop for IntoIter<T, A> {
+impl<T, A: Alloc> Drop for IntoIter<T, A> {
     #[inline]
     fn drop(&mut self) {
         let mut cur = self.cur;
@@ -749,8 +745,6 @@ impl<T, A: Alloc> ExactSizeIterator for IntoIter<T, A> {
 }
 
 unsafe impl<T, A: Alloc> TrustedLen for IntoIter<T, A> {}
-
-const START_SIZE: NonZeroUsize = unsafe { NonZeroUsize::new_unchecked(1024) };
 
 // used by tests
 #[allow(unused)]

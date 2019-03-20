@@ -35,13 +35,13 @@ impl TCellErased {
 
     #[inline]
     pub unsafe fn optimistic_read_acquire<T>(&self) -> ManuallyDrop<T> {
-        // optimizes much better than slices
         if mem::size_of::<T>() <= mem::size_of::<usize>() {
+            // optimizes much better than slices
             self.optimistic_read_usize::<T>(Acquire)
         } else {
             let mut a: UsizeAligned<MaybeUninit<ManuallyDrop<T>>> =
                 UsizeAligned::new(MaybeUninit::uninitialized());
-            self.load_acquire(a.as_mut());
+            self.load_acquire(a.as_mut_slice());
             a.into_inner().into_initialized()
         }
     }
@@ -49,18 +49,23 @@ impl TCellErased {
     #[inline]
     pub unsafe fn optimistic_read_relaxed<T>(&self) -> ManuallyDrop<T> {
         if mem::size_of::<T>() <= mem::size_of::<usize>() {
+            // optimizes much better than slices
             self.optimistic_read_usize::<T>(Relaxed)
         } else {
             let mut a: UsizeAligned<MaybeUninit<ManuallyDrop<T>>> =
                 UsizeAligned::new(MaybeUninit::uninitialized());
-            self.load_relaxed(a.as_mut());
+            self.load_relaxed(a.as_mut_slice());
             a.into_inner().into_initialized()
         }
     }
 
     #[inline]
     unsafe fn optimistic_read_usize<T>(&self, ordering: Ordering) -> ManuallyDrop<T> {
-        debug_assert!(
+        assert!(
+            mem::size_of::<T>() != 0,
+            "attempt to read a ZST type as a usized type"
+        );
+        assert!(
             mem::size_of::<T>() <= mem::size_of::<usize>(),
             "attempt to read a > sizeof(usize) type as a usized type"
         );
@@ -103,7 +108,6 @@ impl TCellErased {
     // UsizeAligned<T> is immediately _before_ TCellErased in memory
     #[inline]
     unsafe fn as_atomic_ptr(&self, len: NonZeroUsize) -> NonNull<AtomicUsize> {
-        assume!(len.get() > 0);
         NonNull::from(self).cast().sub(len.get())
     }
 }

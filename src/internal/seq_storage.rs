@@ -1,3 +1,9 @@
+//! Every TCell has some a value inside of it with seqlock/speculative style concurrency.
+//!
+//! These are the "primitive" operations for storing/loading something speculatively.
+//!
+//! TODO: When this https://github.com/rust-lang/rust/pull/59155 is merged, this file can probly be deleted.
+
 use crate::internal::pointer::PtrExt;
 use std::{
     num::NonZeroUsize,

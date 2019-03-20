@@ -1,5 +1,5 @@
 use std::{
-    mem,
+    mem::{self, MaybeUninit},
     num::NonZeroUsize,
     ops::{Deref, DerefMut},
 };
@@ -26,13 +26,16 @@ impl<T> UsizeAligned<T> {
     }
 
     #[inline]
-    pub const unsafe fn len() -> NonZeroUsize {
-        NonZeroUsize::new_unchecked(mem::size_of::<Self>() / mem::size_of::<usize>())
+    pub fn len() -> NonZeroUsize {
+        NonZeroUsize::new(mem::size_of::<Self>() / mem::size_of::<usize>())
+            .expect("can't call len on zero sized UsizeAligned")
     }
+}
 
+impl<T> UsizeAligned<MaybeUninit<T>> {
     #[inline]
-    pub unsafe fn as_mut(&mut self) -> &mut [usize] {
-        std::slice::from_raw_parts_mut(self as *mut _ as _, UsizeAligned::<T>::len().get())
+    pub unsafe fn as_mut_slice(&mut self) -> &mut [usize] {
+        std::slice::from_raw_parts_mut(self.as_mut_ptr() as _, UsizeAligned::<T>::len().get())
     }
 }
 

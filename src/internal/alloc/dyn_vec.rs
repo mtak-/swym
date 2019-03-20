@@ -22,7 +22,7 @@ pub struct DynVec<T: ?Sized, A: Alloc = DefaultAlloc> {
     phantom: PhantomData<T>,
 }
 
-unsafe impl<#[may_dangle] T: ?Sized, A: Alloc> Drop for DynVec<T, A> {
+impl<T: ?Sized, A: Alloc> Drop for DynVec<T, A> {
     fn drop(&mut self) {
         self.clear()
     }

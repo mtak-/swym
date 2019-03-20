@@ -295,7 +295,7 @@ impl<T, F: FnOnce(T)> Drop for After<T, F> {
 
 impl<T, F: FnOnce(T)> After<T, F> {
     #[inline]
-    const fn new(t: T, f: F) -> Self {
+    fn new(t: T, f: F) -> Self {
         After {
             t: ManuallyDrop::new(t),
             f: ManuallyDrop::new(f),
