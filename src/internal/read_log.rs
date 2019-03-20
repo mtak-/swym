@@ -1,3 +1,8 @@
+//! ReadLog contains borrows of `TCell`'s that have been read from during a transaction.
+//!
+//! The only meaningful operations are filtering out writes from the ReadLog (see thread.rs), and
+//! checking that the reads are still valid (validate_reads).
+
 use crate::internal::{alloc::FVec, epoch::QuiesceEpoch, stats, tcell_erased::TCellErased};
 use std::{num::NonZeroUsize, sync::atomic::Ordering::Relaxed};
 

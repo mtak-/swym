@@ -34,15 +34,7 @@ pub unsafe trait WriteEntry {}
 unsafe impl<'tcell, T> WriteEntry for WriteEntryImpl<'tcell, T> {}
 
 impl<'tcell> dyn WriteEntry + 'tcell {
-    #[inline]
-    fn tcell(&self) -> Option<&'_ TCellErased> {
-        let ptr = unsafe { *self.tcell_ptr().as_ptr() };
-        likely!(ptr.is_some());
-        ptr
-    }
-
-    #[inline]
-    fn tcell_ptr(&self) -> NonNull<Option<&'_ TCellErased>> {
+    fn data_ptr(&self) -> NonNull<usize> {
         unsafe {
             let raw: TraitObject = mem::transmute::<&Self, _>(self);
             NonNull::new_unchecked(raw.data as *mut _)
@@ -50,8 +42,20 @@ impl<'tcell> dyn WriteEntry + 'tcell {
     }
 
     #[inline]
+    fn tcell(&self) -> &'_ Option<&'_ TCellErased> {
+        let this = self.data_ptr();
+        unsafe { &*(this.as_ptr() as *mut _ as *const _) }
+    }
+
+    #[inline]
+    fn tcell_mut(&mut self) -> &'_ mut Option<&'tcell TCellErased> {
+        let this = self.data_ptr();
+        unsafe { &mut *(this.as_ptr() as *mut _) }
+    }
+
+    #[inline]
     fn pending(&self) -> NonNull<usize> {
-        unsafe { self.tcell_ptr().add(1).cast() }
+        unsafe { self.data_ptr().add(1).cast() }
     }
 
     #[inline]
@@ -60,13 +64,13 @@ impl<'tcell> dyn WriteEntry + 'tcell {
             self.tcell().is_some(),
             "unexpectedly deactivating an inactive write log entry"
         );
-        unsafe { *self.tcell_ptr().as_mut() = None }
+        *self.tcell_mut() = None
     }
 
     #[inline]
     pub fn is_dest_tcell(&self, v: &TCellErased) -> bool {
         match self.tcell() {
-            Some(tcell) => ptr::eq(tcell, v),
+            Some(tcell) => ptr::eq(*tcell, v),
             None => false,
         }
     }

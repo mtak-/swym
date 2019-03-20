@@ -469,7 +469,7 @@ mod test {
 
     impl<T: 'static, F: FnOnce(T) + 'static> CustomUndo<T, F> {
         #[inline]
-        const fn new(value: T, undo: F) -> Self {
+        fn new(value: T, undo: F) -> Self {
             CustomUndo {
                 value: ManuallyDrop::new(value),
                 undo:  ManuallyDrop::new(undo),

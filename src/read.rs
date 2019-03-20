@@ -3,12 +3,14 @@ use crate::{
     tcell::{Ref, TCell},
     tx::{Borrow, Error, Ordering, Read},
 };
-use std::{marker::PhantomData, mem, sync::atomic::Ordering::Acquire};
+use std::{marker::PhantomData, mem};
 
 /// A read only transaction.
-//
-// No instances of this type are ever created. References to values of this type are created by
-// transmuting QuiesceEpoch's.
+///
+/// No instances of this type are ever created. References to values of this type are created by
+/// transmuting QuiesceEpoch's.
+///
+/// The lifetime contravariance allows conversions of ReadTx<'a> into ReadTx<'static>.
 pub struct ReadTx<'tcell>(PhantomData<fn(&'tcell ())>);
 impl<'tcell> !Send for ReadTx<'tcell> {}
 impl<'tcell> !Sync for ReadTx<'tcell> {}
@@ -18,14 +20,15 @@ impl<'tcell> ReadTx<'tcell> {
     pub(crate) fn new<'tx>(pin: &'tx mut Pin<'tcell>) -> &'tx Self {
         assert!(mem::align_of::<Self>() == 1, "unsafe alignment on ReadTx");
         // we smuggle the pinned epoch through as a reference
+        // QuiesceEpoch is NonZero
         let pin_epoch: QuiesceEpoch = pin.pin_epoch();
-        unsafe { mem::transmute(pin_epoch) }
+        unsafe { mem::transmute::<QuiesceEpoch, &'tx Self>(pin_epoch) }
     }
 
     #[inline]
     fn pin_epoch(&self) -> QuiesceEpoch {
         // convert the reference back into the smuggled pinned epoch
-        unsafe { mem::transmute(self) }
+        unsafe { mem::transmute::<&Self, _>(self) }
     }
 }
 

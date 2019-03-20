@@ -371,9 +371,15 @@ impl EpochClock {
     #[inline]
     pub fn now(&self, o: Ordering) -> Option<QuiesceEpoch> {
         let epoch = self.0.load(o);
-        if likely!(!lock_bit_set(epoch)) {
+        if cfg!(target_pointer_width = "64") || likely!(!lock_bit_set(epoch)) {
             // See fetch and tick for justification.
-            Some(unsafe { QuiesceEpoch::new_unchecked(epoch) })
+            unsafe {
+                assume!(
+                    !lock_bit_set(epoch),
+                    "EpochClock overflowed into the lock bit"
+                );
+                Some(QuiesceEpoch::new_unchecked(epoch))
+            }
         } else {
             // Program would probly have to be running for several centuries, see below.
             None
@@ -395,6 +401,9 @@ impl EpochClock {
         // "now" checking for a set lock bit and returning None. Relies on us knowing that Rw
         // transactions' commit is the only thing that calls fetch_and_tick, and both Read,
         // and Rw transactions call now, before starting.
+        //
+        // NOTE: actually on 64 bit platforms we just assume overflowing into the lock bit is
+        // impossible.
         let result = self.0.fetch_add(1, Release);
 
         // Technically, this can wrap to 0 making this UB.

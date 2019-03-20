@@ -2,7 +2,7 @@
 //! https://www.cs.tau.ac.il/~shanir/nir-pubs-web/Papers/Transactional_Locking.pdf
 //!
 //! The main difference is the addition of epoch based reclamation.
-//! Another sublte difference is a change to when the global clock is bumped. By doing it after
+//! Another subtle difference is a change to when the global clock is bumped. By doing it after
 //! TCells have had their value updated, but before releasing their locks, we can simplify reads.
 //! Reads don't have to read the per object epoch _before_ and after loading the value from shared
 //! memory. They only have to read the per object epoch after loading the value.
@@ -21,7 +21,6 @@ use std::{
     marker::PhantomData,
     mem::{self, ManuallyDrop},
     ptr,
-    sync::atomic::Ordering::{self as AtomicOrdering, Acquire, Relaxed},
 };
 
 #[derive(Debug)]
@@ -245,6 +244,7 @@ impl<'tcell> tx::Read<'tcell> for RwTx<'tcell> {
                 Ordering::Read => self.as_impl().borrow_unlogged_impl(tcell),
             }
         } else {
+            // If the type is zero sized, there's no need to any synchronization.
             Ok(Ref::new(unsafe { mem::zeroed() }))
         }
     }
@@ -265,6 +265,18 @@ impl<'tcell> Write<'tcell> for RwTx<'tcell> {
         if mem::size_of::<T>() != 0 {
             self.as_impl().set_impl(tcell, value)
         } else {
+            // publication/privatization is not public (yet?). so this todo should never fire
+            #[inline]
+            fn assert_not_tcell_lifetime<T: _TValue<U>, U: 'static>(value: T) {
+                assert!(
+                    !T::REQUEST_TCELL_LIFETIME,
+                    "TODO: publication/privatization of zero sized types"
+                );
+                drop(value)
+            }
+            assert_not_tcell_lifetime(value);
+
+            // If the type is zero sized, there's no need to any synchronization.
             Ok(())
         }
     }
