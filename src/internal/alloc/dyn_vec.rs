@@ -291,7 +291,8 @@ impl<'a, T: ?Sized> Iterator for Iter<'a, T> {
         if likely!(self.cur < self.end) {
             unsafe {
                 let vtable = self.cur.read_aligned() as *mut ();
-                let data = self.cur.add(1).as_ptr() as *mut ();
+                let data_non_null = self.cur.add(1);
+                let data = data_non_null.as_ptr() as *mut ();
                 let result = {
                     let raw = TraitObject { data, vtable };
                     *mem::transmute::<&TraitObject, &&T>(&raw)
@@ -301,7 +302,7 @@ impl<'a, T: ?Sized> Iterator for Iter<'a, T> {
                     size % mem::size_of::<usize>() == 0,
                     "invalid size detected for dyn T"
                 );
-                self.cur = self.cur.add(1 + size / mem::size_of::<usize>());
+                self.cur = data_non_null.add(size / mem::size_of::<usize>());
                 Some(result)
             }
         } else {
@@ -325,7 +326,8 @@ impl<'a, T: ?Sized> Iterator for IterMut<'a, T> {
         if likely!(self.cur < self.end) {
             unsafe {
                 let vtable = self.cur.read_aligned() as *mut ();
-                let data = self.cur.add(1).as_ptr() as *mut ();
+                let data_non_null = self.cur.add(1);
+                let data = data_non_null.as_ptr() as *mut ();
                 let result = {
                     let raw = TraitObject { data, vtable };
                     &mut **mem::transmute::<*const TraitObject, *const *mut T>(&raw)
@@ -335,7 +337,7 @@ impl<'a, T: ?Sized> Iterator for IterMut<'a, T> {
                     size % mem::size_of::<usize>() == 0,
                     "invalid size detected for dyn T"
                 );
-                self.cur = self.cur.add(1 + size / mem::size_of::<usize>());
+                self.cur = data_non_null.add(size / mem::size_of::<usize>());
                 Some(DynElemMut { value: result })
             }
         } else {
@@ -400,7 +402,8 @@ impl<'a, T: ?Sized> Iterator for Drain<'a, T> {
         if likely!(self.cur < self.end) {
             unsafe {
                 let vtable = self.cur.read_aligned() as *mut ();
-                let data = self.cur.add(1).as_ptr() as *mut ();
+                let data_non_null = self.cur.add(1);
+                let data = data_non_null.as_ptr() as *mut ();
                 let value = {
                     let raw = TraitObject { data, vtable };
                     &mut **mem::transmute::<*const TraitObject, *const *mut T>(&raw)
@@ -410,7 +413,7 @@ impl<'a, T: ?Sized> Iterator for Drain<'a, T> {
                     size % mem::size_of::<usize>() == 0,
                     "invalid size detected for dyn T"
                 );
-                self.cur = self.cur.add(1 + size / mem::size_of::<usize>());
+                self.cur = data_non_null.add(size / mem::size_of::<usize>());
                 Some(Owned { value })
             }
         } else {

@@ -158,6 +158,7 @@ impl<T> TCell<T> {
     /// ```
     #[inline]
     pub fn borrow_mut(&mut self) -> &mut T {
+        // safe due to mutable borrow
         unsafe { &mut *self.value.get() }
     }
 
@@ -230,6 +231,8 @@ impl<T: Copy> TCell<T> {
         tx: &impl Read<'tcell>,
         ordering: Ordering,
     ) -> Result<T, Error> {
+        // Calling borrow on a non Borrow type is Ok if all you do is Copy the value because this
+        // cannot cause any internal mutation to happen.
         let this = unsafe { &*(self as *const Self as *const TCell<AssertBorrow<T>>) };
         this.borrow(tx, ordering).map(|v| **v)
     }

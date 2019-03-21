@@ -35,6 +35,11 @@ unsafe impl<'tcell, T> WriteEntry for WriteEntryImpl<'tcell, T> {}
 
 impl<'tcell> dyn WriteEntry + 'tcell {
     fn data_ptr(&self) -> NonNull<usize> {
+        debug_assert!(
+            mem::align_of_val(self) >= mem::align_of::<NonNull<usize>>(),
+            "incorrect alignment on data_ptr"
+        );
+        // obtains a thin pointer to self
         unsafe {
             let raw: TraitObject = mem::transmute::<&Self, _>(self);
             NonNull::new_unchecked(raw.data as *mut _)
