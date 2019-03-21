@@ -42,6 +42,11 @@ impl<'tcell> ReadLog<'tcell> {
     }
 
     #[inline]
+    pub fn filter_in_place(&mut self, filter: impl FnMut(&mut &'tcell TCellErased) -> bool) {
+        self.data.filter_in_place(filter)
+    }
+
+    #[inline]
     pub fn clear(&mut self) {
         stats::read_size(self.len());
         self.data.clear()
@@ -50,16 +55,6 @@ impl<'tcell> ReadLog<'tcell> {
     #[inline]
     pub fn len(&self) -> usize {
         self.data.len()
-    }
-
-    #[inline]
-    pub unsafe fn get_unchecked(&self, i: usize) -> &TCellErased {
-        self.data.get_unchecked(i)
-    }
-
-    #[inline]
-    pub unsafe fn swap_erase_unchecked(&mut self, i: usize) {
-        self.data.swap_erase_unchecked(i)
     }
 
     #[inline]

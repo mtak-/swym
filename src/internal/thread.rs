@@ -91,24 +91,12 @@ impl<'tcell> Logs<'tcell> {
     #[inline]
     pub fn remove_writes_from_reads(&mut self) {
         let mut count = 0;
-        unsafe {
-            for i in (0..self.read_log.len()).rev() {
-                debug_assert!(i < self.read_log.len(), "bug in `remove_writes_from_reads`");
-                if self
-                    .write_log
-                    .find(self.read_log.get_unchecked(i))
-                    .is_some()
-                {
-                    let l = self.read_log.len();
-                    self.read_log.swap_erase_unchecked(i);
-                    count += 1;
-                    debug_assert!(
-                        l == self.read_log.len() + 1,
-                        "bug in `remove_writes_from_reads`"
-                    );
-                }
-            }
-        }
+
+        let write_log = &mut self.write_log;
+        self.read_log.filter_in_place(|src| {
+            count += 1;
+            write_log.find(src).is_none()
+        });
         stats::unnecessary_read_size(count)
     }
 

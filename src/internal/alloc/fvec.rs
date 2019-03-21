@@ -197,6 +197,24 @@ impl<T, A: Alloc> FVec<T, A> {
     }
 
     #[inline]
+    pub fn filter_in_place(&mut self, mut filter: impl FnMut(&mut T) -> bool) {
+        // TODO: is there room to optimize this?
+        let mut end = self.end;
+        let mut new_end = end;
+        let begin = self.begin;
+        unsafe {
+            while end != begin {
+                end = end.sub(1);
+                if unlikely!(!filter(end.as_mut())) {
+                    new_end = new_end.sub(1);
+                    ptr::copy(new_end.as_ptr(), end.as_ptr(), 1);
+                }
+            }
+        }
+        self.end = new_end;
+    }
+
+    #[inline]
     pub unsafe fn swap_erase_unchecked(&mut self, index: usize) {
         debug_assert!(
             index < self.len(),
