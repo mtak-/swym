@@ -11,7 +11,7 @@ use std::{
     num::NonZeroUsize,
     ptr::{self, NonNull},
     raw::TraitObject,
-    sync::atomic::Ordering::Release,
+    sync::atomic::{self, Ordering::Release},
 };
 
 #[repr(C)]
@@ -343,7 +343,7 @@ impl<'tcell> WriteLog<'tcell> {
 
     #[inline]
     pub unsafe fn perform_writes(&self) {
-        std::sync::atomic::fence(Release);
+        atomic::fence(Release);
         for entry in &self.data {
             entry.perform_write();
         }

@@ -53,6 +53,7 @@ use std::{
     mem::ManuallyDrop,
     ops::{Deref, DerefMut},
     ptr,
+    sync::atomic::{self, Ordering::Acquire},
 };
 
 /// A transactional memory location.
@@ -172,6 +173,18 @@ impl<T> TCell<T> {
             tx:    transaction,
             tcell: self,
         }
+    }
+
+    #[inline]
+    pub unsafe fn optimistic_read_acquire(&self) -> ManuallyDrop<T> {
+        let result = self.optimistic_read_relaxed();
+        atomic::fence(Acquire);
+        result
+    }
+
+    #[inline]
+    pub(crate) unsafe fn optimistic_read_relaxed(&self) -> ManuallyDrop<T> {
+        ptr::read_volatile(self.value.get() as _)
     }
 }
 

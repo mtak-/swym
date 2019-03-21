@@ -1,8 +1,4 @@
-use std::{
-    mem,
-    num::NonZeroUsize,
-    ops::{Deref, DerefMut},
-};
+use std::ops::{Deref, DerefMut};
 
 #[cfg(target_pointer_width = "64")]
 #[repr(align(8))]
@@ -23,12 +19,6 @@ impl<T> UsizeAligned<T> {
     #[inline]
     pub fn into_inner(self) -> T {
         self.0
-    }
-
-    #[inline]
-    pub fn len() -> NonZeroUsize {
-        NonZeroUsize::new(mem::size_of::<Self>() / mem::size_of::<usize>())
-            .expect("can't call len on zero sized UsizeAligned")
     }
 }
 
