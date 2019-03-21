@@ -40,10 +40,7 @@ impl SynchList {
             "failed to find thread in the global thread list"
         );
 
-        position.map(|position| unsafe {
-            // safe since self.synchs has not been modified
-            self.synchs.rswap_erase_unchecked(position);
-        });
+        position.map(|position| self.synchs.rswap_erase(position));
     }
 
     #[inline]

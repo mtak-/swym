@@ -1,3 +1,5 @@
+//! An contiguous container of Dynamically Sized Types.
+
 use crate::internal::{
     alloc::{fvec::FVec, DefaultAlloc},
     pointer::PtrExt,
@@ -13,7 +15,7 @@ use std::{
     raw::TraitObject,
 };
 
-const START_CAPACITY: NonZeroUsize = unsafe { NonZeroUsize::new_unchecked(1024) };
+const START_CAPACITY: usize = 1024;
 
 #[repr(C)]
 #[derive(Debug)]
@@ -42,7 +44,10 @@ impl<T: ?Sized, A: Alloc> DynVec<T, A> {
     where
         A: Default,
     {
-        DynVec::with_alloc_and_capacity(A::default(), START_CAPACITY)
+        DynVec::with_alloc_and_capacity(
+            A::default(),
+            NonZeroUsize::new(START_CAPACITY).expect("zero start capacities unsupported"),
+        )
     }
 
     #[inline]
@@ -62,21 +67,22 @@ impl<T: ?Sized, A: Alloc> DynVec<T, A> {
 
     #[inline]
     pub fn next_push_allocates<U: Unsize<T>>(&self) -> bool {
-        if mem::align_of::<U>() > mem::align_of::<usize>() {
-            unimplemented!("overaligned types are currently unimplemented")
-        } else {
-            debug_assert!(mem::size_of::<Elem<U>>() % mem::size_of::<usize>() == 0);
-            self.data.next_n_pushes_allocates(
-                NonZeroUsize::new(mem::size_of::<Elem<U>>() / mem::size_of::<usize>()).unwrap(),
-            )
-        }
+        assert!(
+            mem::align_of::<U>() <= mem::align_of::<usize>(),
+            "overaligned types are currently unimplemented"
+        );
+        debug_assert!(mem::size_of::<Elem<U>>() % mem::size_of::<usize>() == 0);
+        self.data.next_n_pushes_allocates(
+            NonZeroUsize::new(mem::size_of::<Elem<U>>() / mem::size_of::<usize>()).unwrap(),
+        )
     }
 
     #[inline]
     pub fn push<U: Unsize<T>>(&mut self, u: U) {
-        if mem::align_of::<U>() > mem::align_of::<usize>() {
-            unimplemented!("overaligned types are currently unimplemented")
-        }
+        assert!(
+            mem::align_of::<U>() <= mem::align_of::<usize>(),
+            "overaligned types are currently unimplemented"
+        );
         let elem = Elem::new::<T>(u);
 
         // extend_non_empty requires the slice to have non-zero length.
@@ -89,9 +95,10 @@ impl<T: ?Sized, A: Alloc> DynVec<T, A> {
 
     #[inline]
     pub unsafe fn push_unchecked<U: Unsize<T>>(&mut self, u: U) {
-        if mem::align_of::<U>() > mem::align_of::<usize>() {
-            unimplemented!("overaligned types are currently unimplemented")
-        }
+        assert!(
+            mem::align_of::<U>() <= mem::align_of::<usize>(),
+            "overaligned types are currently unimplemented"
+        );
         let elem = Elem::new::<T>(u);
         self.data.extend_non_empty_unchecked(elem.as_slice());
         mem::forget(elem)
@@ -104,8 +111,8 @@ impl<T: ?Sized, A: Alloc> DynVec<T, A> {
             end:     self.data.end,
             phantom: PhantomData::<&mut T>,
         };
-        self.data.clear();
         unsafe {
+            self.data.clear();
             for mut x in i {
                 ptr::drop_in_place::<T>(&mut *x);
             }
@@ -115,24 +122,6 @@ impl<T: ?Sized, A: Alloc> DynVec<T, A> {
     #[inline]
     pub fn clear_no_drop(&mut self) {
         self.data.clear();
-    }
-
-    #[inline]
-    pub unsafe fn word_index(&self, word_index: usize) -> &T {
-        let vtable = self.data.begin.add(word_index).read_aligned() as *mut ();
-        let data = self.data.begin.add(word_index + 1).as_ptr() as *mut ();
-        let raw = TraitObject { data, vtable };
-        *mem::transmute::<&TraitObject, &&T>(&raw)
-    }
-
-    #[inline]
-    pub unsafe fn word_index_mut(&self, word_index: usize) -> DynElemMut<'_, T> {
-        let vtable = self.data.begin.add(word_index).read_aligned() as *mut ();
-        let data = self.data.begin.add(word_index + 1).as_ptr() as *mut ();
-        let mut raw = TraitObject { data, vtable };
-        DynElemMut {
-            value: *mem::transmute::<*mut TraitObject, *mut &mut T>(&mut raw),
-        }
     }
 
     #[inline]
@@ -198,13 +187,11 @@ impl<U> Elem<U> {
     where
         U: Unsize<T>,
     {
-        unsafe {
-            assert!(mem::size_of::<Self>() % mem::size_of::<usize>() == 0);
-            assert_eq!(mem::size_of::<&T>(), mem::size_of::<TraitObject>());
-            let t = &elem as &T;
-            let vtable = mem::transmute::<_, &TraitObject>(&t).vtable;
-            Elem { vtable, elem }
-        }
+        assert!(mem::size_of::<Self>() % mem::size_of::<usize>() == 0);
+        assert_eq!(mem::size_of::<&T>(), mem::size_of::<TraitObject>());
+        let t = &elem as &T;
+        let vtable = unsafe { mem::transmute::<&&T, &TraitObject>(&t).vtable };
+        Elem { vtable, elem }
     }
 
     #[inline]

@@ -1,3 +1,14 @@
+//! An alternative implementation of Vec.
+//!
+//! The core difference is that it stores an end pointer, a last_valid_address, and a begin pointer.
+//!
+//! This alternative implementation generates smaller code for write often, iterate rarely use
+//! cases. STM backed data structures can have massive code bloat, compared to their single threaded
+//! counterparts. Every transactional memory read and write has 10s of additional instructions
+//! compared to a non-transactional read/write or atomic read/write.
+//!
+//! TODO: Is this worth all the trouble? It's not too much trouble to swap in Vec for this type.
+
 use crate::internal::{
     alloc::DefaultAlloc,
     pointer::{PtrExt, PtrMutExt},
@@ -173,6 +184,16 @@ impl<T, A: Alloc> FVec<T, A> {
             dest.drop_in_place_aligned()
         }
         self.end.move_to(dest);
+    }
+
+    // this is faster than swap_erase
+    #[inline]
+    pub fn rswap_erase(&mut self, index: usize) {
+        assert!(
+            unlikely!(index < self.len()),
+            "attempt to use an index >= self.len()"
+        );
+        unsafe { self.rswap_erase_unchecked(index) }
     }
 
     #[inline]

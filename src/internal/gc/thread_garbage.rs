@@ -76,6 +76,15 @@ impl UnusedBags {
 
     /// Gets an empty bag out of the collection.
     #[inline]
+    fn open_bag(&mut self) -> Option<Bag> {
+        self.bags.pop().map(|bag| {
+            debug_assert!(bag.queued.is_empty(), "opened up a non-empty `Bag`");
+            bag
+        })
+    }
+
+    /// Gets an empty bag out of the collection.
+    #[inline]
     unsafe fn open_bag_unchecked(&mut self) -> Bag {
         let bag = self.bags.pop_unchecked();
         debug_assert!(bag.queued.is_empty(), "opened up a non-empty `Bag`");
@@ -119,7 +128,9 @@ impl ThreadGarbage {
     pub fn new() -> Self {
         let mut unused_bags = UnusedBags::new();
         debug_assert!(!unused_bags.bags.is_empty());
-        let speculative_bag = unsafe { unused_bags.open_bag_unchecked() };
+        let speculative_bag = unused_bags
+            .open_bag()
+            .expect("ThreadGarbage ran out of unused bagss");
         let sealed_capacity = NonZeroUsize::new(UNUSED_BAG_COUNT).unwrap();
         ThreadGarbage {
             speculative_bag,
