@@ -4,25 +4,37 @@ use std::sync::Mutex;
 
 #[derive(Default, Debug)]
 pub struct Size {
-    min:   usize,
-    max:   usize,
-    avg:   f64,
+    min:   Option<usize>,
+    max:   Option<usize>,
+    avg:   Option<f64>,
     count: usize,
 }
 
 impl Size {
     pub fn record(&mut self, size: usize) {
-        self.min = self.min.min(size);
-        self.max = self.max.max(size);
-        self.avg = (self.avg * self.count as f64 + size as f64) / ((self.count + 1) as f64);
+        self.min = Some(self.min.map(|min| min.min(size)).unwrap_or(size));
+        self.max = Some(self.max.map(|max| max.max(size)).unwrap_or(size));
+        self.avg = Some(
+            (self.avg.unwrap_or(0.0) * self.count as f64 + size as f64) / ((self.count + 1) as f64),
+        );
         self.count += 1;
     }
 
     pub fn merge(&mut self, rhs: &Self) {
-        self.min = self.min.min(rhs.min);
-        self.max = self.max.max(rhs.max);
-        self.avg = (self.avg * self.count as f64 + rhs.avg * rhs.count as f64)
-            / (self.count + rhs.count) as f64;
+        self.min = match (self.min, rhs.min) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
+        self.max = match (self.max, rhs.max) {
+            (Some(a), Some(b)) => Some(a.max(b)),
+            (a, b) => a.or(b),
+        };
+        self.avg = match (self.avg, rhs.avg) {
+            (Some(a), Some(b)) => Some(
+                (a * self.count as f64 + b * rhs.count as f64) / (self.count + rhs.count) as f64,
+            ),
+            (a, b) => a.or(b),
+        };
         self.count += rhs.count;
     }
 }
@@ -87,10 +99,10 @@ stats! {
     bloom_check:               Event,
     bloom_failure:             Event,
     bloom_success_slow:        Event,
-    double_write:              Event,
+    write_after_write:         Event,
+    write_after_logged_read:   Size,
     write_word_size:           Size,
     read_size:                 Size,
-    unnecessary_read_size:     Size,
 }
 
 impl Stats {
@@ -99,7 +111,7 @@ impl Stats {
         println!("{:#?}", self);
         let transactions = self.read_transaction.count + self.write_transaction.count;
         println!(
-            "{:>20}: {:>12} {:>9} {:.2}%",
+            "{:>12}: {:>12} {:>9} {:.2}%",
             "transactions",
             transactions,
             "fail rate",
@@ -108,7 +120,7 @@ impl Stats {
                 * 100.0
         );
         println!(
-            "{:>20}: {:>12} {:>9} {:.2}% {:>9} {:.2}%",
+            "{:>12}: {:>12} {:>9} {:.2}% {:>9} {:.2}%",
             "bloom checks",
             self.bloom_check.count,
             "fail rate",

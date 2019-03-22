@@ -243,7 +243,7 @@ impl<'tcell> WriteLog<'tcell> {
             // polonius would fix this.
             Some(entry) => {
                 stats::bloom_success_slow();
-                stats::double_write();
+                stats::write_after_write();
                 Entry::new_occupied(unsafe { mem::transmute(entry) }, hash)
             }
             None => {

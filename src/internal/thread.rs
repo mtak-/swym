@@ -90,14 +90,23 @@ impl<'tcell> Logs<'tcell> {
 
     #[inline]
     pub unsafe fn remove_writes_from_reads(&mut self) {
+        #[allow(unused_mut)]
         let mut count = 0;
 
         let write_log = &mut self.write_log;
         self.read_log.filter_in_place(|src| {
-            count += 1;
-            write_log.find(src).is_none()
+            if write_log.find(src).is_none() {
+                true
+            } else {
+                // don't capture count in release
+                #[cfg(feature = "stats")]
+                {
+                    count += 1;
+                }
+                false
+            }
         });
-        stats::unnecessary_read_size(count)
+        stats::write_after_logged_read(count)
     }
 
     #[inline]
