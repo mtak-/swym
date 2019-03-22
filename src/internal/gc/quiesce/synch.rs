@@ -138,7 +138,7 @@ impl<'a> FreezeList<'a> {
         let lock = &synch.inner.lock;
         lock.lock_shared();
         debug_assert!(
-            GlobalSynchList::instance_unchecked()
+            GlobalSynchList::instance()
                 .raw()
                 .iter()
                 .find(|&lhs| ptr::eq(lhs, &synch.inner))

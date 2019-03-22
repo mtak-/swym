@@ -10,7 +10,7 @@ const READ_CAPACITY: usize = 1024;
 
 #[derive(Debug)]
 pub struct ReadLog<'tcell> {
-    data: FVec<&'tcell TCellErased>,
+    data: FVec<Option<&'tcell TCellErased>>,
 }
 
 impl<'tcell> ReadLog<'tcell> {
@@ -33,17 +33,26 @@ impl<'tcell> ReadLog<'tcell> {
 
     #[inline]
     pub fn push(&mut self, erased: &'tcell TCellErased) {
-        self.data.push(erased)
+        self.data.push(Some(erased))
     }
 
     #[inline]
     pub unsafe fn push_unchecked(&mut self, erased: &'tcell TCellErased) {
-        self.data.push_unchecked(erased)
+        self.data.push_unchecked(Some(erased))
     }
 
+    // After calling this, it is unsafe to call again without calling clear first
     #[inline]
-    pub fn filter_in_place(&mut self, filter: impl FnMut(&mut &'tcell TCellErased) -> bool) {
-        self.data.filter_in_place(filter)
+    pub unsafe fn filter_in_place(&mut self, mut filter: impl FnMut(&'tcell TCellErased) -> bool) {
+        for elem in self.data.iter_mut() {
+            let tcell = match elem {
+                Some(tcell) => tcell,
+                None => std::hint::unreachable_unchecked(),
+            };
+            if unlikely!(!filter(tcell)) {
+                *elem = None;
+            }
+        }
     }
 
     #[inline]
@@ -59,7 +68,7 @@ impl<'tcell> ReadLog<'tcell> {
 
     #[inline]
     fn iter<'a>(&'a self) -> impl Iterator<Item = &'a TCellErased> {
-        self.data.iter().map(|v| *v)
+        self.data.iter().flat_map(|v| *v)
     }
 
     #[inline]

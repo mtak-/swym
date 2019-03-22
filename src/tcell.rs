@@ -365,6 +365,7 @@ impl<'tx, T> Ref<'tx, T> {
 impl<'tx, T: Borrow> From<&'tx T> for Ref<'tx, T> {
     #[inline]
     fn from(reference: &'tx T) -> Self {
+        // lifetime + swym::tx::Borrow guarantees this is safe
         Ref::new(unsafe { ptr::read(reference as *const T as *const ManuallyDrop<T>) })
     }
 }
@@ -372,7 +373,7 @@ impl<'tx, T: Borrow> From<&'tx T> for Ref<'tx, T> {
 impl<'tx, T: Borrow> From<&'tx mut T> for Ref<'tx, T> {
     #[inline]
     fn from(reference: &'tx mut T) -> Self {
-        Ref::new(unsafe { ptr::read(reference as *const T as *const ManuallyDrop<T>) })
+        Ref::from(&*reference)
     }
 }
 

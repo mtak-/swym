@@ -63,8 +63,7 @@ impl GlobalSynchList {
 
         INIT_QUIESCE_LIST.call_once(do_init);
 
-        // SINGLETON is leaked, so this is always valid
-        unsafe { Self::instance_unchecked() }
+        Self::instance()
     }
 
     /// Returns a references to the global thread list.

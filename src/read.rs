@@ -40,10 +40,10 @@ impl<'tcell> Read<'tcell> for ReadTx<'tcell> {
         _: Ordering,
     ) -> Result<Ref<'tx, T>, Error> {
         unsafe {
-            if mem::size_of::<T>() > 0 {
+            if mem::size_of::<T>() != 0 {
                 // In a read only transaction, there is no read log, write log or gc.
                 // The only thing that needs to be done is reading of the value, and then a check,
-                // to see if that value was written before this transaction began.x
+                // to see if that value was written before this transaction began.
                 let value = Ref::new(tcell.optimistic_read_acquire());
                 if likely!(self
                     .pin_epoch()

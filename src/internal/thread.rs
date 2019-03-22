@@ -89,7 +89,7 @@ impl<'tcell> Logs<'tcell> {
     }
 
     #[inline]
-    pub fn remove_writes_from_reads(&mut self) {
+    pub unsafe fn remove_writes_from_reads(&mut self) {
         let mut count = 0;
 
         let write_log = &mut self.write_log;
@@ -277,9 +277,9 @@ impl<'tx, 'tcell> PinMutRef<'tx, 'tcell> {
     }
 
     #[inline]
-    fn into_inner(self) -> (&'tx OwnedSynch, &'tx mut Logs<'tcell>) {
+    unsafe fn into_inner(self) -> (&'tx OwnedSynch, &'tx mut Logs<'tcell>) {
         let synch = &self.pin_ref.thread.synch;
-        let logs = unsafe { &mut *(self.pin_ref.thread.logs.get() as *const _ as *mut _) };
+        let logs = &mut *(self.pin_ref.thread.logs.get() as *const _ as *mut _);
         (synch, logs)
     }
 }
@@ -464,17 +464,17 @@ impl<'tx, 'tcell> PinRw<'tx, 'tcell> {
     /// This performs a lot of lock cmpxchgs, so inlining doesn't really doesn't give us much.
     #[inline(never)]
     fn commit_slow(mut self) -> bool {
-        // Locking the write log, would cause validation of any reads to the same TCell to fail.
-        // So we remove all TCells in the read log that are also in the read log, and assume all
-        // TCells in the write log, have been read.
-        self.logs_mut().remove_writes_from_reads();
-
-        // Locking the write set can fail if another thread has the lock, or if any TCell in the
-        // write set has been updated since the transaction began.
-        //
-        // TODO: would commit algorithm be faster with a single global lock, or lock striping?
-        // per object locking causes a cmpxchg per entry
         unsafe {
+            // Locking the write log, would cause validation of any reads to the same TCell to fail.
+            // So we remove all TCells in the read log that are also in the read log, and assume all
+            // TCells in the write log, have been read.
+            self.logs_mut().remove_writes_from_reads();
+
+            // Locking the write set can fail if another thread has the lock, or if any TCell in the
+            // write set has been updated since the transaction began.
+            //
+            // TODO: would commit algorithm be faster with a single global lock, or lock striping?
+            // per object locking causes a cmpxchg per entry
             if likely!(self.logs().write_log.try_lock_entries(self.pin_epoch())) {
                 self.write_log_lock_success()
             } else {
