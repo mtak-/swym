@@ -3,7 +3,10 @@ use crate::{
     tcell::{Ref, TCell},
     tx::{Borrow, Error, Ordering, Read},
 };
-use std::{marker::PhantomData, mem};
+use std::{
+    marker::PhantomData,
+    mem::{self, ManuallyDrop},
+};
 
 /// A read only transaction.
 ///
@@ -55,7 +58,7 @@ impl<'tcell> Read<'tcell> for ReadTx<'tcell> {
                 }
             } else {
                 // If the type is zero sized, there's no need to any synchronization.
-                Ok(Ref::new(mem::zeroed()))
+                Ok(Ref::new(mem::zeroed::<ManuallyDrop<T>>()))
             }
         }
     }

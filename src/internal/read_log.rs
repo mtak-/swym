@@ -32,12 +32,12 @@ impl<'tcell> ReadLog<'tcell> {
     }
 
     #[inline]
-    pub fn push(&mut self, erased: &'tcell TCellErased) {
+    pub fn record(&mut self, erased: &'tcell TCellErased) {
         self.data.push(Some(erased))
     }
 
     #[inline]
-    pub unsafe fn push_unchecked(&mut self, erased: &'tcell TCellErased) {
+    pub unsafe fn record_unchecked(&mut self, erased: &'tcell TCellErased) {
         self.data.push_unchecked(Some(erased))
     }
 

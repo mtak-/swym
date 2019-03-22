@@ -271,7 +271,7 @@ impl<'tcell> WriteLog<'tcell> {
     }
 
     #[inline]
-    pub fn push<T: 'static>(
+    pub fn record<T: 'static>(
         &mut self,
         dest_tcell: &'tcell TCellErased,
         val: T,
@@ -290,7 +290,7 @@ impl<'tcell> WriteLog<'tcell> {
     }
 
     #[inline]
-    pub unsafe fn push_unchecked<T: 'static>(
+    pub unsafe fn record_unchecked<T: 'static>(
         &mut self,
         dest_tcell: &'tcell TCellErased,
         val: T,

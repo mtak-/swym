@@ -68,7 +68,7 @@ impl<'tx, 'tcell> RwTxImpl<'tx, 'tcell> {
                 None => {
                     let value = Ref::new(tcell.optimistic_read_acquire());
                     if likely!(self.rw_valid(&tcell.erased)) {
-                        self.logs_mut().read_log.push(&tcell.erased);
+                        self.logs_mut().read_log.record(&tcell.erased);
                         return Ok(value);
                     }
                 }
@@ -92,7 +92,7 @@ impl<'tx, 'tcell> RwTxImpl<'tx, 'tcell> {
             unsafe {
                 let value = Ref::new(tcell.optimistic_read_acquire());
                 if likely!(self.rw_valid(&tcell.erased)) {
-                    self.logs_mut().read_log.push_unchecked(&tcell.erased);
+                    self.logs_mut().read_log.record_unchecked(&tcell.erased);
                     return Ok(value);
                 }
             }
@@ -151,7 +151,7 @@ impl<'tx, 'tcell> RwTxImpl<'tx, 'tcell> {
                 Entry::Vacant { write_log: _, hash } => {
                     if likely!(self.rw_valid(&tcell.erased)) {
                         let logs = self.logs_mut();
-                        logs.write_log.push(&tcell.erased, value, hash);
+                        logs.write_log.record(&tcell.erased, value, hash);
                         if mem::needs_drop::<T>() {
                             logs.garbage.trash(tcell.optimistic_read_relaxed())
                         }
@@ -161,7 +161,7 @@ impl<'tx, 'tcell> RwTxImpl<'tx, 'tcell> {
                 Entry::Occupied { mut entry, hash } => {
                     if V::REQUEST_TCELL_LIFETIME {
                         entry.deactivate();
-                        self.logs_mut().write_log.push(&tcell.erased, value, hash);
+                        self.logs_mut().write_log.record(&tcell.erased, value, hash);
                     } else {
                         DynElemMut::assign_unchecked(
                             entry,
@@ -197,7 +197,7 @@ impl<'tx, 'tcell> RwTxImpl<'tx, 'tcell> {
         {
             let logs = self.logs_mut();
             unsafe {
-                logs.write_log.push_unchecked(&tcell.erased, value, hash);
+                logs.write_log.record_unchecked(&tcell.erased, value, hash);
                 if mem::needs_drop::<T>() {
                     logs.garbage
                         .trash_unchecked(tcell.optimistic_read_relaxed())
@@ -244,7 +244,7 @@ impl<'tcell> tx::Read<'tcell> for RwTx<'tcell> {
             }
         } else {
             // If the type is zero sized, there's no need to any synchronization.
-            Ok(Ref::new(unsafe { mem::zeroed() }))
+            Ok(Ref::new(unsafe { mem::zeroed::<ManuallyDrop<T>>() }))
         }
     }
 }
