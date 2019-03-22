@@ -47,7 +47,13 @@ impl<'tcell> ReadLog<'tcell> {
         for elem in self.data.iter_mut() {
             let tcell = match elem {
                 Some(tcell) => tcell,
-                None => std::hint::unreachable_unchecked(),
+                None => {
+                    if cfg!(debug_assertions) {
+                        panic!("unreachable code reached")
+                    } else {
+                        std::hint::unreachable_unchecked()
+                    }
+                }
             };
             if unlikely!(!filter(tcell)) {
                 *elem = None;
