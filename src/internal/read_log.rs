@@ -41,16 +41,17 @@ impl<'tcell> ReadLog<'tcell> {
         self.data.push_unchecked(Some(erased))
     }
 
-    // After calling this, it is unsafe to call again without calling clear first
+    /// After calling filter_in_place, it is unsafe to call again without calling clear first
     #[inline]
     pub unsafe fn filter_in_place(&mut self, mut filter: impl FnMut(&'tcell TCellErased) -> bool) {
         for elem in self.data.iter_mut() {
-            let tcell = match elem {
+            let tcell = match *elem {
                 Some(tcell) => tcell,
                 None => {
                     if cfg!(debug_assertions) {
                         panic!("unreachable code reached")
                     } else {
+                        // we want this fast since every RW transaction runs it
                         std::hint::unreachable_unchecked()
                     }
                 }
