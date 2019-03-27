@@ -53,12 +53,10 @@ pub const fn _XABORT_CODE(x: i32) -> i32 {
 pub struct BeginCode(i32);
 
 impl BeginCode {
-    pub const STARTED: Self = BeginCode(_XBEGIN_STARTED);
-    pub const RETRY: Self = BeginCode(_XABORT_RETRY);
-    pub const CONFLICT: Self = BeginCode(_XABORT_CONFLICT);
-    pub const CAPACITY: Self = BeginCode(_XABORT_CAPACITY);
-    pub const DEBUG: Self = BeginCode(_XABORT_DEBUG);
-    pub const NESTED: Self = BeginCode(_XABORT_NESTED);
+    #[inline]
+    pub fn is_started(&self) -> bool {
+        self.0 == _XBEGIN_STARTED
+    }
 
     #[inline]
     pub fn is_explicit_abort(&self) -> bool {
@@ -76,17 +74,17 @@ impl BeginCode {
 
     #[inline]
     pub fn is_retry(&self) -> bool {
-        self.0 & BeginCode::RETRY.0 != 0
+        self.0 & _XABORT_RETRY != 0
     }
 
     #[inline]
     pub fn is_conflict(&self) -> bool {
-        self.0 & BeginCode::CONFLICT.0 != 0
+        self.0 & _XABORT_CONFLICT != 0
     }
 
     #[inline]
     pub fn is_capacity(&self) -> bool {
-        self.0 & BeginCode::CAPACITY.0 != 0
+        self.0 & _XABORT_CONFLICT != 0
     }
 }
 
@@ -98,6 +96,11 @@ impl TestCode {
     #[inline]
     pub fn in_transaction(&self) -> bool {
         self.0 != 0
+    }
+
+    #[inline]
+    pub fn is_suspended(&self) -> bool {
+        false
     }
 }
 
@@ -119,7 +122,7 @@ pub unsafe fn begin() -> BeginCode {
 
 #[inline(always)]
 pub unsafe fn abort() -> ! {
-    intrinsics::xabort(0);
+    xabort(0);
     std::hint::unreachable_unchecked()
 }
 

@@ -3,16 +3,19 @@
 
 extern crate test;
 
-#[cfg(target_arch = "x86_64")]
-pub mod x86_64;
+#[cfg(all(target_arch = "powerpc64", feature = "htm"))]
+pub mod powerpc64;
+#[cfg(all(target_arch = "powerpc64", feature = "htm"))]
+use powerpc64 as back;
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", feature = "rtm"))]
+pub mod x86_64;
+#[cfg(all(target_arch = "x86_64", feature = "rtm"))]
 use x86_64 as back;
 
-#[cfg(not(target_arch = "x86_64"))]
+#[cfg(not(any(all(target_arch = "x86_64", feature = "rtm"), all(target_arch = "powerpc64", feature = "htm"))))]
 pub mod unsupported;
-
-#[cfg(not(target_arch = "x86_64"))]
+#[cfg(not(any(all(target_arch = "x86_64", feature = "rtm"), all(target_arch = "powerpc64", feature = "htm"))))]
 use unsupported as back;
 
 use std::marker::PhantomData;
@@ -22,12 +25,10 @@ use std::marker::PhantomData;
 pub struct BeginCode(back::BeginCode);
 
 impl BeginCode {
-    pub const STARTED: Self = BeginCode(back::BeginCode::STARTED);
-    pub const RETRY: Self = BeginCode(back::BeginCode::RETRY);
-    pub const CONFLICT: Self = BeginCode(back::BeginCode::CONFLICT);
-    pub const CAPACITY: Self = BeginCode(back::BeginCode::CAPACITY);
-    pub const DEBUG: Self = BeginCode(back::BeginCode::DEBUG);
-    pub const NESTED: Self = BeginCode(back::BeginCode::NESTED);
+    #[inline]
+    pub fn is_started(&self) -> bool {
+        self.0.is_started()
+    }
 
     #[inline]
     pub fn is_explicit_abort(&self) -> bool {
@@ -58,6 +59,11 @@ impl TestCode {
     #[inline]
     pub fn in_transaction(&self) -> bool {
         self.0.in_transaction()
+    }
+
+    #[inline]
+    pub fn is_suspended(&self) -> bool {
+        self.0.is_suspended()
     }
 }
 
@@ -115,7 +121,7 @@ impl HardwareTx {
         if htm_supported() {
             loop {
                 let b = begin();
-                if b == BeginCode::STARTED {
+                if b.is_started() {
                     return Some(HardwareTx {
                         _private: PhantomData,
                     });
@@ -200,13 +206,11 @@ fn capacity_check() {
         data[i * CACHE_LINE_SIZE] = data[i * CACHE_LINE_SIZE].wrapping_add(1);
         test::black_box(&mut data[i * CACHE_LINE_SIZE]);
     }
-    let mut fail_count = 0;
     for max in 0..end {
-        fail_count = 0;
+        let mut fail_count = 0;
         unsafe {
-            let capacity = &mut capacity;
-            let tx = HardwareTx::begin(|mut code| {
-                let cap = code == BeginCode::CAPACITY;
+            let tx = HardwareTx::begin(|code| {
+                let cap = code.is_capacity();
                 if cap {
                     fail_count += 1;
                 }

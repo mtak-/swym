@@ -7,12 +7,10 @@ fn unsupported() -> ! {
 pub struct BeginCode(i8);
 
 impl BeginCode {
-    pub const STARTED: Self = BeginCode(0);
-    pub const RETRY: Self = BeginCode(0);
-    pub const CONFLICT: Self = BeginCode(0);
-    pub const CAPACITY: Self = BeginCode(0);
-    pub const DEBUG: Self = BeginCode(0);
-    pub const NESTED: Self = BeginCode(0);
+    #[inline]
+    pub fn is_started(&self) -> bool {
+        unsupported()
+    }
 
     #[inline]
     pub fn is_explicit_abort(&self) -> bool {
@@ -43,6 +41,11 @@ impl TestCode {
     pub fn in_transaction(&self) -> bool {
         false
     }
+
+    #[inline]
+    pub fn is_suspended(&self) -> bool {
+        false
+    }
 }
 
 #[derive(PartialEq, Eq, Ord, PartialOrd, Copy, Clone, Debug, Hash)]
@@ -61,7 +64,7 @@ pub unsafe fn begin() -> BeginCode {
 }
 
 #[inline]
-pub unsafe fn abort() {
+pub unsafe fn abort() -> ! {
     unsupported()
 }
 
