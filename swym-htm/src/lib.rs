@@ -3,26 +3,19 @@
 
 extern crate test;
 
-#[cfg(all(target_arch = "powerpc64", feature = "htm"))]
-pub mod powerpc64;
-#[cfg(all(target_arch = "powerpc64", feature = "htm"))]
-use powerpc64 as back;
-
-#[cfg(all(target_arch = "x86_64", feature = "rtm"))]
-pub mod x86_64;
-#[cfg(all(target_arch = "x86_64", feature = "rtm"))]
-use x86_64 as back;
-
-#[cfg(not(any(
-    all(target_arch = "x86_64", feature = "rtm"),
-    all(target_arch = "powerpc64", feature = "htm")
-)))]
-pub mod unsupported;
-#[cfg(not(any(
-    all(target_arch = "x86_64", feature = "rtm"),
-    all(target_arch = "powerpc64", feature = "htm")
-)))]
-use unsupported as back;
+#[cfg_attr(
+    all(target_arch = "powerpc64", feature = "htm"),
+    path = "./powerpc64.rs"
+)]
+#[cfg_attr(all(target_arch = "x86_64", feature = "rtm"), path = "./x86_64.rs")]
+#[cfg_attr(
+    not(any(
+        all(target_arch = "x86_64", feature = "rtm"),
+        all(target_arch = "powerpc64", feature = "htm")
+    )),
+    path = "./unsupported.rs"
+)]
+pub mod back;
 
 use std::marker::PhantomData;
 
@@ -145,18 +138,62 @@ impl HardwareTx {
     }
 }
 
-#[bench]
-fn bench_tx(bench: &mut test::Bencher) {
-    const ITER_COUNT: usize = 1_000_000;
+macro_rules! bench_tx {
+    ($name:ident, $count:expr) => {
+        #[bench]
+        fn $name(bench: &mut test::Bencher) {
+            const ITER_COUNT: usize = 1_000_000;
+            const WORDS_WRITTEN: usize = $count;
 
-    bench.iter(|| {
-        for _ in 0..ITER_COUNT {
-            unsafe {
-                let _tx = HardwareTx::begin(|_| -> Result<(), ()> { Err(()) });
+            #[repr(align(4096))]
+            struct AlignedArr([usize; WORDS_WRITTEN]);
+
+            let mut arr = AlignedArr([0usize; WORDS_WRITTEN]);
+
+            for (i, elem) in arr.0.iter_mut().enumerate() {
+                unsafe { std::ptr::write_volatile(elem, test::black_box(elem.wrapping_add(i))) };
+                test::black_box(elem);
             }
+
+            bench.iter(move || {
+                for _ in 0..ITER_COUNT {
+                    unsafe {
+                        let tx = HardwareTx::begin(|_| -> Result<(), ()> { Err(()) });
+                        for i in 0..arr.0.len() {
+                            *arr.0.get_unchecked_mut(i) =
+                                arr.0.get_unchecked_mut(i).wrapping_add(1);
+                        }
+                        drop(tx);
+                    }
+                }
+            });
         }
-    });
+    };
 }
+
+bench_tx! {bench_tx0000, 0}
+bench_tx! {bench_tx0001, 1}
+bench_tx! {bench_tx0002, 2}
+bench_tx! {bench_tx0004, 4}
+bench_tx! {bench_tx0008, 8}
+bench_tx! {bench_tx0016, 16}
+bench_tx! {bench_tx0024, 24}
+bench_tx! {bench_tx0032, 32}
+bench_tx! {bench_tx0040, 40}
+bench_tx! {bench_tx0048, 48}
+bench_tx! {bench_tx0056, 56}
+bench_tx! {bench_tx0064, 64}
+bench_tx! {bench_tx0072, 72}
+bench_tx! {bench_tx0080, 80}
+bench_tx! {bench_tx0112, 112}
+bench_tx! {bench_tx0120, 120}
+bench_tx! {bench_tx0128, 128}
+bench_tx! {bench_tx0256, 256}
+bench_tx! {bench_tx0512, 512}
+bench_tx! {bench_tx1024, 1024}
+bench_tx! {bench_tx2048, 2048}
+bench_tx! {bench_tx4096, 4096}
+bench_tx! {bench_tx8192, 8192}
 
 #[bench]
 fn bench_abort(bench: &mut test::Bencher) {
@@ -165,7 +202,13 @@ fn bench_abort(bench: &mut test::Bencher) {
     bench.iter(|| {
         for _ in 0..ITER_COUNT {
             unsafe {
-                let tx = HardwareTx::begin(|_| -> Result<(), ()> { Err(()) });
+                let tx = HardwareTx::begin(|code| -> Result<(), ()> {
+                    if code.is_explicit_abort() {
+                        Err(())
+                    } else {
+                        Ok(())
+                    }
+                });
                 drop(tx.map(|tx| tx.abort()));
             }
         }
