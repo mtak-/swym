@@ -14,6 +14,10 @@ mod intrinsics {
     }
 }
 
+pub trait XAbortConst {
+    const CODE: i8;
+}
+
 #[inline]
 pub unsafe fn xbegin() -> i32 {
     intrinsics::xbegin()
@@ -25,8 +29,9 @@ pub unsafe fn xend() {
 }
 
 #[inline(always)]
-pub unsafe fn xabort(a: i8) {
-    intrinsics::xabort(a);
+pub unsafe fn xabort<T: XAbortConst>() -> ! {
+    intrinsics::xabort(T::CODE);
+    std::hint::unreachable_unchecked()
 }
 
 #[inline]
@@ -122,8 +127,11 @@ pub unsafe fn begin() -> BeginCode {
 
 #[inline(always)]
 pub unsafe fn abort() -> ! {
-    xabort(0);
-    std::hint::unreachable_unchecked()
+    struct Code;
+    impl XAbortConst for Code {
+        const CODE: i8 = 0;
+    }
+    xabort::<Code>();
 }
 
 #[inline]

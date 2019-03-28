@@ -13,9 +13,15 @@ pub mod x86_64;
 #[cfg(all(target_arch = "x86_64", feature = "rtm"))]
 use x86_64 as back;
 
-#[cfg(not(any(all(target_arch = "x86_64", feature = "rtm"), all(target_arch = "powerpc64", feature = "htm"))))]
+#[cfg(not(any(
+    all(target_arch = "x86_64", feature = "rtm"),
+    all(target_arch = "powerpc64", feature = "htm")
+)))]
 pub mod unsupported;
-#[cfg(not(any(all(target_arch = "x86_64", feature = "rtm"), all(target_arch = "powerpc64", feature = "htm"))))]
+#[cfg(not(any(
+    all(target_arch = "x86_64", feature = "rtm"),
+    all(target_arch = "powerpc64", feature = "htm")
+)))]
 use unsupported as back;
 
 use std::marker::PhantomData;
@@ -117,20 +123,19 @@ impl Drop for HardwareTx {
 
 impl HardwareTx {
     #[inline]
-    pub unsafe fn begin<F: FnMut(BeginCode) -> bool>(mut retry_handler: F) -> Option<Self> {
-        if htm_supported() {
-            loop {
-                let b = begin();
-                if b.is_started() {
-                    return Some(HardwareTx {
-                        _private: PhantomData,
-                    });
-                } else if !retry_handler(b) {
-                    return None;
-                }
+    pub unsafe fn begin<F, E>(mut retry_handler: F) -> Result<Self, E>
+    where
+        F: FnMut(BeginCode) -> Result<(), E>,
+    {
+        loop {
+            let b = begin();
+            if b.is_started() {
+                return Ok(HardwareTx {
+                    _private: PhantomData,
+                });
+            } else {
+                retry_handler(b)?
             }
-        } else {
-            None
         }
     }
 
@@ -140,19 +145,51 @@ impl HardwareTx {
     }
 }
 
+#[bench]
+fn bench_tx(bench: &mut test::Bencher) {
+    const ITER_COUNT: usize = 1_000_000;
+
+    bench.iter(|| {
+        for _ in 0..ITER_COUNT {
+            unsafe {
+                let _tx = HardwareTx::begin(|_| -> Result<(), ()> { Err(()) });
+            }
+        }
+    });
+}
+
+#[bench]
+fn bench_abort(bench: &mut test::Bencher) {
+    const ITER_COUNT: usize = 1_000_000;
+
+    bench.iter(|| {
+        for _ in 0..ITER_COUNT {
+            unsafe {
+                let tx = HardwareTx::begin(|_| -> Result<(), ()> { Err(()) });
+                drop(tx.map(|tx| tx.abort()));
+            }
+        }
+    });
+}
+
 #[test]
 fn begin_end() {
+    const ITER_COUNT: usize = 1_000_000;
+
     let mut fails = 0;
-    for _ in 0..1000000 {
+    for _ in 0..ITER_COUNT {
         unsafe {
-            let _tx = HardwareTx::begin(|_| {
+            let _tx = HardwareTx::begin(|_| -> Result<(), ()> {
                 fails += 1;
-                true
+                Ok(())
             })
             .unwrap();
         }
     }
-    println!("fails {}", fails);
+    println!(
+        "fail rate {:.4}%",
+        fails as f64 * 100.0 / (ITER_COUNT + fails) as f64
+    );
 }
 
 #[test]
@@ -160,7 +197,7 @@ fn test_in_transaction() {
     for _ in 0..1000000 {
         unsafe {
             assert!(!test().in_transaction());
-            let _tx = HardwareTx::begin(|_| true).unwrap();
+            let _tx = HardwareTx::begin(|_| -> Result<(), ()> { Ok(()) }).unwrap();
             assert!(test().in_transaction());
         }
     }
@@ -174,12 +211,12 @@ fn begin_abort() {
         unsafe {
             let i = &mut i;
             *i += 1;
-            let tx = HardwareTx::begin(|code| {
+            let tx = HardwareTx::begin(|code| -> Result<(), ()> {
                 if code.is_explicit_abort() {
                     abort_count += 1;
                     *i += 1;
                 }
-                true
+                Ok(())
             })
             .unwrap();
             if *i % 128 != 0 && *i != 1_000_000 {
@@ -214,11 +251,15 @@ fn capacity_check() {
                 if cap {
                     fail_count += 1;
                 }
-                !cap || fail_count < 1000
+                if !cap || fail_count < 1000 {
+                    Ok(())
+                } else {
+                    Err(())
+                }
             });
             let tx = match tx {
-                Some(tx) => tx,
-                None => break,
+                Ok(tx) => tx,
+                Err(()) => break,
             };
             for i in 0..max {
                 let elem = data.get_unchecked_mut(i * CACHE_LINE_SIZE);
