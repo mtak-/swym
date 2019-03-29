@@ -17,6 +17,8 @@ extern crate test;
 )]
 pub mod back;
 
+pub mod htm_usize;
+
 use std::marker::PhantomData;
 
 #[repr(transparent)]

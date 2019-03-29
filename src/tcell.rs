@@ -176,7 +176,7 @@ impl<T> TCell<T> {
     }
 
     #[inline]
-    pub unsafe fn optimistic_read_acquire(&self) -> ManuallyDrop<T> {
+    pub(crate) unsafe fn optimistic_read_acquire(&self) -> ManuallyDrop<T> {
         let result = self.optimistic_read_relaxed();
         atomic::fence(Acquire);
         result
