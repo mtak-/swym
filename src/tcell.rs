@@ -50,9 +50,10 @@ use std::{
     cell::UnsafeCell,
     fmt::{self, Debug, Formatter},
     marker::PhantomData,
-    mem::{self, ManuallyDrop},
+    mem::ManuallyDrop,
     ops::{Deref, DerefMut},
     ptr,
+    sync::atomic::{self, Ordering::Acquire},
 };
 
 /// A transactional memory location.
@@ -158,6 +159,7 @@ impl<T> TCell<T> {
     /// ```
     #[inline]
     pub fn borrow_mut(&mut self) -> &mut T {
+        // safe due to mutable borrow
         unsafe { &mut *self.value.get() }
     }
 
@@ -171,6 +173,18 @@ impl<T> TCell<T> {
             tx:    transaction,
             tcell: self,
         }
+    }
+
+    #[inline]
+    pub unsafe fn optimistic_read_acquire(&self) -> ManuallyDrop<T> {
+        let result = self.optimistic_read_relaxed();
+        atomic::fence(Acquire);
+        result
+    }
+
+    #[inline]
+    pub(crate) unsafe fn optimistic_read_relaxed(&self) -> ManuallyDrop<T> {
+        ptr::read_volatile(self.value.get() as _)
     }
 }
 
@@ -199,14 +213,7 @@ impl<T: Borrow> TCell<T> {
         tx: &'tx impl Read<'tcell>,
         ordering: Ordering,
     ) -> Result<Ref<'tx, T>, Error> {
-        unsafe {
-            Ok(if mem::size_of::<T>() != 0 {
-                let snapshot = tx._get_unchecked(self, ordering)?;
-                Ref::new(snapshot)
-            } else {
-                mem::zeroed()
-            })
-        }
+        tx.borrow(self, ordering)
     }
 }
 
@@ -237,6 +244,8 @@ impl<T: Copy> TCell<T> {
         tx: &impl Read<'tcell>,
         ordering: Ordering,
     ) -> Result<T, Error> {
+        // Calling borrow on a non Borrow type is Ok if all you do is Copy the value because this
+        // cannot cause any internal mutation to happen.
         let this = unsafe { &*(self as *const Self as *const TCell<AssertBorrow<T>>) };
         this.borrow(tx, ordering).map(|v| **v)
     }
@@ -249,17 +258,7 @@ impl<T: 'static + Send> TCell<T> {
         tx: &mut impl Write<'tcell>,
         value: impl _TValue<T>,
     ) -> Result<(), SetError<T>> {
-        assert_eq!(
-            mem::size_of_val(&value),
-            mem::size_of::<T>(),
-            "swym currently requires undo callbacks to be zero sized"
-        );
-        unsafe {
-            if mem::size_of::<T>() != 0 {
-                tx._set_unchecked(self, value)?;
-            }
-        }
-        Ok(())
+        tx.set(self, value)
     }
 
     /// Sets the contained value.
@@ -347,7 +346,7 @@ impl<'tx, T: Debug> Debug for Ref<'tx, T> {
 
 impl<'tx, T> Ref<'tx, T> {
     #[inline]
-    fn new(snapshot: ManuallyDrop<T>) -> Self {
+    pub fn new(snapshot: ManuallyDrop<T>) -> Self {
         Ref {
             snapshot,
             lifetime: PhantomData,
@@ -355,7 +354,7 @@ impl<'tx, T> Ref<'tx, T> {
     }
 
     #[inline]
-    pub unsafe fn upcast<'tcell>(this: Self, _: &'tx impl Rw<'tcell>) -> Ref<'tcell, T> {
+    pub unsafe fn downcast<'tcell>(this: Self, _: &'tx impl Rw<'tcell>) -> Ref<'tcell, T> {
         Ref {
             snapshot: this.snapshot,
             lifetime: PhantomData,
@@ -366,6 +365,7 @@ impl<'tx, T> Ref<'tx, T> {
 impl<'tx, T: Borrow> From<&'tx T> for Ref<'tx, T> {
     #[inline]
     fn from(reference: &'tx T) -> Self {
+        // lifetime + swym::tx::Borrow guarantees this is safe
         Ref::new(unsafe { ptr::read(reference as *const T as *const ManuallyDrop<T>) })
     }
 }
@@ -373,7 +373,7 @@ impl<'tx, T: Borrow> From<&'tx T> for Ref<'tx, T> {
 impl<'tx, T: Borrow> From<&'tx mut T> for Ref<'tx, T> {
     #[inline]
     fn from(reference: &'tx mut T) -> Self {
-        Ref::new(unsafe { ptr::read(reference as *const T as *const ManuallyDrop<T>) })
+        Ref::from(&*reference)
     }
 }
 
@@ -486,7 +486,7 @@ mod test {
 
     impl<T: 'static, F: FnOnce(T) + 'static> CustomUndo<T, F> {
         #[inline]
-        const fn new(value: T, undo: F) -> Self {
+        fn new(value: T, undo: F) -> Self {
             CustomUndo {
                 value: ManuallyDrop::new(value),
                 undo:  ManuallyDrop::new(undo),

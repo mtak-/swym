@@ -18,7 +18,7 @@ use std::{
     ops::{Deref, DerefMut},
     process,
     ptr::{self, NonNull},
-    sync::atomic::Ordering::{Acquire, Release},
+    sync::atomic::Ordering::Release,
 };
 
 /// Intrusive reference counted thread local data.
@@ -34,7 +34,7 @@ pub struct Thread {
     /// Contains the Read/Write logs plus the ThreadGarbage. This field needs to be referenced
     /// mutably, and the uniqueness requirement of pinning guarantees that we dont violate any
     /// aliasing rules.
-    logs: UnsafeCell<Logs>,
+    logs: UnsafeCell<Logs<'static>>,
 
     /// The part of a Thread that is visible to other threads in swym (an atomic epoch, and sharded
     /// lock).
@@ -72,13 +72,13 @@ impl Thread {
 
 // TODO: optimize memory layout
 #[repr(C)]
-pub struct Logs {
-    pub read_log:  ReadLog,
-    pub write_log: WriteLog,
+pub struct Logs<'tcell> {
+    pub read_log:  ReadLog<'tcell>,
+    pub write_log: WriteLog<'tcell>,
     pub garbage:   ThreadGarbage,
 }
 
-impl Logs {
+impl<'tcell> Logs<'tcell> {
     #[inline]
     fn new() -> Self {
         Logs {
@@ -89,27 +89,24 @@ impl Logs {
     }
 
     #[inline]
-    pub fn remove_writes_from_reads(&mut self) {
+    pub unsafe fn remove_writes_from_reads(&mut self) {
+        #[allow(unused_mut)]
         let mut count = 0;
-        unsafe {
-            for i in (0..self.read_log.len()).rev() {
-                debug_assert!(i < self.read_log.len(), "bug in `remove_writes_from_reads`");
-                if self
-                    .write_log
-                    .find(self.read_log.get_unchecked(i).src.as_ref())
-                    .is_some()
+
+        let write_log = &mut self.write_log;
+        self.read_log.filter_in_place(|src| {
+            if write_log.find(src).is_none() {
+                true
+            } else {
+                // don't capture count in release
+                #[cfg(feature = "stats")]
                 {
-                    let l = self.read_log.len();
-                    self.read_log.swap_erase_unchecked(i);
                     count += 1;
-                    debug_assert!(
-                        l == self.read_log.len() + 1,
-                        "bug in `remove_writes_from_reads`"
-                    );
                 }
+                false
             }
-        }
-        stats::unnecessary_read_size(count)
+        });
+        stats::write_after_logged_read(count)
     }
 
     #[inline]
@@ -121,7 +118,7 @@ impl Logs {
 }
 
 #[cfg(debug_assertions)]
-impl Drop for Logs {
+impl<'tcell> Drop for Logs<'tcell> {
     fn drop(&mut self) {
         self.validate_start_state();
     }
@@ -238,14 +235,8 @@ impl<'tx, 'tcell> PinRef<'tx, 'tcell> {
 
     /// Returns a reference to the transaction logs (read/write/thread garbage).
     #[inline]
-    pub fn logs(&self) -> &Logs {
+    pub fn logs(&self) -> &Logs<'tcell> {
         unsafe { &*self.thread.logs.get() }
-    }
-
-    /// Returns a &mut to the transaction logs (read/write/thread garbage).
-    #[inline]
-    pub fn logs_mut(&mut self) -> &mut Logs {
-        unsafe { &mut *self.thread.logs.get() }
     }
 
     /// Gets the currently pinned epoch.
@@ -258,10 +249,47 @@ impl<'tx, 'tcell> PinRef<'tx, 'tcell> {
         );
         pin_epoch
     }
+}
+
+pub struct PinMutRef<'tx, 'tcell> {
+    pin_ref: PinRef<'tx, 'tcell>,
+}
+
+impl<'tx, 'tcell> Deref for PinMutRef<'tx, 'tcell> {
+    type Target = PinRef<'tx, 'tcell>;
 
     #[inline]
-    fn into_inner(self) -> (&'tx OwnedSynch, &'tx mut Logs) {
-        (&self.thread.synch, unsafe { &mut *self.thread.logs.get() })
+    fn deref(&self) -> &PinRef<'tx, 'tcell> {
+        &self.pin_ref
+    }
+}
+
+impl<'tx, 'tcell> Debug for PinMutRef<'tx, 'tcell> {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        formatter.pad("PinMutRef { .. }")
+    }
+}
+
+impl<'tx, 'tcell> PinMutRef<'tx, 'tcell> {
+    /// Returns a reference to the current threads Synch.
+    #[inline]
+    pub fn reborrow(&mut self) -> PinMutRef<'_, 'tcell> {
+        PinMutRef {
+            pin_ref: self.pin_ref.reborrow(),
+        }
+    }
+
+    /// Returns a &mut to the transaction logs (read/write/thread garbage).
+    #[inline]
+    pub fn logs_mut(&mut self) -> &mut Logs<'tcell> {
+        unsafe { &mut *(self.pin_ref.thread.logs.get() as *const _ as *mut _) }
+    }
+
+    #[inline]
+    unsafe fn into_inner(self) -> (&'tx OwnedSynch, &'tx mut Logs<'tcell>) {
+        let synch = &self.pin_ref.thread.synch;
+        let logs = &mut *(self.pin_ref.thread.logs.get() as *const _ as *mut _);
+        (synch, logs)
     }
 }
 
@@ -289,7 +317,7 @@ impl<'tcell> Pin<'tcell> {
     #[inline]
     fn try_new(thread: &'tcell Thread) -> Option<Pin<'tcell>> {
         if likely!(!thread.is_pinned()) {
-            let now = EPOCH_CLOCK.now(Acquire);
+            let now = EPOCH_CLOCK.now();
             if let Some(now) = now {
                 thread.synch.pin(now, Release);
                 Some(Pin {
@@ -308,7 +336,7 @@ impl<'tcell> Pin<'tcell> {
 
     #[inline]
     fn repin(&mut self) {
-        let now = EPOCH_CLOCK.now(Acquire);
+        let now = EPOCH_CLOCK.now();
         if let Some(now) = now {
             self.synch().repin(now, Release);
         } else {
@@ -345,7 +373,7 @@ impl<'tcell> Pin<'tcell> {
             stats::write_transaction();
             self.logs().validate_start_state();
             {
-                let mut pin = PinRw::new(&mut self);
+                let mut pin = unsafe { PinRw::new(&mut self) };
                 let r = f(RwTx::new(&mut pin));
                 match r {
                     Ok(o) => {
@@ -364,7 +392,7 @@ impl<'tcell> Pin<'tcell> {
 }
 
 pub struct PinRw<'tx, 'tcell> {
-    pin_ref: PinRef<'tx, 'tcell>,
+    pin_ref: PinMutRef<'tx, 'tcell>,
 }
 
 impl<'tx, 'tcell> Drop for PinRw<'tx, 'tcell> {
@@ -379,31 +407,34 @@ impl<'tx, 'tcell> Drop for PinRw<'tx, 'tcell> {
 }
 
 impl<'tx, 'tcell> Deref for PinRw<'tx, 'tcell> {
-    type Target = PinRef<'tx, 'tcell>;
+    type Target = PinMutRef<'tx, 'tcell>;
 
     #[inline]
-    fn deref(&self) -> &PinRef<'tx, 'tcell> {
+    fn deref(&self) -> &PinMutRef<'tx, 'tcell> {
         &self.pin_ref
     }
 }
 
 impl<'tx, 'tcell> DerefMut for PinRw<'tx, 'tcell> {
     #[inline]
-    fn deref_mut(&mut self) -> &mut PinRef<'tx, 'tcell> {
+    fn deref_mut(&mut self) -> &mut PinMutRef<'tx, 'tcell> {
         &mut self.pin_ref
     }
 }
 
 impl<'tx, 'tcell> PinRw<'tx, 'tcell> {
+    /// It is not safe to mem::forget PinRw
     #[inline]
-    fn new(pin: &'tx mut Pin<'tcell>) -> Self {
+    unsafe fn new(pin: &'tx mut Pin<'tcell>) -> Self {
         PinRw {
-            pin_ref: pin.pin_ref.reborrow(),
+            pin_ref: PinMutRef {
+                pin_ref: pin.pin_ref.reborrow(),
+            },
         }
     }
 
     #[inline]
-    unsafe fn into_inner(self) -> (&'tx OwnedSynch, &'tx mut Logs) {
+    unsafe fn into_inner(self) -> (&'tx OwnedSynch, &'tx mut Logs<'tcell>) {
         let pin_ref = ptr::read(&self.pin_ref);
         mem::forget(self);
         pin_ref.into_inner()
@@ -442,17 +473,17 @@ impl<'tx, 'tcell> PinRw<'tx, 'tcell> {
     /// This performs a lot of lock cmpxchgs, so inlining doesn't really doesn't give us much.
     #[inline(never)]
     fn commit_slow(mut self) -> bool {
-        // Locking the write log, would cause validation of any reads to the same TCell to fail.
-        // So we remove all TCells in the read log that are also in the read log, and assume all
-        // TCells in the write log, have been read.
-        self.logs_mut().remove_writes_from_reads();
-
-        // Locking the write set can fail if another thread has the lock, or if any TCell in the
-        // write set has been updated since the transaction began.
-        //
-        // TODO: would commit algorithm be faster with a single global lock, or lock striping?
-        // per object locking causes a cmpxchg per entry
         unsafe {
+            // Locking the write log, would cause validation of any reads to the same TCell to fail.
+            // So we remove all TCells in the read log that are also in the read log, and assume all
+            // TCells in the write log, have been read.
+            self.logs_mut().remove_writes_from_reads();
+
+            // Locking the write set can fail if another thread has the lock, or if any TCell in the
+            // write set has been updated since the transaction began.
+            //
+            // TODO: would commit algorithm be faster with a single global lock, or lock striping?
+            // per object locking causes a cmpxchg per entry
             if likely!(self.logs().write_log.try_lock_entries(self.pin_epoch())) {
                 self.write_log_lock_success()
             } else {

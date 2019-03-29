@@ -1,4 +1,15 @@
-//! swym's garbage collection.
+//! swym's garbage collection. Very similar to crossbeams garbage collection, but with the concept
+//! of speculation, and piggy backing on the epoch scheme required by the Transactional Locking II
+//! algorithm.
+//!
+//! Crossbeam-epoch is not used for the following reasons:
+//! - we'd have to have a separate speculative garbage bag which gets published on commit to
+//!   crossbeam
+//! - we'd still have to have our own epoch system to implement read/write validation. That means
+//!   there'd be two cmpxchgs on commit to global counters leading to more ping-ponging.
+//! - we'd be likely to wind up performing more allocations per transaction than we currently do
+//!   (average of 0). Allocations (page faults/`lock` prefixes) abort hardware transactions giving
+//!   us less flexibility to explore hardware transactions in the future.
 //!
 //! The algorithm works as follows.
 //!

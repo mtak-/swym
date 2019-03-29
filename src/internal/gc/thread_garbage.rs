@@ -68,12 +68,19 @@ impl UnusedBags {
             bags: FVec::with_capacity(capacity),
         };
 
-        unsafe {
-            for _ in 0..UNUSED_BAG_COUNT {
-                result.bags.push_unchecked(Bag::new());
-            }
+        for _ in 0..UNUSED_BAG_COUNT {
+            result.bags.push(Bag::new());
         }
         result
+    }
+
+    /// Gets an empty bag out of the collection.
+    #[inline]
+    fn open_bag(&mut self) -> Option<Bag> {
+        self.bags.pop().map(|bag| {
+            debug_assert!(bag.queued.is_empty(), "opened up a non-empty `Bag`");
+            bag
+        })
     }
 
     /// Gets an empty bag out of the collection.
@@ -121,7 +128,9 @@ impl ThreadGarbage {
     pub fn new() -> Self {
         let mut unused_bags = UnusedBags::new();
         debug_assert!(!unused_bags.bags.is_empty());
-        let speculative_bag = unsafe { unused_bags.open_bag_unchecked() };
+        let speculative_bag = unused_bags
+            .open_bag()
+            .expect("ThreadGarbage ran out of unused bagss");
         let sealed_capacity = NonZeroUsize::new(UNUSED_BAG_COUNT).unwrap();
         ThreadGarbage {
             speculative_bag,

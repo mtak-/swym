@@ -1,3 +1,14 @@
+//! An alternative implementation of Vec.
+//!
+//! The core difference is that it stores an end pointer, a last_valid_address, and a begin pointer.
+//!
+//! This alternative implementation generates smaller code for write often, iterate rarely use
+//! cases. STM backed data structures can have massive code bloat, compared to their single threaded
+//! counterparts. Every transactional memory read and write has 10s of additional instructions
+//! compared to a non-transactional read/write or atomic read/write.
+//!
+//! TODO: Is this worth all the trouble? It's not too much trouble to swap in Vec for this type.
+
 use crate::internal::{
     alloc::DefaultAlloc,
     pointer::{PtrExt, PtrMutExt},
@@ -11,6 +22,8 @@ use std::{
     num::NonZeroUsize,
     ptr::{self, NonNull},
 };
+
+const START_SIZE: NonZeroUsize = unsafe { NonZeroUsize::new_unchecked(1024) };
 
 #[repr(C)]
 pub struct FVec<T, A = DefaultAlloc>
@@ -27,7 +40,7 @@ where
 unsafe impl<T: Send, A: Alloc + Send> Send for FVec<T, A> {}
 unsafe impl<T: Sync, A: Alloc + Sync> Sync for FVec<T, A> {}
 
-unsafe impl<#[may_dangle] T, A: Alloc> Drop for FVec<T, A> {
+impl<T, A: Alloc> Drop for FVec<T, A> {
     #[inline]
     fn drop(&mut self) {
         self.validate();
@@ -171,6 +184,34 @@ impl<T, A: Alloc> FVec<T, A> {
             dest.drop_in_place_aligned()
         }
         self.end.move_to(dest);
+    }
+
+    // this is faster than swap_erase
+    #[inline]
+    pub fn rswap_erase(&mut self, index: usize) {
+        assert!(
+            unlikely!(index < self.len()),
+            "attempt to use an index >= self.len()"
+        );
+        unsafe { self.rswap_erase_unchecked(index) }
+    }
+
+    #[inline]
+    pub fn filter_in_place(&mut self, mut filter: impl FnMut(&mut T) -> bool) {
+        // TODO: is there room to optimize this?
+        let mut end = self.end;
+        let mut new_end = end;
+        let begin = self.begin;
+        unsafe {
+            while end != begin {
+                end = end.sub(1);
+                if unlikely!(!filter(end.as_mut())) {
+                    new_end = new_end.sub(1);
+                    ptr::copy(new_end.as_ptr(), end.as_ptr(), 1);
+                }
+            }
+        }
+        self.end = new_end;
     }
 
     #[inline]
@@ -620,13 +661,7 @@ pub struct DrainWhile<'a, T, F: FnMut(&mut T) -> bool, A: Alloc> {
     f:   F,
 }
 
-unsafe impl<
-        'a,
-        #[may_dangle] T: 'a,
-        #[may_dangle] F: FnMut(&mut T) -> bool,
-        #[may_dangle] A: 'a + Alloc,
-    > Drop for DrainWhile<'a, T, F, A>
-{
+impl<'a, T: 'a, F: FnMut(&mut T) -> bool, A: 'a + Alloc> Drop for DrainWhile<'a, T, F, A> {
     #[inline]
     fn drop(&mut self) {
         self.v.validate();
@@ -678,7 +713,7 @@ pub struct IntoIter<T, A: Alloc> {
     phantom:   PhantomData<T>,
 }
 
-unsafe impl<#[may_dangle] T, A: Alloc> Drop for IntoIter<T, A> {
+impl<T, A: Alloc> Drop for IntoIter<T, A> {
     #[inline]
     fn drop(&mut self) {
         let mut cur = self.cur;
@@ -749,8 +784,6 @@ impl<T, A: Alloc> ExactSizeIterator for IntoIter<T, A> {
 }
 
 unsafe impl<T, A: Alloc> TrustedLen for IntoIter<T, A> {}
-
-const START_SIZE: NonZeroUsize = unsafe { NonZeroUsize::new_unchecked(1024) };
 
 // used by tests
 #[allow(unused)]

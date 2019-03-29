@@ -6,6 +6,7 @@ extern crate test;
 static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
 
 mod set_one {
+    use crossbeam_utils::thread;
     use swym::{tcell::TCell, thread_key};
     use test::Bencher;
 
@@ -15,16 +16,22 @@ mod set_one {
         #[bench]
         fn run(b: &mut Bencher) {
             const ITER_COUNT: usize = 1_000_000;
-            let thread_key = thread_key::get();
             let x = TCell::new(Box::new(0usize));
-            b.iter(|| {
-                for _ in 0..ITER_COUNT {
-                    thread_key.rw(|tx| {
-                        x.set(tx, Box::new(0))?;
-                        Ok(())
-                    });
-                }
+            thread::scope(|scope| {
+                scope.spawn(move |_| {
+                    let thread_key = thread_key::get();
+                    b.iter(|| {
+                        for _ in 0..ITER_COUNT {
+                            thread_key.rw(|tx| {
+                                x.set(tx, Box::new(0))?;
+                                Ok(())
+                            });
+                        }
+                    })
+                });
             })
+            .unwrap();
+            swym::print_stats();
         }
     }
 
@@ -40,16 +47,22 @@ mod set_one {
         #[bench]
         fn run(b: &mut Bencher) {
             const ITER_COUNT: usize = 1_000_000;
-            let thread_key = thread_key::get();
             let x = TCell::new(NeedsDrop(0));
-            b.iter(|| {
-                for _ in 0..ITER_COUNT {
-                    thread_key.rw(|tx| {
-                        x.set(tx, NeedsDrop(0))?;
-                        Ok(())
-                    });
-                }
+            thread::scope(|scope| {
+                scope.spawn(move |_| {
+                    let thread_key = thread_key::get();
+                    b.iter(|| {
+                        for _ in 0..ITER_COUNT {
+                            thread_key.rw(|tx| {
+                                x.set(tx, NeedsDrop(0))?;
+                                Ok(())
+                            });
+                        }
+                    })
+                });
             })
+            .unwrap();
+            swym::print_stats();
         }
     }
 
@@ -59,16 +72,22 @@ mod set_one {
         #[bench]
         fn run(b: &mut Bencher) {
             const ITER_COUNT: usize = 1_000_000;
-            let thread_key = thread_key::get();
             let x = TCell::new(0usize);
-            b.iter(|| {
-                for _ in 0..ITER_COUNT {
-                    thread_key.rw(|tx| {
-                        x.set(tx, 0)?;
-                        Ok(())
-                    });
-                }
+            thread::scope(|scope| {
+                scope.spawn(move |_| {
+                    let thread_key = thread_key::get();
+                    b.iter(|| {
+                        for _ in 0..ITER_COUNT {
+                            thread_key.rw(|tx| {
+                                x.set(tx, 0)?;
+                                Ok(())
+                            });
+                        }
+                    })
+                });
             })
+            .unwrap();
+            swym::print_stats();
         }
     }
 }

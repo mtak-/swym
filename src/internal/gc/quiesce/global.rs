@@ -2,6 +2,7 @@ use crate::internal::{frw_lock::FrwLock, gc::quiesce::synch_list::SynchList};
 use lock_api::RawRwLock;
 use std::{
     cell::UnsafeCell,
+    mem::ManuallyDrop,
     ops::{Deref, DerefMut},
     sync::{
         atomic::{
@@ -62,8 +63,7 @@ impl GlobalSynchList {
 
         INIT_QUIESCE_LIST.call_once(do_init);
 
-        // SINGLETON is leaked, so this is always valid
-        unsafe { Self::instance_unchecked() }
+        Self::instance()
     }
 
     /// Returns a references to the global thread list.
@@ -121,13 +121,12 @@ impl<'a> Write<'a> {
         // The outer mutex is used for this purpose, and so that, under contention, two writers will
         // never deadlock.
         list.mutex.lock_exclusive();
-        unsafe {
-            // lock all the Synchs to prevent them from creating a FreezeList
-            for synch in list.raw().iter() {
-                synch.lock();
-            }
-            Write { list }
+        let list = ManuallyDrop::new(Write { list });
+        // lock all the Synchs to prevent them from creating a FreezeList
+        for synch in list.iter() {
+            synch.lock();
         }
+        ManuallyDrop::into_inner(list)
     }
 }
 

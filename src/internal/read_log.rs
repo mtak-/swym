@@ -1,23 +1,23 @@
-use crate::internal::{
-    alloc::{fvec::Iter, FVec},
-    epoch::QuiesceEpoch,
-    stats,
-    tcell_erased::TCellErased,
-};
-use std::{num::NonZeroUsize, ptr::NonNull, sync::atomic::Ordering::Relaxed};
+//! ReadLog contains borrows of `TCell`'s that have been read from during a transaction.
+//!
+//! The only meaningful operations are filtering out writes from the ReadLog (see thread.rs), and
+//! checking that the reads are still valid (validate_reads).
 
-const READ_SIZE: NonZeroUsize = unsafe { NonZeroUsize::new_unchecked(1024) };
+use crate::internal::{alloc::FVec, epoch::QuiesceEpoch, stats, tcell_erased::TCellErased};
+use std::num::NonZeroUsize;
+
+const READ_CAPACITY: usize = 1024;
 
 #[derive(Debug)]
-pub struct ReadLog {
-    data: FVec<ReadEntry>,
+pub struct ReadLog<'tcell> {
+    data: FVec<Option<&'tcell TCellErased>>,
 }
 
-impl ReadLog {
+impl<'tcell> ReadLog<'tcell> {
     #[inline]
     pub fn new() -> Self {
         ReadLog {
-            data: FVec::with_capacity(READ_SIZE),
+            data: FVec::with_capacity(NonZeroUsize::new(READ_CAPACITY).unwrap()),
         }
     }
 
@@ -32,13 +32,34 @@ impl ReadLog {
     }
 
     #[inline]
-    pub fn push(&mut self, erased: &TCellErased) {
-        self.data.push(ReadEntry::new(erased))
+    pub fn record(&mut self, erased: &'tcell TCellErased) {
+        self.data.push(Some(erased))
     }
 
     #[inline]
-    pub unsafe fn push_unchecked(&mut self, erased: &TCellErased) {
-        self.data.push_unchecked(ReadEntry::new(erased))
+    pub unsafe fn record_unchecked(&mut self, erased: &'tcell TCellErased) {
+        self.data.push_unchecked(Some(erased))
+    }
+
+    /// After calling filter_in_place, it is unsafe to call again without calling clear first
+    #[inline]
+    pub unsafe fn filter_in_place(&mut self, mut filter: impl FnMut(&'tcell TCellErased) -> bool) {
+        for elem in self.data.iter_mut() {
+            let tcell = match *elem {
+                Some(tcell) => tcell,
+                None => {
+                    if cfg!(debug_assertions) {
+                        panic!("unreachable code reached")
+                    } else {
+                        // we want this fast since every RW transaction runs it
+                        std::hint::unreachable_unchecked()
+                    }
+                }
+            };
+            if unlikely!(!filter(tcell)) {
+                *elem = None;
+            }
+        }
     }
 
     #[inline]
@@ -53,45 +74,17 @@ impl ReadLog {
     }
 
     #[inline]
-    pub unsafe fn get_unchecked(&self, i: usize) -> &ReadEntry {
-        self.data.get_unchecked(i)
+    fn iter<'a>(&'a self) -> impl Iterator<Item = &'a TCellErased> {
+        self.data.iter().flat_map(|v| *v)
     }
 
     #[inline]
-    pub unsafe fn swap_erase_unchecked(&mut self, i: usize) {
-        self.data.swap_erase_unchecked(i)
-    }
-
-    #[inline]
-    pub fn iter(&self) -> Iter<'_, ReadEntry> {
-        self.data.iter()
-    }
-
-    #[inline]
-    pub unsafe fn validate_reads(&self, pin_epoch: QuiesceEpoch) -> bool {
+    pub fn validate_reads(&self, pin_epoch: QuiesceEpoch) -> bool {
         for logged_read in self.iter() {
-            if unlikely!(!pin_epoch
-                .read_write_valid_lockable(&logged_read.src.as_ref().current_epoch, Relaxed))
-            {
+            if unlikely!(!pin_epoch.read_write_valid_lockable(&logged_read.current_epoch)) {
                 return false;
             }
         }
         true
-    }
-}
-
-#[derive(Copy, Clone, Debug)]
-pub struct ReadEntry {
-    pub src: NonNull<TCellErased>,
-}
-
-impl ReadEntry {
-    #[inline]
-    pub const fn new(src: &TCellErased) -> Self {
-        unsafe {
-            ReadEntry {
-                src: NonNull::new_unchecked(src as *const _ as _),
-            }
-        }
     }
 }

@@ -4,45 +4,42 @@ use crate::internal::{
     pointer::PtrExt,
     stats,
     tcell_erased::TCellErased,
-    usize_aligned::{ForcedUsizeAligned, UsizeAligned},
+    usize_aligned::ForcedUsizeAligned,
 };
 use std::{
     mem::{self, ManuallyDrop},
     num::NonZeroUsize,
     ptr::{self, NonNull},
     raw::TraitObject,
-    sync::atomic::Ordering::{Acquire, Relaxed, Release},
+    sync::atomic::{self, Ordering::Release},
 };
 
 #[repr(C)]
-pub struct WriteEntryImpl<T> {
-    dest:    Option<NonNull<TCellErased>>,
+pub struct WriteEntryImpl<'tcell, T> {
+    dest:    Option<&'tcell TCellErased>,
     pending: ForcedUsizeAligned<T>,
 }
 
-impl<T> WriteEntryImpl<T> {
+impl<'tcell, T> WriteEntryImpl<'tcell, T> {
     #[inline]
-    pub const fn new(dest: &TCellErased, pending: T) -> Self {
+    pub const fn new(dest: &'tcell TCellErased, pending: T) -> Self {
         WriteEntryImpl {
-            dest:    Some(unsafe { NonNull::new_unchecked(dest as *const _ as _) }),
+            dest:    Some(dest),
             pending: ForcedUsizeAligned::new(pending),
         }
     }
 }
 
 pub unsafe trait WriteEntry {}
-unsafe impl<T> WriteEntry for WriteEntryImpl<T> {}
+unsafe impl<'tcell, T> WriteEntry for WriteEntryImpl<'tcell, T> {}
 
-impl<'a> dyn WriteEntry + 'a {
-    #[inline]
-    fn tcell(&self) -> Option<NonNull<TCellErased>> {
-        let ptr = unsafe { *self.tcell_ptr().as_ptr() };
-        likely!(ptr.is_some());
-        ptr
-    }
-
-    #[inline]
-    fn tcell_ptr(&self) -> NonNull<Option<NonNull<TCellErased>>> {
+impl<'tcell> dyn WriteEntry + 'tcell {
+    fn data_ptr(&self) -> NonNull<usize> {
+        debug_assert!(
+            mem::align_of_val(self) >= mem::align_of::<NonNull<usize>>(),
+            "incorrect alignment on data_ptr"
+        );
+        // obtains a thin pointer to self
         unsafe {
             let raw: TraitObject = mem::transmute::<&Self, _>(self);
             NonNull::new_unchecked(raw.data as *mut _)
@@ -50,8 +47,20 @@ impl<'a> dyn WriteEntry + 'a {
     }
 
     #[inline]
+    fn tcell(&self) -> &'_ Option<&'_ TCellErased> {
+        let this = self.data_ptr();
+        unsafe { &*(this.as_ptr() as *mut _ as *const _) }
+    }
+
+    #[inline]
+    fn tcell_mut(&mut self) -> &'_ mut Option<&'tcell TCellErased> {
+        let this = self.data_ptr();
+        unsafe { &mut *(this.as_ptr() as *mut _) }
+    }
+
+    #[inline]
     fn pending(&self) -> NonNull<usize> {
-        unsafe { self.tcell_ptr().add(1).cast() }
+        unsafe { self.data_ptr().add(1).cast() }
     }
 
     #[inline]
@@ -60,13 +69,13 @@ impl<'a> dyn WriteEntry + 'a {
             self.tcell().is_some(),
             "unexpectedly deactivating an inactive write log entry"
         );
-        unsafe { *self.tcell_ptr().as_mut() = None }
+        *self.tcell_mut() = None
     }
 
     #[inline]
     pub fn is_dest_tcell(&self, v: &TCellErased) -> bool {
         match self.tcell() {
-            Some(ptr) => ptr::eq(ptr.as_ptr(), v),
+            Some(tcell) => ptr::eq(*tcell, v),
             None => false,
         }
     }
@@ -74,27 +83,23 @@ impl<'a> dyn WriteEntry + 'a {
     #[inline]
     pub unsafe fn read<T>(&self) -> ManuallyDrop<T> {
         debug_assert!(
-            mem::size_of_val(self) == mem::size_of::<UsizeAligned<T>>() + mem::size_of::<usize>(),
+            mem::size_of_val(self) == mem::size_of::<WriteEntryImpl<'tcell, T>>(),
             "destination size error during `WriteEntry::read`"
         );
         assert!(
             mem::size_of::<T>() > 0,
             "`WriteEntry` performing a read of size 0 unexpectedly"
         );
-        let mut value: UsizeAligned<ManuallyDrop<T>> = mem::uninitialized();
-        let slice = value.as_mut();
-        self.pending().copy_to_n(slice.as_mut_ptr(), slice.len());
-        value.into_inner()
+        let downcast = &(&*(self as *const _ as *const WriteEntryImpl<'tcell, T>)).pending
+            as *const ForcedUsizeAligned<T>;
+        PtrExt::read_as::<_>(downcast)
     }
 
     #[inline]
     #[must_use]
-    pub unsafe fn try_lock(&self, pin_epoch: QuiesceEpoch) -> bool {
+    pub fn try_lock(&self, pin_epoch: QuiesceEpoch) -> bool {
         match self.tcell() {
-            Some(ptr) => ptr
-                .as_ref()
-                .current_epoch
-                .try_lock(pin_epoch, Acquire, Relaxed),
+            Some(tcell) => tcell.current_epoch.try_lock(pin_epoch),
             None => true,
         }
     }
@@ -102,7 +107,7 @@ impl<'a> dyn WriteEntry + 'a {
     #[inline]
     pub unsafe fn unlock(&self) {
         match self.tcell() {
-            Some(ptr) => ptr.as_ref().current_epoch.unlock(Release),
+            Some(tcell) => tcell.current_epoch.unlock_undo(),
             None => {}
         }
     }
@@ -110,7 +115,7 @@ impl<'a> dyn WriteEntry + 'a {
     #[inline]
     pub unsafe fn perform_write(&self) {
         match self.tcell() {
-            Some(ptr) => {
+            Some(tcell) => {
                 let size = mem::size_of_val(self);
                 assume!(
                     size % mem::size_of::<usize>() == 0,
@@ -121,8 +126,8 @@ impl<'a> dyn WriteEntry + 'a {
                     len > 0,
                     "`WriteEntry` performing a write of size 0 unexpectedly"
                 );
-                let src = std::slice::from_raw_parts(self.pending().as_ptr(), len);
-                ptr.as_ref().store_release(src)
+                self.pending()
+                    .copy_to_n(NonNull::from(*tcell).cast().sub(len), len);
             }
             None => {}
         }
@@ -131,10 +136,7 @@ impl<'a> dyn WriteEntry + 'a {
     #[inline]
     pub unsafe fn publish(&self, publish_epoch: QuiesceEpoch) {
         match self.tcell() {
-            Some(ptr) => ptr
-                .as_ref()
-                .current_epoch
-                .unlock_as_epoch(publish_epoch, Release),
+            Some(tcell) => tcell.current_epoch.unlock_publish(publish_epoch),
             None => {}
         }
     }
@@ -149,12 +151,12 @@ pub enum Contained {
 /// TODO: WriteLog is very very slow if the bloom filter fails.
 /// probably worth looking into some true hashmaps
 #[repr(C)]
-pub struct WriteLog {
+pub struct WriteLog<'tcell> {
     filter: usize,
-    data:   DynVec<dyn WriteEntry>,
+    data:   DynVec<dyn WriteEntry + 'tcell>,
 }
 
-impl WriteLog {
+impl<'tcell> WriteLog<'tcell> {
     #[inline]
     pub fn new() -> Self {
         WriteLog {
@@ -190,21 +192,13 @@ impl WriteLog {
 
     #[inline]
     pub fn is_empty(&self) -> bool {
-        unsafe {
-            if self.filter == 0 {
-                assume!(
-                    self.data.is_empty(),
-                    "bloom filter and container out of sync"
-                );
-                true
-            } else {
-                assume!(
-                    !self.data.is_empty(),
-                    "bloom filter and container out of sync"
-                );
-                false
-            }
-        }
+        let empty = self.filter == 0;
+        debug_assert_eq!(
+            empty,
+            self.data.is_empty(),
+            "bloom filter and container out of sync"
+        );
+        empty
     }
 
     #[inline(never)]
@@ -234,16 +228,22 @@ impl WriteLog {
     }
 
     #[inline(never)]
-    fn entry_slow<'a>(&'a mut self, dest_tcell: &TCellErased, hash: NonZeroUsize) -> Entry<'a> {
+    fn entry_slow<'a>(
+        &'a mut self,
+        dest_tcell: &TCellErased,
+        hash: NonZeroUsize,
+    ) -> Entry<'a, 'tcell> {
         match self
             .data
             .iter_mut()
             .find(|entry| entry.is_dest_tcell(dest_tcell))
         {
-            // TODO: why does this need to be passed through a pointer first?
+            // TODO: Borrow checker is a little off here. Without the transmute, the code does not
+            // compile. But, replacing either branch's return with `unimplemented` compiles.
+            // polonius would fix this.
             Some(entry) => {
                 stats::bloom_success_slow();
-                stats::double_write();
+                stats::write_after_write();
                 Entry::new_occupied(unsafe { mem::transmute(entry) }, hash)
             }
             None => {
@@ -255,7 +255,7 @@ impl WriteLog {
 
     // biased against finding the tcell
     #[inline]
-    pub fn entry<'a>(&'a mut self, dest_tcell: &TCellErased) -> Entry<'a> {
+    pub fn entry<'a>(&'a mut self, dest_tcell: &TCellErased) -> Entry<'a, 'tcell> {
         let hash = bloom_hash(dest_tcell);
         debug_assert!(hash.get() != 0, "bug in dumb_reference_hash algorithm");
         if likely!(self.contained(hash) == Contained::No) {
@@ -267,42 +267,42 @@ impl WriteLog {
 
     #[inline]
     pub fn next_push_allocates<T>(&self) -> bool {
-        self.data.next_push_allocates::<WriteEntryImpl<T>>()
+        self.data.next_push_allocates::<WriteEntryImpl<'tcell, T>>()
     }
 
     #[inline]
-    pub unsafe fn push<T: 'static>(
+    pub fn record<T: 'static>(
         &mut self,
-        dest_tcell: &TCellErased,
+        dest_tcell: &'tcell TCellErased,
         val: T,
         hash: NonZeroUsize,
     ) {
-        {
-            let _ptr = dest_tcell as *const TCellErased;
-            debug_assert!(
-                self.data.iter().find(|x| x.is_dest_tcell(&*_ptr)).is_none(),
-                "attempt to add `TCell` to the `WriteLog` twice"
-            );
-        }
+        debug_assert!(
+            self.data
+                .iter()
+                .find(|x| x.is_dest_tcell(dest_tcell))
+                .is_none(),
+            "attempt to add `TCell` to the `WriteLog` twice"
+        );
 
         self.filter |= hash.get();
         self.data.push(WriteEntryImpl::new(dest_tcell, val));
     }
 
     #[inline]
-    pub unsafe fn push_unchecked<T: 'static>(
+    pub unsafe fn record_unchecked<T: 'static>(
         &mut self,
-        dest_tcell: &TCellErased,
+        dest_tcell: &'tcell TCellErased,
         val: T,
         hash: NonZeroUsize,
     ) {
-        {
-            let _ptr = dest_tcell as *const TCellErased;
-            debug_assert!(
-                self.data.iter().find(|x| x.is_dest_tcell(&*_ptr)).is_none(),
-                "attempt to add `TCell` to the `WriteLog` twice"
-            );
-        }
+        debug_assert!(
+            self.data
+                .iter()
+                .find(|x| x.is_dest_tcell(dest_tcell))
+                .is_none(),
+            "attempt to add `TCell` to the `WriteLog` twice"
+        );
 
         self.filter |= hash.get();
         self.data
@@ -315,11 +315,11 @@ impl WriteLog {
         debug_assert!(!self.is_empty(), "attempt to lock empty write set");
 
         for entry in &self.data {
-            unsafe {
-                if unlikely!(!entry.try_lock(pin_epoch)) {
+            if unlikely!(!entry.try_lock(pin_epoch)) {
+                unsafe {
                     self.unlock_entries_until(entry);
-                    return false;
                 }
+                return false;
             }
         }
         true
@@ -328,8 +328,7 @@ impl WriteLog {
     #[inline(never)]
     #[cold]
     unsafe fn unlock_entries_until(&self, entry: &dyn WriteEntry) {
-        let iter = self.data.iter().take_while(#[inline]
-        move |&e| !ptr::eq(e, entry));
+        let iter = self.data.iter().take_while(move |&e| !ptr::eq(e, entry));
         for entry in iter {
             entry.unlock();
         }
@@ -344,6 +343,7 @@ impl WriteLog {
 
     #[inline]
     pub unsafe fn perform_writes(&self) {
+        atomic::fence(Release);
         for entry in &self.data {
             entry.perform_write();
         }
@@ -357,25 +357,25 @@ impl WriteLog {
     }
 }
 
-pub enum Entry<'a> {
+pub enum Entry<'a, 'tcell> {
     Vacant {
-        write_log: &'a mut WriteLog,
+        write_log: &'a mut WriteLog<'tcell>,
         hash:      NonZeroUsize,
     },
     Occupied {
-        entry: DynElemMut<'a, dyn WriteEntry>,
+        entry: DynElemMut<'a, dyn WriteEntry + 'tcell>,
         hash:  NonZeroUsize,
     },
 }
 
-impl<'a> Entry<'a> {
+impl<'a, 'tcell> Entry<'a, 'tcell> {
     #[inline]
-    fn new_hash(write_log: &'a mut WriteLog, hash: NonZeroUsize) -> Self {
+    fn new_hash(write_log: &'a mut WriteLog<'tcell>, hash: NonZeroUsize) -> Self {
         Entry::Vacant { write_log, hash }
     }
 
     #[inline]
-    fn new_occupied(entry: DynElemMut<'a, dyn WriteEntry>, hash: NonZeroUsize) -> Self {
+    fn new_occupied(entry: DynElemMut<'a, dyn WriteEntry + 'tcell>, hash: NonZeroUsize) -> Self {
         Entry::Occupied { entry, hash }
     }
 }
@@ -396,5 +396,6 @@ pub fn bloom_hash(value: &TCellErased) -> NonZeroUsize {
     const SHIFT: usize = calc_shift();
     let raw_hash: usize = value as *const TCellErased as usize >> SHIFT;
     let result = 1 << (raw_hash & (mem::size_of::<NonZeroUsize>() * 8 - 1));
+    debug_assert!(result > 0, "bloom_hash should not return 0");
     unsafe { NonZeroUsize::new_unchecked(result) }
 }

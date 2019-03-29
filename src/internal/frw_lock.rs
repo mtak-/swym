@@ -1,3 +1,9 @@
+//! A very simple and cheap spinning RwLock. These are used for protection of the gc's
+//! GlobalThreadList.
+//!
+//! TODO: it's likely that parking_lot's RwLocks are totally adequate/amazing for this purpose,
+//! gotta bench and see.
+
 use lock_api::{GuardNoSend, RawRwLock};
 use std::{
     mem,

@@ -1,8 +1,4 @@
-use std::{
-    mem,
-    num::NonZeroUsize,
-    ops::{Deref, DerefMut},
-};
+use std::ops::{Deref, DerefMut};
 
 #[cfg(target_pointer_width = "64")]
 #[repr(align(8))]
@@ -23,16 +19,6 @@ impl<T> UsizeAligned<T> {
     #[inline]
     pub fn into_inner(self) -> T {
         self.0
-    }
-
-    #[inline]
-    pub const unsafe fn len() -> NonZeroUsize {
-        NonZeroUsize::new_unchecked(mem::size_of::<Self>() / mem::size_of::<usize>())
-    }
-
-    #[inline]
-    pub unsafe fn as_mut(&mut self) -> &mut [usize] {
-        std::slice::from_raw_parts_mut(self as *mut _ as _, UsizeAligned::<T>::len().get())
     }
 }
 

@@ -1,5 +1,5 @@
 use crate::internal::{
-    epoch::{AtomicQuiesceEpoch, QuiesceEpoch},
+    epoch::{QuiesceEpoch, ThreadEpoch},
     frw_lock::{self, FrwLock},
     gc::quiesce::GlobalSynchList,
 };
@@ -21,7 +21,7 @@ use std::{
 #[repr(C)]
 pub struct Synch {
     /// The currently pinned epoch, or INACTIVE_EPOCH
-    current_epoch: AtomicQuiesceEpoch,
+    current_epoch: ThreadEpoch,
 
     /// The sharded lock protecting the GlobalThreadList
     lock: FrwLock,
@@ -31,7 +31,7 @@ impl Synch {
     #[inline]
     fn new() -> Self {
         Synch {
-            current_epoch: AtomicQuiesceEpoch::inactive(),
+            current_epoch: ThreadEpoch::inactive(),
             // Synchs are created in a locked state, since the GlobalThreadList is assumed to be
             // locked, whenever a Synch is created.
             //
@@ -46,7 +46,7 @@ impl Synch {
     #[inline]
     pub fn is_quiesced(&self, quiesce_epoch: QuiesceEpoch) -> bool {
         // TODO: acquire seems unneeded, but syncs with release in activate_epoch
-        self.current_epoch.get(Acquire) > quiesce_epoch
+        self.current_epoch.is_quiesced(quiesce_epoch, Acquire)
     }
 
     /// Waits until the thread owning this Synch is no longer accessing data that existed before
@@ -101,9 +101,8 @@ impl OwnedSynch {
     /// Gets the value of the currently pinned epoch (or returns an inactive epoch).
     #[inline]
     pub fn current_epoch(&self) -> QuiesceEpoch {
-        let epoch_ptr =
-            &self.inner.current_epoch as *const AtomicQuiesceEpoch as *const QuiesceEpoch;
-        // safe since we only allow mutation through OwnedSynch (which is not sync)
+        let epoch_ptr = &self.inner.current_epoch as *const ThreadEpoch as *const QuiesceEpoch;
+        // safe since we only allow mutation through OwnedSynch (which does not implement sync)
         unsafe { *epoch_ptr }
     }
 
@@ -139,7 +138,7 @@ impl<'a> FreezeList<'a> {
         let lock = &synch.inner.lock;
         lock.lock_shared();
         debug_assert!(
-            GlobalSynchList::instance_unchecked()
+            GlobalSynchList::instance()
                 .raw()
                 .iter()
                 .find(|&lhs| ptr::eq(lhs, &synch.inner))
@@ -163,26 +162,28 @@ impl<'a> FreezeList<'a> {
     /// epoch).
     #[inline]
     pub fn quiesce(&self, epoch: QuiesceEpoch) -> QuiesceEpoch {
-        let mut result = QuiesceEpoch::max_value();
-
         // we hold one of the sharded locks, so read access is safe.
         let synchs = unsafe { GlobalSynchList::instance_unchecked().raw().iter() };
-        for synch in synchs {
-            let td_epoch = synch.current_epoch.get(Acquire);
+        let result = synchs
+            .flat_map(|synch| {
+                let td_epoch = synch.current_epoch.get(Acquire);
 
-            debug_assert!(
-                !self.requested_by(synch) || td_epoch > epoch,
-                "deadlock detected. `wait_until_epoch_end` called by an active thread"
-            );
+                debug_assert!(
+                    !self.requested_by(synch) || td_epoch > epoch,
+                    "deadlock detected. `wait_until_epoch_end` called by an active thread"
+                );
 
-            if likely!(td_epoch > epoch) {
-                result = result.min(td_epoch);
-            } else {
-                // after quiescing, the thread owning `synch` will have entered the
-                // INACTIVE_EPOCH atleast once, so there's no need to update result
-                synch.local_quiesce(epoch);
-            }
-        }
+                if likely!(td_epoch > epoch) {
+                    Some(td_epoch)
+                } else {
+                    // after quiescing, the thread owning `synch` will have entered the
+                    // INACTIVE_EPOCH atleast once, so there's no need to update result
+                    synch.local_quiesce(epoch);
+                    None
+                }
+            })
+            .min()
+            .unwrap_or(QuiesceEpoch::max_value());
 
         debug_assert!(
             result >= epoch,
