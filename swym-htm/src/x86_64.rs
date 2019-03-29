@@ -55,7 +55,7 @@ pub const fn _XABORT_CODE(x: i32) -> i32 {
 
 #[repr(transparent)]
 #[derive(PartialEq, Eq, Ord, PartialOrd, Copy, Clone, Debug, Hash)]
-pub struct BeginCode(i32);
+pub(super) struct BeginCode(i32);
 
 impl BeginCode {
     #[inline]
@@ -66,15 +66,6 @@ impl BeginCode {
     #[inline]
     pub fn is_explicit_abort(&self) -> bool {
         self.0 & _XABORT_EXPLICIT != 0
-    }
-
-    #[inline]
-    pub fn abort_code(&self) -> Option<AbortCode> {
-        if self.is_explicit_abort() {
-            Some(AbortCode(_XABORT_CODE(self.0) as _))
-        } else {
-            None
-        }
     }
 
     #[inline]
@@ -95,7 +86,7 @@ impl BeginCode {
 
 #[repr(transparent)]
 #[derive(PartialEq, Eq, Ord, PartialOrd, Copy, Clone, Debug, Hash)]
-pub struct TestCode(i32);
+pub(super) struct TestCode(i32);
 
 impl TestCode {
     #[inline]
@@ -109,24 +100,13 @@ impl TestCode {
     }
 }
 
-#[repr(transparent)]
-#[derive(PartialEq, Eq, Ord, PartialOrd, Copy, Clone, Debug, Hash)]
-pub struct AbortCode(i8);
-
-impl AbortCode {
-    #[inline]
-    pub fn new(code: i8) -> Self {
-        AbortCode(code)
-    }
-}
-
 #[inline]
-pub unsafe fn begin() -> BeginCode {
+pub(super) unsafe fn begin() -> BeginCode {
     BeginCode(xbegin())
 }
 
 #[inline(always)]
-pub unsafe fn abort() -> ! {
+pub(super) unsafe fn abort() -> ! {
     struct Code;
     impl XAbortConst for Code {
         const CODE: i8 = 0;
@@ -135,16 +115,16 @@ pub unsafe fn abort() -> ! {
 }
 
 #[inline]
-pub unsafe fn test() -> TestCode {
+pub(super) unsafe fn test() -> TestCode {
     TestCode(xtest())
 }
 
 #[inline]
-pub unsafe fn end() {
+pub(super) unsafe fn end() {
     xend()
 }
 
 #[inline]
-pub const fn htm_supported() -> bool {
+pub(super) const fn htm_supported() -> bool {
     true
 }

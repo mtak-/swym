@@ -68,17 +68,6 @@ impl TestCode {
     }
 }
 
-#[repr(transparent)]
-#[derive(PartialEq, Eq, Ord, PartialOrd, Copy, Clone, Debug, Hash)]
-pub struct AbortCode(back::AbortCode);
-
-impl AbortCode {
-    #[inline]
-    pub fn new(code: i8) -> Self {
-        AbortCode(back::AbortCode::new(code))
-    }
-}
-
 #[inline]
 pub unsafe fn begin() -> BeginCode {
     BeginCode(back::begin())
@@ -118,12 +107,12 @@ impl Drop for HardwareTx {
 
 impl HardwareTx {
     #[inline]
-    pub unsafe fn begin<F, E>(mut retry_handler: F) -> Result<Self, E>
+    pub fn new<F, E>(mut retry_handler: F) -> Result<Self, E>
     where
         F: FnMut(BeginCode) -> Result<(), E>,
     {
         loop {
-            let b = begin();
+            let b = unsafe { begin() };
             if b.is_started() {
                 return Ok(HardwareTx {
                     _private: PhantomData,
@@ -160,7 +149,7 @@ macro_rules! bench_tx {
             bench.iter(move || {
                 for _ in 0..ITER_COUNT {
                     unsafe {
-                        let tx = HardwareTx::begin(|_| -> Result<(), ()> { Err(()) });
+                        let tx = HardwareTx::new(|_| -> Result<(), ()> { Err(()) });
                         for i in 0..arr.0.len() {
                             *arr.0.get_unchecked_mut(i) =
                                 arr.0.get_unchecked_mut(i).wrapping_add(1);
@@ -203,16 +192,14 @@ fn bench_abort(bench: &mut test::Bencher) {
 
     bench.iter(|| {
         for _ in 0..ITER_COUNT {
-            unsafe {
-                let tx = HardwareTx::begin(|code| -> Result<(), ()> {
-                    if code.is_explicit_abort() {
-                        Err(())
-                    } else {
-                        Ok(())
-                    }
-                });
-                drop(tx.map(|tx| tx.abort()));
-            }
+            let tx = HardwareTx::new(|code| -> Result<(), ()> {
+                if code.is_explicit_abort() {
+                    Err(())
+                } else {
+                    Ok(())
+                }
+            });
+            drop(tx.map(|tx| tx.abort()));
         }
     });
 }
@@ -223,13 +210,11 @@ fn begin_end() {
 
     let mut fails = 0;
     for _ in 0..ITER_COUNT {
-        unsafe {
-            let _tx = HardwareTx::begin(|_| -> Result<(), ()> {
-                fails += 1;
-                Ok(())
-            })
-            .unwrap();
-        }
+        let _tx = HardwareTx::new(|_| -> Result<(), ()> {
+            fails += 1;
+            Ok(())
+        })
+        .unwrap();
     }
     println!(
         "fail rate {:.4}%",
@@ -242,7 +227,7 @@ fn test_in_transaction() {
     for _ in 0..1000000 {
         unsafe {
             assert!(!test().in_transaction());
-            let _tx = HardwareTx::begin(|_| -> Result<(), ()> { Ok(()) }).unwrap();
+            let _tx = HardwareTx::new(|_| -> Result<(), ()> { Ok(()) }).unwrap();
             assert!(test().in_transaction());
         }
     }
@@ -253,22 +238,20 @@ fn begin_abort() {
     let mut i = 0i32;
     let mut abort_count = 0;
     loop {
-        unsafe {
-            let i = &mut i;
-            *i += 1;
-            let tx = HardwareTx::begin(|code| -> Result<(), ()> {
-                if code.is_explicit_abort() {
-                    abort_count += 1;
-                    *i += 1;
-                }
-                Ok(())
-            })
-            .unwrap();
-            if *i % 128 != 0 && *i != 1_000_000 {
-                tx.abort();
+        let i = &mut i;
+        *i += 1;
+        let tx = HardwareTx::new(|code| -> Result<(), ()> {
+            if code.is_explicit_abort() {
+                abort_count += 1;
+                *i += 1;
             }
+            Ok(())
+        })
+        .unwrap();
+        if *i % 128 != 0 && *i != 1_000_000 {
+            tx.abort();
         }
-        if i == 1_000_000 {
+        if *i == 1_000_000 {
             break;
         }
     }
@@ -291,7 +274,7 @@ fn capacity_check() {
     for max in 0..end {
         let mut fail_count = 0;
         unsafe {
-            let tx = HardwareTx::begin(|code| {
+            let tx = HardwareTx::new(|code| {
                 let cap = code.is_capacity();
                 if cap {
                     fail_count += 1;

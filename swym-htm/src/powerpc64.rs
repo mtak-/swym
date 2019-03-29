@@ -166,7 +166,7 @@ pub const _HTM_TRANSACTIONAL: i64 = 0x2;
 
 #[repr(transparent)]
 #[derive(PartialEq, Eq, Ord, PartialOrd, Copy, Clone, Debug, Hash)]
-pub struct BeginCode(i32);
+pub(super) struct BeginCode(i32);
 
 impl BeginCode {
     #[inline]
@@ -176,11 +176,6 @@ impl BeginCode {
 
     #[inline]
     pub fn is_explicit_abort(&self) -> bool {
-        unimplemented!()
-    }
-
-    #[inline]
-    pub fn abort_code(&self) -> Option<AbortCode> {
         unimplemented!()
     }
 
@@ -202,7 +197,7 @@ impl BeginCode {
 
 #[repr(transparent)]
 #[derive(PartialEq, Eq, Ord, PartialOrd, Copy, Clone, Debug, Hash)]
-pub struct TestCode(i64);
+pub(super) struct TestCode(i64);
 
 impl TestCode {
     #[inline]
@@ -216,40 +211,29 @@ impl TestCode {
     }
 }
 
-#[repr(transparent)]
-#[derive(PartialEq, Eq, Ord, PartialOrd, Copy, Clone, Debug, Hash)]
-pub struct AbortCode(i8);
-
-impl AbortCode {
-    #[inline]
-    pub fn new(code: i8) -> Self {
-        AbortCode(code)
-    }
-}
-
 #[inline]
-pub unsafe fn begin() -> BeginCode {
+pub(super) unsafe fn begin() -> BeginCode {
     BeginCode(tbegin(0))
 }
 
 #[inline(always)]
-pub unsafe fn abort() -> ! {
+pub(super) unsafe fn abort() -> ! {
     tabort(0);
     std::hint::unreachable_unchecked()
 }
 
 #[inline]
-pub unsafe fn test() -> TestCode {
+pub(super) unsafe fn test() -> TestCode {
     TestCode(ttest())
 }
 
 #[inline]
-pub unsafe fn end() {
+pub(super) unsafe fn end() {
     tend(0);
 }
 
 #[inline]
-pub const fn htm_supported() -> bool {
+pub(super) const fn htm_supported() -> bool {
     // TODO:
     false
 }

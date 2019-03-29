@@ -4,7 +4,7 @@ fn unsupported() -> ! {
 }
 
 #[derive(PartialEq, Eq, Ord, PartialOrd, Copy, Clone, Debug, Hash)]
-pub struct BeginCode(i8);
+pub(super) struct BeginCode(i8);
 
 impl BeginCode {
     #[inline]
@@ -34,7 +34,7 @@ impl BeginCode {
 }
 
 #[derive(PartialEq, Eq, Ord, PartialOrd, Copy, Clone, Debug, Hash)]
-pub struct TestCode(i8);
+pub(super) struct TestCode(i8);
 
 impl TestCode {
     #[inline]
@@ -48,37 +48,27 @@ impl TestCode {
     }
 }
 
-#[derive(PartialEq, Eq, Ord, PartialOrd, Copy, Clone, Debug, Hash)]
-pub struct AbortCode(i8);
-
-impl AbortCode {
-    #[inline]
-    pub fn new(code: i8) -> Self {
-        AbortCode(code)
-    }
-}
-
 #[inline]
-pub unsafe fn begin() -> BeginCode {
+pub(super) unsafe fn begin() -> BeginCode {
     unsupported()
 }
 
 #[inline]
-pub unsafe fn abort() -> ! {
+pub(super) unsafe fn abort() -> ! {
     unsupported()
 }
 
 #[inline]
-pub unsafe fn test() -> TestCode {
+pub(super) unsafe fn test() -> TestCode {
     unsupported()
 }
 
 #[inline]
-pub unsafe fn end() {
+pub(super) unsafe fn end() {
     unsupported()
 }
 
 #[inline]
-pub const fn htm_supported() -> bool {
+pub(super) const fn htm_supported() -> bool {
     false
 }
