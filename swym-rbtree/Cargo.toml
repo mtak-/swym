@@ -3,6 +3,7 @@ name = "swym-rbtree"
 version = "0.1.0"
 authors = ["tyler <tyler@brainiumstudios.com>"]
 edition = "2018"
+publish = false
 
 [features]
 default = []
