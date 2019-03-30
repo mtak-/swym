@@ -3,5 +3,16 @@ name = "swym-htm"
 version = "0.1.0"
 authors = ["tyler <tyler@brainiumstudios.com>"]
 edition = "2018"
+license = "MIT"
+keywords = ["transactional", "htm", "transaction", "memory", "hardware"]
+categories = ["concurrency", "data-structures"]
+description = "Hardware transactional memory for rust"
+repository = "https://github.com/mtak-/swym"
+homepage = "https://github.com/mtak-/swym"
+
+[features]
+default = []
+htm = []
+rtm = []
 
 [dependencies]

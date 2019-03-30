@@ -12,9 +12,9 @@ homepage = "https://github.com/mtak-/swym"
 documentation = "https://docs.rs/swym"
 
 [features]
-default = ["htm"]
+default = []
 debug-alloc = []
-htm = ["swym-htm"]
+rtm = ["swym-htm","swym-htm/rtm"]
 stats = ["lazy_static"]
 
 [dependencies]
@@ -24,7 +24,7 @@ swym-htm = { path = "./swym-htm", optional = true }
 
 [dev-dependencies]
 crossbeam-utils = "0.6.5"
-jemallocator = "0.1.9"
+jemallocator = "0.3.0"
 
 [profile.bench]
 opt-level = 3

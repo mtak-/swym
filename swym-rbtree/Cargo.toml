@@ -5,6 +5,8 @@ authors = ["tyler <tyler@brainiumstudios.com>"]
 edition = "2018"
 
 [features]
+default = []
+rtm = ["swym/rtm"]
 stats = ["swym/stats"]
 
 [dependencies]
@@ -12,5 +14,5 @@ swym = { path = "../" }
 
 [dev-dependencies]
 crossbeam-utils = "0.6.5"
-jemallocator = "0.1.9"
+jemallocator = "0.3.0"
 rand = "0.6.5"

@@ -1,102 +1,146 @@
+//! Hardware transactional memory primitives
+
+#![feature(core_intrinsics)]
 #![feature(link_llvm_intrinsics)]
 #![feature(test)]
+#![warn(missing_docs)]
 
 extern crate test;
 
-#[cfg(target_arch = "x86_64")]
-pub mod x86_64;
+#[cfg_attr(
+    all(target_arch = "powerpc64", feature = "htm"),
+    path = "./powerpc64.rs"
+)]
+#[cfg_attr(all(target_arch = "x86_64", feature = "rtm"), path = "./x86_64.rs")]
+#[cfg_attr(
+    not(any(
+        all(target_arch = "x86_64", feature = "rtm"),
+        all(target_arch = "powerpc64", feature = "htm")
+    )),
+    path = "./unsupported.rs"
+)]
+pub mod back;
 
-#[cfg(target_arch = "x86_64")]
-use x86_64 as back;
+use std::{
+    cell::UnsafeCell,
+    marker::PhantomData,
+    ops::{Deref, DerefMut},
+    sync::atomic::AtomicUsize,
+};
 
-#[cfg(not(target_arch = "x86_64"))]
-pub mod unsupported;
+/// Returns true if the platform may support hardware transactional memory.
+#[inline]
+pub const fn htm_supported() -> bool {
+    back::htm_supported()
+}
 
-#[cfg(not(target_arch = "x86_64"))]
-use unsupported as back;
+/// Returns true if the platform definitely supports hardware transactional memory.
+#[inline]
+pub fn htm_supported_runtime() -> bool {
+    back::htm_supported_runtime()
+}
 
-use std::marker::PhantomData;
+/// Attempts to begin a hardware transaction.
+///
+/// Control is returned to the point where begin was called on a failed transaction, only the
+/// [`BeginCode`] now contains the reason for the failure.
+///
+/// # Safety
+///
+/// It is unsafe to always retry the transaction after a failure. It is also unsafe to
+/// never subsequently call `end`.
+#[inline]
+pub unsafe fn begin() -> BeginCode {
+    BeginCode(back::begin())
+}
 
+/// Aborts an in progress hardware transaction.
+///
+/// # Safety
+///
+/// There must be an in progress hardware transaction.
+#[inline]
+pub unsafe fn abort() -> ! {
+    back::abort()
+}
+
+/// Tests the current transactional state of the thread.
+#[inline]
+pub unsafe fn test() -> TestCode {
+    TestCode(back::test())
+}
+
+/// Ends and commits an in progress hardware transaction.
+///
+/// # Safety
+///
+/// There must be an in progress hardware transaction.
+#[inline]
+pub unsafe fn end() {
+    back::end()
+}
+
+/// The result of calling `begin`.
 #[repr(transparent)]
 #[derive(PartialEq, Eq, Ord, PartialOrd, Copy, Clone, Debug, Hash)]
 pub struct BeginCode(back::BeginCode);
 
 impl BeginCode {
-    pub const STARTED: Self = BeginCode(back::BeginCode::STARTED);
-    pub const RETRY: Self = BeginCode(back::BeginCode::RETRY);
-    pub const CONFLICT: Self = BeginCode(back::BeginCode::CONFLICT);
-    pub const CAPACITY: Self = BeginCode(back::BeginCode::CAPACITY);
-    pub const DEBUG: Self = BeginCode(back::BeginCode::DEBUG);
-    pub const NESTED: Self = BeginCode(back::BeginCode::NESTED);
+    /// Returns true if the `BeginCode` represents a successfully started transaction.
+    #[inline]
+    pub fn is_started(&self) -> bool {
+        self.0.is_started()
+    }
 
+    /// Returns true if the `BeginCode` represents a transaction that was explicitly [`abort`]ed.
     #[inline]
     pub fn is_explicit_abort(&self) -> bool {
         self.0.is_explicit_abort()
     }
 
+    /// Returns true if retrying the hardware transaction is suggested.
     #[inline]
     pub fn is_retry(&self) -> bool {
         self.0.is_retry()
     }
 
+    /// Returns true if the transaction aborted due to a memory conflict.
     #[inline]
     pub fn is_conflict(&self) -> bool {
         self.0.is_conflict()
     }
 
+    /// Returns true if the transaction aborted due to running out of capacity.
+    ///
+    /// Hardware transactions are typically bounded by L1 cache sizes.
     #[inline]
     pub fn is_capacity(&self) -> bool {
         self.0.is_capacity()
     }
 }
 
+/// The result of calling `test`.
 #[repr(transparent)]
 #[derive(PartialEq, Eq, Ord, PartialOrd, Copy, Clone, Debug, Hash)]
 pub struct TestCode(back::TestCode);
 
 impl TestCode {
+    /// Returns true if the current thread is in a hardware transaction.
     #[inline]
     pub fn in_transaction(&self) -> bool {
         self.0.in_transaction()
     }
-}
 
-#[repr(transparent)]
-#[derive(PartialEq, Eq, Ord, PartialOrd, Copy, Clone, Debug, Hash)]
-pub struct AbortCode(back::AbortCode);
-
-impl AbortCode {
+    /// Returns true if the current thread is in a suspended hardware transaction.
     #[inline]
-    pub fn new(code: i8) -> Self {
-        AbortCode(back::AbortCode::new(code))
+    pub fn is_suspended(&self) -> bool {
+        self.0.is_suspended()
     }
 }
 
-#[inline]
-pub unsafe fn begin() -> BeginCode {
-    BeginCode(back::begin())
-}
-
-#[inline]
-pub unsafe fn abort() -> ! {
-    back::abort()
-}
-
-#[inline]
-pub unsafe fn test() -> TestCode {
-    TestCode(back::test())
-}
-
-#[inline]
-pub unsafe fn end() {
-    back::end()
-}
-
-#[inline]
-pub const fn htm_supported() -> bool {
-    back::htm_supported()
-}
-
+/// A hardware memory transaction.
+///
+/// On drop, the transaction is committed.
 #[derive(Debug)]
 pub struct HardwareTx {
     _private: PhantomData<*mut ()>,
@@ -110,43 +154,194 @@ impl Drop for HardwareTx {
 }
 
 impl HardwareTx {
+    /// Starts a new hardware transaction.
+    ///
+    /// Takes a retry handler which is called on transaction abort. If the retry handler returns
+    /// `Ok(())`, the transaction is retried. Any `Err` is passed back to the location where `new`
+    /// was called.
+    ///
+    /// The retry handler is never called with [`BeginCode`]s where `code.is_started() == true`.
+    ///
+    /// # Safety
+    ///
+    /// It is unsafe to pass in a retry handler that never returns `Err`. It is also unsafe to leak
+    /// the transaction, unless [`end`] is manually called sometime after.
     #[inline]
-    pub unsafe fn begin<F: FnMut(BeginCode) -> bool>(mut retry_handler: F) -> Option<Self> {
-        if htm_supported() {
-            loop {
-                let b = begin();
-                if b == BeginCode::STARTED {
-                    return Some(HardwareTx {
-                        _private: PhantomData,
-                    });
-                } else if !retry_handler(b) {
-                    return None;
-                }
+    pub unsafe fn new<F, E>(mut retry_handler: F) -> Result<Self, E>
+    where
+        F: FnMut(BeginCode) -> Result<(), E>,
+    {
+        loop {
+            let b = begin();
+            if std::intrinsics::likely(b.is_started()) {
+                return Ok(HardwareTx {
+                    _private: PhantomData,
+                });
+            } else {
+                retry_handler(b)?
             }
-        } else {
-            None
         }
     }
 
+    /// Aborts the current transaction.
+    ///
+    /// Aborting a hardware transaction will effectively reset the thread/call stack to the location
+    /// where new was called, passing control to the retry handler.
+    ///
+    /// Even though this never returns, it does **not** panic.
     #[inline(always)]
-    pub fn abort(&self) {
+    pub fn abort(&self) -> ! {
         unsafe { abort() }
     }
 }
 
+/// An atomic and hardware transactional usize.
+#[derive(Debug)]
+#[repr(transparent)]
+pub struct HtmUsize {
+    inner: UnsafeCell<AtomicUsize>,
+}
+
+unsafe impl Send for HtmUsize {}
+unsafe impl Sync for HtmUsize {}
+
+impl HtmUsize {
+    /// Creates a new hardware transactional cell.
+    #[inline]
+    pub const fn new(value: usize) -> Self {
+        HtmUsize {
+            inner: UnsafeCell::new(AtomicUsize::new(value)),
+        }
+    }
+
+    /// # Safety
+    ///
+    /// This is unsafe because AtomicUsize already allows mutation through immutable reference.
+    /// Therefore, the returned mutable reference cannot escape this module.
+    #[inline(always)]
+    unsafe fn as_raw(&self, _: &HardwareTx) -> &mut AtomicUsize {
+        &mut *self.inner.get()
+    }
+
+    /// Get the contained value transactionally.
+    #[inline(always)]
+    pub fn get(&self, htx: &HardwareTx) -> usize {
+        unsafe { *self.as_raw(htx).get_mut() }
+    }
+
+    /// Set the contained value transactionally.
+    #[inline(always)]
+    pub fn set(&self, htx: &HardwareTx, value: usize) {
+        unsafe { *self.as_raw(htx).get_mut() = value }
+    }
+}
+
+impl Deref for HtmUsize {
+    type Target = AtomicUsize;
+
+    #[inline(always)]
+    fn deref(&self) -> &Self::Target {
+        unsafe { &*self.inner.get() }
+    }
+}
+
+impl DerefMut for HtmUsize {
+    #[inline(always)]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        unsafe { &mut *self.inner.get() }
+    }
+}
+
+macro_rules! bench_tx {
+    ($name:ident, $count:expr) => {
+        #[bench]
+        fn $name(bench: &mut test::Bencher) {
+            const ITER_COUNT: usize = 1_000_000;
+            const WORDS_WRITTEN: usize = $count;
+
+            #[repr(align(4096))]
+            struct AlignedArr([usize; WORDS_WRITTEN]);
+
+            let mut arr = AlignedArr([0usize; WORDS_WRITTEN]);
+
+            for (i, elem) in arr.0.iter_mut().enumerate() {
+                unsafe { std::ptr::write_volatile(elem, test::black_box(elem.wrapping_add(i))) };
+                test::black_box(elem);
+            }
+
+            bench.iter(move || {
+                for _ in 0..ITER_COUNT {
+                    unsafe {
+                        let tx = HardwareTx::new(|_| -> Result<(), ()> { Err(()) });
+                        for i in 0..arr.0.len() {
+                            *arr.0.get_unchecked_mut(i) =
+                                arr.0.get_unchecked_mut(i).wrapping_add(1);
+                        }
+                        drop(tx);
+                    }
+                }
+            });
+        }
+    };
+}
+
+bench_tx! {bench_tx0000, 0}
+bench_tx! {bench_tx0001, 1}
+bench_tx! {bench_tx0002, 2}
+bench_tx! {bench_tx0004, 4}
+bench_tx! {bench_tx0008, 8}
+bench_tx! {bench_tx0016, 16}
+bench_tx! {bench_tx0024, 24}
+bench_tx! {bench_tx0032, 32}
+bench_tx! {bench_tx0040, 40}
+bench_tx! {bench_tx0048, 48}
+bench_tx! {bench_tx0056, 56}
+bench_tx! {bench_tx0064, 64}
+bench_tx! {bench_tx0072, 72}
+bench_tx! {bench_tx0080, 80}
+bench_tx! {bench_tx0112, 112}
+bench_tx! {bench_tx0120, 120}
+bench_tx! {bench_tx0128, 128}
+bench_tx! {bench_tx0256, 256}
+
+#[bench]
+fn bench_abort(bench: &mut test::Bencher) {
+    const ITER_COUNT: usize = 1_000_000;
+
+    bench.iter(|| {
+        for _ in 0..ITER_COUNT {
+            unsafe {
+                let tx = HardwareTx::new(|code| -> Result<(), ()> {
+                    if code.is_explicit_abort() {
+                        Err(())
+                    } else {
+                        Ok(())
+                    }
+                });
+                drop(tx.map(|tx| tx.abort()));
+            }
+        }
+    });
+}
+
 #[test]
 fn begin_end() {
+    const ITER_COUNT: usize = 1_000_000;
+
     let mut fails = 0;
-    for _ in 0..1000000 {
+    for _ in 0..ITER_COUNT {
         unsafe {
-            let _tx = HardwareTx::begin(|_| {
+            let _tx = HardwareTx::new(|_| -> Result<(), ()> {
                 fails += 1;
-                true
+                Ok(())
             })
             .unwrap();
         }
     }
-    println!("fails {}", fails);
+    println!(
+        "fail rate {:.4}%",
+        fails as f64 * 100.0 / (ITER_COUNT + fails) as f64
+    );
 }
 
 #[test]
@@ -154,7 +349,7 @@ fn test_in_transaction() {
     for _ in 0..1000000 {
         unsafe {
             assert!(!test().in_transaction());
-            let _tx = HardwareTx::begin(|_| true).unwrap();
+            let _tx = HardwareTx::new(|_| -> Result<(), ()> { Ok(()) }).unwrap();
             assert!(test().in_transaction());
         }
     }
@@ -165,22 +360,23 @@ fn begin_abort() {
     let mut i = 0i32;
     let mut abort_count = 0;
     loop {
+        let i = &mut i;
+        *i += 1;
         unsafe {
-            let i = &mut i;
-            *i += 1;
-            let tx = HardwareTx::begin(|code| {
+            let tx = HardwareTx::new(|code| -> Result<(), ()> {
                 if code.is_explicit_abort() {
                     abort_count += 1;
                     *i += 1;
                 }
-                true
+                Ok(())
             })
             .unwrap();
+
             if *i % 128 != 0 && *i != 1_000_000 {
                 tx.abort();
             }
         }
-        if i == 1_000_000 {
+        if *i == 1_000_000 {
             break;
         }
     }
@@ -200,21 +396,23 @@ fn capacity_check() {
         data[i * CACHE_LINE_SIZE] = data[i * CACHE_LINE_SIZE].wrapping_add(1);
         test::black_box(&mut data[i * CACHE_LINE_SIZE]);
     }
-    let mut fail_count = 0;
     for max in 0..end {
-        fail_count = 0;
+        let mut fail_count = 0;
         unsafe {
-            let capacity = &mut capacity;
-            let tx = HardwareTx::begin(|mut code| {
-                let cap = code == BeginCode::CAPACITY;
+            let tx = HardwareTx::new(|code| {
+                let cap = code.is_capacity();
                 if cap {
                     fail_count += 1;
                 }
-                !cap || fail_count < 1000
+                if !cap || fail_count < 1000 {
+                    Ok(())
+                } else {
+                    Err(())
+                }
             });
             let tx = match tx {
-                Some(tx) => tx,
-                None => break,
+                Ok(tx) => tx,
+                Err(()) => break,
             };
             for i in 0..max {
                 let elem = data.get_unchecked_mut(i * CACHE_LINE_SIZE);
@@ -231,4 +429,17 @@ fn capacity_check() {
         "Capacity: {}",
         capacity * mem::size_of::<usize>() * CACHE_LINE_SIZE
     );
+}
+
+#[test]
+fn supported() {
+    let compile = htm_supported();
+    let runtime = htm_supported_runtime();
+    if compile {
+        assert!(runtime);
+    }
+
+    println!("");
+    println!("compile time support check: {}", compile);
+    println!("     runtime support check: {}", runtime);
 }
