@@ -1,3 +1,5 @@
+//! Raw x86_64 hardware transactional memory primitives.
+
 #[inline]
 fn unsupported() -> ! {
     panic!("target CPU does not support hardware transactional memory")

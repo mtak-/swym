@@ -3,6 +3,7 @@
 #![feature(core_intrinsics)]
 #![feature(link_llvm_intrinsics)]
 #![feature(test)]
+#![deny(missing_docs)]
 
 extern crate test;
 
@@ -213,21 +214,25 @@ impl HtmUsize {
         }
     }
 
+    /// # Safety
+    ///
+    /// This is unsafe because AtomicUsize already allows mutation through immutable reference.
+    /// Therefore, the returned mutable reference cannot escape this module.
     #[inline(always)]
-    fn as_raw(&self, _: &HardwareTx) -> *mut usize {
-        self.inner.get() as *mut usize
+    unsafe fn as_raw(&self, _: &HardwareTx) -> &mut AtomicUsize {
+        &mut *self.inner.get()
     }
 
     /// Get the contained value transactionally.
     #[inline(always)]
     pub fn get(&self, htx: &HardwareTx) -> usize {
-        unsafe { *self.as_raw(htx) }
+        unsafe { *self.as_raw(htx).get_mut() }
     }
 
     /// Set the contained value transactionally.
     #[inline(always)]
     pub fn set(&self, htx: &HardwareTx, value: usize) {
-        unsafe { *self.as_raw(htx) = value }
+        unsafe { *self.as_raw(htx).get_mut() = value }
     }
 }
 

@@ -1,3 +1,5 @@
+//! Raw powerpc64 hardware transactional memory primitives.
+
 mod intrinsics {
     extern "C" {
         #[link_name = "llvm.ppc.tbegin"]
