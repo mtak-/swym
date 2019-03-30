@@ -3,7 +3,7 @@
 #![feature(core_intrinsics)]
 #![feature(link_llvm_intrinsics)]
 #![feature(test)]
-#![deny(missing_docs)]
+#![warn(missing_docs)]
 
 extern crate test;
 
