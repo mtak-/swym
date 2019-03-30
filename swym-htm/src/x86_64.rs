@@ -1,3 +1,5 @@
+//! Raw x86_64 hardware transactional memory primitives
+
 mod intrinsics {
     extern "C" {
         #[link_name = "llvm.x86.xbegin"]
@@ -127,4 +129,9 @@ pub(super) unsafe fn end() {
 #[inline]
 pub(super) const fn htm_supported() -> bool {
     true
+}
+
+#[inline]
+pub(super) fn htm_supported_runtime() -> bool {
+    unsafe { std::arch::x86_64::__cpuid_count(0x7, 0x0).ebx & (1 << 11) != 0 }
 }

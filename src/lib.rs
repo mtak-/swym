@@ -105,6 +105,8 @@ pub mod tx;
 pub use internal::stats::print_stats;
 pub use read::ReadTx;
 pub use rw::RwTx;
+#[doc(inline)]
+pub use swym_htm as htm;
 
 #[cfg(test)]
 mod memory {
