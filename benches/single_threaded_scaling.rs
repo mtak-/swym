@@ -71,19 +71,22 @@ mod single_threaded_scaling {
     }
 
     write_count! {
-        write_01, lock_write_01, atomic_write_01, 1;
-        write_02, lock_write_02, atomic_write_02, 2;
-        write_04, lock_write_04, atomic_write_04, 4;
-        write_08, lock_write_08, atomic_write_08, 8;
-        write_16, lock_write_16, atomic_write_16, 16;
-        write_32, lock_write_32, atomic_write_32, 32;
+        write_001, lock_write_001, atomic_write_001, 1;
+        write_002, lock_write_002, atomic_write_002, 2;
+        write_004, lock_write_004, atomic_write_004, 4;
+        write_008, lock_write_008, atomic_write_008, 8;
+        write_016, lock_write_016, atomic_write_016, 16;
+        write_032, lock_write_032, atomic_write_032, 32;
+        write_064, lock_write_064, atomic_write_064, 64;
 
         // start to hit bloom filter failure here
-        write_33, lock_write_33, atomic_write_33, 33;
-        write_34, lock_write_34, atomic_write_34, 34;
-        write_35, lock_write_35, atomic_write_35, 35;
-        write_36, lock_write_36, atomic_write_36, 36;
+        write_065, lock_write_065, atomic_write_065, 65;
+        write_066, lock_write_066, atomic_write_066, 66;
+        write_067, lock_write_067, atomic_write_067, 67;
+        write_068, lock_write_068, atomic_write_068, 68;
 
-        write_64, lock_write_64, atomic_write_64, 64
+        write_128, lock_write_128, atomic_write_128, 128;
+
+        write_256, lock_write_256, atomic_write_256, 256
     }
 }

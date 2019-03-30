@@ -5,6 +5,7 @@
 
 use crate::internal::{alloc::FVec, epoch::QuiesceEpoch, stats, tcell_erased::TCellErased};
 use std::num::NonZeroUsize;
+use swym_htm::HardwareTx;
 
 const READ_CAPACITY: usize = 1024;
 
@@ -41,7 +42,8 @@ impl<'tcell> ReadLog<'tcell> {
         self.data.push_unchecked(Some(erased))
     }
 
-    /// After calling filter_in_place, it is unsafe to call again without calling clear first
+    /// After calling filter_in_place, it is unsafe to call again without calling clear first.
+    /// Additionally, it is unsafe to call validate_reads_htm after calling this.
     #[inline]
     pub unsafe fn filter_in_place(&mut self, mut filter: impl FnMut(&'tcell TCellErased) -> bool) {
         for elem in self.data.iter_mut() {
@@ -74,7 +76,7 @@ impl<'tcell> ReadLog<'tcell> {
     }
 
     #[inline]
-    fn iter<'a>(&'a self) -> impl Iterator<Item = &'a TCellErased> {
+    fn iter<'a>(&'a self) -> impl DoubleEndedIterator<Item = &'a TCellErased> {
         self.data.iter().flat_map(|v| *v)
     }
 
@@ -86,5 +88,28 @@ impl<'tcell> ReadLog<'tcell> {
             }
         }
         true
+    }
+
+    #[inline]
+    pub fn validate_reads_htm(&self, pin_epoch: QuiesceEpoch, htm: &HardwareTx) {
+        for logged_read in self.data.iter().rev() {
+            let logged_read = match *logged_read {
+                Some(logged_read) => logged_read,
+                None => unsafe {
+                    if cfg!(debug_assertions) {
+                        panic!("unreachable code reached")
+                    } else {
+                        // we want this fast since every HTM RW transaction runs it
+                        //
+                        // the only way this code can be hit is if the rules for filter_in_place are
+                        // not followed.
+                        std::hint::unreachable_unchecked()
+                    }
+                },
+            };
+            if unlikely!(!pin_epoch.read_write_valid_lockable(&logged_read.current_epoch)) {
+                htm.abort()
+            }
+        }
     }
 }

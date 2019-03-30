@@ -28,15 +28,13 @@ use std::{
     fmt::{self, Debug, Formatter},
     mem,
     num::NonZeroUsize,
-    sync::atomic::{
-        AtomicUsize,
-        Ordering::{self, Acquire, Relaxed, Release},
-    },
+    sync::atomic::Ordering::{self, Acquire, Relaxed, Release},
 };
+use swym_htm::{HardwareTx, HtmUsize};
 
 type Storage = usize;
 type NonZeroStorage = NonZeroUsize;
-type AtomicStorage = AtomicUsize;
+type HtmStorage = HtmUsize;
 
 /// ThreadEpoch will hold this value when not pinned. It is conveniently greater than all
 /// other epochs.
@@ -124,8 +122,16 @@ impl QuiesceEpoch {
     ///
     /// Essentially, does the target epoch come before self.
     #[inline]
+    fn read_write_valid_(self, target: Storage) -> bool {
+        self.0.get() >= target
+    }
+
+    /// Returns true if "self" epoch can read from epochs of the "target" epoch.
+    ///
+    /// Essentially, does the target epoch come before self.
+    #[inline]
     fn read_write_valid(self, target: NonZeroStorage) -> bool {
-        self.0 >= target
+        self.read_write_valid_(target.get())
     }
 
     /// Returns true if "self" epoch can read from epochs of the "target" EpochLock - see above.
@@ -158,7 +164,7 @@ impl QuiesceEpoch {
 ///
 /// This is used to protect transactional memory locations. All transactional memory locations start
 /// out in the FIRST epoch.
-pub struct EpochLock(AtomicStorage);
+pub struct EpochLock(HtmStorage);
 
 impl Debug for EpochLock {
     #[inline(never)]
@@ -176,7 +182,7 @@ impl EpochLock {
     /// Creates a new EpochLock initialized to the FIRST epoch.
     #[inline]
     pub const fn first() -> Self {
-        EpochLock(AtomicStorage::new(FIRST))
+        EpochLock(HtmStorage::new(FIRST))
     }
 
     #[inline]
@@ -223,6 +229,16 @@ impl EpochLock {
             })
     }
 
+    #[inline]
+    pub fn try_lock_htm(&self, htx: &HardwareTx, max_expected: QuiesceEpoch) {
+        let actual = self.0.get(htx);
+        if likely!(max_expected.read_write_valid_(actual)) {
+            self.0.set(htx, toggle_lock_bit(actual));
+        } else {
+            htx.abort()
+        }
+    }
+
     /// Unlocks the EpochLock as the specified epoch (basically self.set(epoch)). It is required
     /// that the calling thread hold the lock, and that the epoch passed in does not have it's lock
     /// bit set, and is not inactive.
@@ -262,12 +278,12 @@ impl EpochLock {
 ///
 /// Thread's are able to read from any EpochLock whose value is <= it's ThreadEpoch.
 #[derive(Debug)]
-pub struct ThreadEpoch(AtomicStorage);
+pub struct ThreadEpoch(HtmStorage);
 
 impl ThreadEpoch {
     #[inline]
     pub fn inactive() -> Self {
-        ThreadEpoch(AtomicStorage::new(INACTIVE_EPOCH))
+        ThreadEpoch(HtmStorage::new(INACTIVE_EPOCH))
     }
 
     /// Returns true if this thread might be accessing values in quiesce_epoch.
@@ -354,7 +370,7 @@ impl ThreadEpoch {
 
 /// A monotonically increasing clock.
 #[derive(Debug)]
-pub struct EpochClock(AtomicStorage);
+pub struct EpochClock(HtmStorage);
 
 /// The world clock. The source of truth, and synchronization for swym. Every write transaction
 /// bumps this during a successful commit.
@@ -363,7 +379,7 @@ pub static EPOCH_CLOCK: EpochClock = EpochClock::new(); // TODO: stick this in G
 impl EpochClock {
     #[inline]
     const fn new() -> EpochClock {
-        EpochClock(AtomicStorage::new(FIRST))
+        EpochClock(HtmStorage::new(FIRST))
     }
 
     /// Returns the current epoch.
