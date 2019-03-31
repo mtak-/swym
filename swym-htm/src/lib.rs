@@ -313,8 +313,10 @@ fn bench_abort(bench: &mut test::Bencher) {
     bench.iter(|| {
         for _ in 0..ITER_COUNT {
             unsafe {
+                let mut fail_count = 0;
                 let tx = HardwareTx::new(|code| -> Result<(), ()> {
-                    if code.is_explicit_abort() {
+                    fail_count += 1;
+                    if code.is_explicit_abort() || fail_count > 3 {
                         Err(())
                     } else {
                         Ok(())
@@ -333,11 +335,17 @@ fn begin_end() {
     let mut fails = 0;
     for _ in 0..ITER_COUNT {
         unsafe {
-            let _tx = HardwareTx::new(|_| -> Result<(), ()> {
+            let mut this_fail_count = 0;
+            let tx = HardwareTx::new(|_| -> Result<(), ()> {
                 fails += 1;
-                Ok(())
-            })
-            .unwrap();
+                this_fail_count += 1;
+                if this_fail_count < 4 {
+                    Ok(())
+                } else {
+                    Err(())
+                }
+            });
+            drop(tx);
         }
     }
     println!(
@@ -351,8 +359,20 @@ fn test_in_transaction() {
     for _ in 0..1000000 {
         unsafe {
             assert!(!test().in_transaction());
-            let _tx = HardwareTx::new(|_| -> Result<(), ()> { Ok(()) }).unwrap();
-            assert!(test().in_transaction());
+            let mut fail_count = 0;
+            let tx = HardwareTx::new(|_| -> Result<(), ()> {
+                fail_count += 1;
+                if fail_count < 4 {
+                    Ok(())
+                } else {
+                    Err(())
+                }
+            });
+            if let Ok(_tx) = tx {
+                assert!(test().in_transaction());
+            } else {
+                assert!(!test().in_transaction());
+            }
         }
     }
 }
@@ -365,20 +385,24 @@ fn begin_abort() {
         let i = &mut i;
         *i += 1;
         unsafe {
+            let mut fail_count = 0;
             let tx = HardwareTx::new(|code| -> Result<(), ()> {
-                if code.is_explicit_abort() {
+                fail_count += 1;
+                *i += 1;
+                if code.is_explicit_abort() && fail_count < 4 {
                     abort_count += 1;
-                    *i += 1;
+                    Ok(())
+                } else {
+                    Err(())
                 }
-                Ok(())
-            })
-            .unwrap();
-
-            if *i % 128 != 0 && *i != 1_000_000 {
-                tx.abort();
+            });
+            if let Ok(tx) = tx {
+                if *i % 128 != 0 && *i != 1_000_000 {
+                    tx.abort();
+                }
             }
         }
-        if *i == 1_000_000 {
+        if *i >= 1_000_000 {
             break;
         }
     }
@@ -454,7 +478,17 @@ fn increment_array(b: &mut test::Bencher) {
         U, U, U, U,
     ];
     b.iter(|| {
-        let tx = unsafe { HardwareTx::new(|code| if code.is_retry() { Ok(()) } else { Err(()) }) };
+        let mut fail_count = 0;
+        let tx = unsafe {
+            HardwareTx::new(|code| {
+                fail_count += 1;
+                if code.is_retry() && fail_count < 4 {
+                    Ok(())
+                } else {
+                    Err(())
+                }
+            })
+        };
         match tx {
             Ok(tx) => {
                 for elem in x.iter() {
