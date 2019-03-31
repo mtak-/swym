@@ -4,7 +4,7 @@ set -e
 
 cd "$(dirname "$0")"/..
 
-export RUSTFLAGS="-D warnings -Ctarget-cpu=native -Ctarget-feature=+rtm"
+export RUSTFLAGS="-D warnings -Ctarget-cpu=skylake -Ctarget-feature=+rtm"
 
 cargo check --no-default-features
 cargo check --benches --bins --examples --tests
@@ -13,11 +13,11 @@ cargo check --benches --bins --examples --tests
 cargo check --features stats,rtm --benches --bins --examples --tests
 
 RUST_TEST_THREADS=1 \
-    RUSTFLAGS="-Ctarget-cpu=native -Ctarget-feature=+rtm" \
-    cargo test --features debug-alloc,stats,rtm
+    RUSTFLAGS="-Ctarget-cpu=skylake -Ctarget-feature=+rtm" \
+    cargo test --features debug-alloc,stats,rtm --lib --tests
 
 ASAN_OPTIONS="detect_odr_violation=0 detect_leaks=0" \
-RUSTFLAGS="-Ctarget-cpu=native -Ctarget-feature=+rtm -Z sanitizer=address" \
+RUSTFLAGS="-Ctarget-cpu=skylake -Ctarget-feature=+rtm -Z sanitizer=address" \
     cargo run \
         --release \
         --target x86_64-unknown-linux-gnu \
