@@ -1,6 +1,6 @@
 #!/bin/bash
 
-set -ex
+set -e
 
 cd "$(dirname "$0")"/../swym-htm
 
@@ -11,8 +11,4 @@ cargo check --benches --bins --examples --tests
 cargo check --features rtm --benches --bins --examples --tests
 cargo check --features htm --benches --bins --examples --tests
 ./x.py test
-
-RUSTFLAGS="-Ctarget-cpu=native -Ctarget-feature=+rtm" \
-./x.py bench \
-    --target x86_64-unknown-linux-gnu \
-    --features rtm
+./x.py bench
