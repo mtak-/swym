@@ -11,4 +11,5 @@ cargo check --benches --bins --examples --tests
 cargo check --features rtm --benches --bins --examples --tests
 cargo check --features htm --benches --bins --examples --tests
 ./x.py test
+./x.py test --release -- --nocapture
 ./x.py bench
