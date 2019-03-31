@@ -1,10 +1,12 @@
 //! Hardware transactional memory primitives
 
+#![cfg_attr(not(test), no_std)]
 #![feature(core_intrinsics)]
 #![feature(link_llvm_intrinsics)]
-#![feature(test)]
+#![cfg_attr(test, feature(test))]
 #![warn(missing_docs)]
 
+#[cfg(test)]
 extern crate test;
 
 #[cfg_attr(
@@ -21,7 +23,7 @@ extern crate test;
 )]
 pub mod back;
 
-use std::{
+use core::{
     cell::UnsafeCell,
     marker::PhantomData,
     ops::{Deref, DerefMut},
@@ -173,7 +175,7 @@ impl HardwareTx {
     {
         loop {
             let b = begin();
-            if std::intrinsics::likely(b.is_started()) {
+            if core::intrinsics::likely(b.is_started()) {
                 return Ok(HardwareTx {
                     _private: PhantomData,
                 });
@@ -399,12 +401,9 @@ fn capacity_check() {
     for max in 0..end {
         let mut fail_count = 0;
         unsafe {
-            let tx = HardwareTx::new(|code| {
-                let cap = code.is_capacity();
-                if cap {
-                    fail_count += 1;
-                }
-                if !cap || fail_count < 1000 {
+            let tx = HardwareTx::new(|_| {
+                fail_count += 1;
+                if fail_count < 1000 {
                     Ok(())
                 } else {
                     Err(())

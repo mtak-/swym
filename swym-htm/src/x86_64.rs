@@ -58,7 +58,7 @@ pub unsafe fn xend() {
 #[inline(always)]
 pub unsafe fn xabort<T: XAbortConst>() -> ! {
     intrinsics::xabort(T::CODE);
-    std::hint::unreachable_unchecked()
+    core::hint::unreachable_unchecked()
 }
 
 /// Queries whether the processor is executing in a transactional region identified by restricted
@@ -177,5 +177,5 @@ pub(super) const fn htm_supported() -> bool {
 
 #[inline]
 pub(super) fn htm_supported_runtime() -> bool {
-    unsafe { std::arch::x86_64::__cpuid_count(0x7, 0x0).ebx & (1 << 11) != 0 }
+    unsafe { core::arch::x86_64::__cpuid_count(0x7, 0x0).ebx & (1 << 11) != 0 }
 }

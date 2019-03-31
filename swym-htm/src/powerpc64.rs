@@ -221,7 +221,7 @@ pub(super) unsafe fn begin() -> BeginCode {
 #[inline(always)]
 pub(super) unsafe fn abort() -> ! {
     tabort(0);
-    std::hint::unreachable_unchecked()
+    core::hint::unreachable_unchecked()
 }
 
 #[inline]
