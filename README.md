@@ -1,7 +1,7 @@
 # swym
 
-[![Build Status](https://travis-ci.org/mtak-/swym.svg?branch=master)](
-https://travis-ci.org/mtak-/swym)
+[![Build Status](https://travis-ci.com/mtak-/swym.svg?branch=master)](
+https://travis-ci.com/mtak-/swym)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](
 https://github.com/crossbeam-rs/crossbeam)
 [![Cargo](https://img.shields.io/crates/v/swym.svg)](
