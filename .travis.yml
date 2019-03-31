@@ -1,0 +1,15 @@
+
+language: rust
+
+cache: cargo
+
+matrix:
+  fast_finish: true
+  include:
+
+  - rust: nightly
+    name: "swym"
+    script: ./ci/swym.sh
+  - rust: nightly
+    name: "swym-htm"
+    script: ./ci/htm.sh

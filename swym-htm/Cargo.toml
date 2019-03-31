@@ -10,6 +10,11 @@ description = "Hardware transactional memory for rust"
 repository = "https://github.com/mtak-/swym"
 homepage = "https://github.com/mtak-/swym"
 
+[package.metadata.docs.rs]
+features = ["rtm"]
+default-target = "x86_64-unknown-linux-gnu"
+rustc-args = ["-Ctarget-feature=+rtm"]
+
 [features]
 default = []
 htm = []
