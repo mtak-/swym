@@ -43,7 +43,7 @@ pub fn htm_supported_runtime() -> bool {
 /// Attempts to begin a hardware transaction.
 ///
 /// Control is returned to the point where begin was called on a failed transaction, only the
-/// [`BeginCode`] now contains the reason for the failure.
+/// `BeginCode` now contains the reason for the failure.
 ///
 /// # Safety
 ///
@@ -92,7 +92,7 @@ impl BeginCode {
         self.0.is_started()
     }
 
-    /// Returns true if the `BeginCode` represents a transaction that was explicitly [`abort`]ed.
+    /// Returns true if the `BeginCode` represents a transaction that was explicitly `abort`ed.
     #[inline]
     pub fn is_explicit_abort(&self) -> bool {
         self.0.is_explicit_abort()
@@ -160,12 +160,12 @@ impl HardwareTx {
     /// `Ok(())`, the transaction is retried. Any `Err` is passed back to the location where `new`
     /// was called.
     ///
-    /// The retry handler is never called with [`BeginCode`]s where `code.is_started() == true`.
+    /// The retry handler is never called with `BeginCode`s where `code.is_started() == true`.
     ///
     /// # Safety
     ///
     /// It is unsafe to pass in a retry handler that never returns `Err`. It is also unsafe to leak
-    /// the transaction, unless [`end`] is manually called sometime after.
+    /// the transaction, unless `end` is manually called sometime after.
     #[inline]
     pub unsafe fn new<F, E>(mut retry_handler: F) -> Result<Self, E>
     where
@@ -444,4 +444,29 @@ fn supported() {
     println!("");
     println!("compile time support check: {}", compile);
     println!("     runtime support check: {}", runtime);
+}
+
+#[bench]
+fn increment_array(b: &mut test::Bencher) {
+    const U: HtmUsize = HtmUsize::new(0);
+    let x: [HtmUsize; 64] = [
+        U, U, U, U, U, U, U, U, U, U, U, U, U, U, U, U, U, U, U, U, U, U, U, U, U, U, U, U, U, U,
+        U, U, U, U, U, U, U, U, U, U, U, U, U, U, U, U, U, U, U, U, U, U, U, U, U, U, U, U, U, U,
+        U, U, U, U,
+    ];
+    b.iter(|| {
+        let tx = unsafe { HardwareTx::new(|code| if code.is_retry() { Ok(()) } else { Err(()) }) };
+        match tx {
+            Ok(tx) => {
+                for elem in x.iter() {
+                    elem.set(&tx, elem.get(&tx) + 1)
+                }
+            }
+            Err(_) => {
+                for elem in x.iter() {
+                    elem.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
+            }
+        }
+    });
 }

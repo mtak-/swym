@@ -63,6 +63,8 @@ pub unsafe fn xabort<T: XAbortConst>() -> ! {
 
 /// Queries whether the processor is executing in a transactional region identified by restricted
 /// transactional memory (RTM) or hardware lock elision (HLE).
+///
+/// See the [Intel documentation](https://software.intel.com/en-us/cpp-compiler-developer-guide-and-reference-xtest).
 #[inline]
 pub unsafe fn xtest() -> i32 {
     intrinsics::xtest()
@@ -90,7 +92,7 @@ pub const _XABORT_DEBUG: i32 = 1i32 << 4;
 /// Transaction abort in a inner nested transaction.
 pub const _XABORT_NESTED: i32 = 1i32 << 5;
 
-/// Retrieves the parameter passed to xabort when status has the [`_XABORT_EXPLICIT`] flag set.
+/// Retrieves the parameter passed to xabort when status has the `_XABORT_EXPLICIT` flag set.
 #[allow(non_snake_case)]
 #[inline(always)]
 pub const fn _XABORT_CODE(status: i32) -> i32 {
