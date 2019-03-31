@@ -502,4 +502,8 @@ fn increment_array(b: &mut test::Bencher) {
             }
         }
     });
+    let all = x[0].load(std::sync::atomic::Ordering::Relaxed);
+    for elem in x.iter() {
+        assert_eq!(elem.load(std::sync::atomic::Ordering::Relaxed), all);
+    }
 }
