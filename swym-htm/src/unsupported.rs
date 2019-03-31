@@ -1,4 +1,4 @@
-//! Raw x86_64 hardware transactional memory primitives.
+//! Raw hardware transactional memory primitives.
 
 #[inline]
 fn unsupported() -> ! {

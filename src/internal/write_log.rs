@@ -13,6 +13,7 @@ use std::{
     raw::TraitObject,
     sync::atomic::{self, Ordering::Release},
 };
+use swym_htm::HardwareTx;
 
 #[repr(C)]
 pub struct WriteEntryImpl<'tcell, T> {
@@ -105,6 +106,14 @@ impl<'tcell> dyn WriteEntry + 'tcell {
     }
 
     #[inline]
+    pub fn try_lock_htm(&self, htx: &HardwareTx, pin_epoch: QuiesceEpoch) {
+        match self.tcell() {
+            Some(tcell) => tcell.current_epoch.try_lock_htm(htx, pin_epoch),
+            None => {}
+        }
+    }
+
+    #[inline]
     pub unsafe fn unlock(&self) {
         match self.tcell() {
             Some(tcell) => tcell.current_epoch.unlock_undo(),
@@ -176,17 +185,22 @@ impl<'tcell> WriteLog<'tcell> {
     }
 
     #[inline]
+    pub fn word_len(&self) -> usize {
+        self.data.word_len()
+    }
+
+    #[inline]
     pub fn clear(&mut self) {
         self.filter = 0;
         // TODO: NESTING: tx's can start here
-        stats::write_word_size(self.data.word_len());
+        stats::write_word_size(self.word_len());
         self.data.clear();
     }
 
     #[inline]
     pub fn clear_no_drop(&mut self) {
         self.filter = 0;
-        stats::write_word_size(self.data.word_len());
+        stats::write_word_size(self.word_len());
         self.data.clear_no_drop();
     }
 
@@ -323,6 +337,14 @@ impl<'tcell> WriteLog<'tcell> {
             }
         }
         true
+    }
+
+    #[inline]
+    pub fn write_and_lock_htm(&self, htx: &HardwareTx, pin_epoch: QuiesceEpoch) {
+        for entry in &self.data {
+            unsafe { entry.perform_write() };
+            entry.try_lock_htm(htx, pin_epoch);
+        }
     }
 
     #[inline(never)]

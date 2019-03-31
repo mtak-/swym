@@ -431,6 +431,8 @@ fn capacity_check() {
     );
 }
 
+// fails in virtualization
+#[ignore]
 #[test]
 fn supported() {
     let compile = htm_supported();

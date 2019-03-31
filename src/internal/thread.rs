@@ -20,6 +20,7 @@ use std::{
     ptr::{self, NonNull},
     sync::atomic::Ordering::Release,
 };
+use swym_htm::HardwareTx;
 
 /// Intrusive reference counted thread local data.
 ///
@@ -470,9 +471,55 @@ impl<'tx, 'tcell> PinRw<'tx, 'tcell> {
         true
     }
 
+    #[inline]
+    fn commit_slow(self) -> bool {
+        if swym_htm::htm_supported() && self.logs().write_log.word_len() >= 9 {
+            let htx = unsafe {
+                HardwareTx::new(|code| {
+                    if code.is_explicit_abort() {
+                        Err(true)
+                    } else if code.is_retry() {
+                        Ok(())
+                    } else {
+                        Err(false)
+                    }
+                })
+            };
+            match htx {
+                Ok(htx) => self.commit_hard(htx),
+                Err(false) => self.commit_soft(),
+                Err(true) => false,
+            }
+        } else {
+            self.commit_soft()
+        }
+    }
+
     /// This performs a lot of lock cmpxchgs, so inlining doesn't really doesn't give us much.
     #[inline(never)]
-    fn commit_slow(mut self) -> bool {
+    fn commit_hard(self, htx: HardwareTx) -> bool {
+        unsafe {
+            let (synch, logs) = self.into_inner();
+            let current = synch.current_epoch();
+            logs.read_log.validate_reads_htm(current, &htx);
+            logs.write_log.write_and_lock_htm(&htx, current);
+
+            drop(htx);
+
+            let sync_epoch = EPOCH_CLOCK.fetch_and_tick();
+            logs.write_log.publish(sync_epoch.next());
+
+            logs.read_log.clear();
+            logs.write_log.clear_no_drop();
+            logs.garbage.seal_with_epoch(synch, sync_epoch);
+
+            true
+        }
+    }
+
+    /// This performs a lot of lock cmpxchgs, so inlining doesn't really doesn't give us much.
+    #[inline(never)]
+    fn commit_soft(mut self) -> bool {
         unsafe {
             // Locking the write log, would cause validation of any reads to the same TCell to fail.
             // So we remove all TCells in the read log that are also in the read log, and assume all
