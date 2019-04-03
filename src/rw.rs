@@ -153,7 +153,7 @@ impl<'tx, 'tcell> RwTxImpl<'tx, 'tcell> {
                         let logs = self.logs_mut();
                         logs.write_log.record(&tcell.erased, value, hash);
                         if mem::needs_drop::<T>() {
-                            logs.garbage.trash(tcell.optimistic_read_relaxed())
+                            logs.garbage.dispose(tcell.optimistic_read_relaxed())
                         }
                         return Ok(());
                     }
@@ -191,7 +191,7 @@ impl<'tx, 'tcell> RwTxImpl<'tx, 'tcell> {
         let hash = bloom_hash(&tcell.erased);
 
         if likely!(!logs.write_log.next_push_allocates::<V>())
-            && (!mem::needs_drop::<T>() || likely!(!logs.garbage.next_trash_allocates::<T>()))
+            && (!mem::needs_drop::<T>() || likely!(!logs.garbage.next_dispose_allocates::<T>()))
             && likely!(logs.write_log.contained(hash) == Contained::No)
             && likely!(self.rw_valid(&tcell.erased))
         {
@@ -200,7 +200,7 @@ impl<'tx, 'tcell> RwTxImpl<'tx, 'tcell> {
                 logs.write_log.record_unchecked(&tcell.erased, value, hash);
                 if mem::needs_drop::<T>() {
                     logs.garbage
-                        .trash_unchecked(tcell.optimistic_read_relaxed())
+                        .dispose_unchecked(tcell.optimistic_read_relaxed())
                 }
             }
             Ok(())
@@ -285,7 +285,7 @@ impl<'tcell> Write<'tcell> for RwTx<'tcell> {
         self.as_impl()
             .logs_mut()
             .garbage
-            .trash(ManuallyDrop::new(After::new(privatizer, |p| p())));
+            .dispose(ManuallyDrop::new(After::new(privatizer, |p| p())));
     }
 }
 
