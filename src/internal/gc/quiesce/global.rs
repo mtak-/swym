@@ -4,13 +4,6 @@ use std::{
     cell::UnsafeCell,
     mem::ManuallyDrop,
     ops::{Deref, DerefMut},
-    sync::{
-        atomic::{
-            AtomicPtr,
-            Ordering::{Acquire, Relaxed, Release},
-        },
-        Once,
-    },
 };
 
 /// A synchronized SynchList.
@@ -38,56 +31,25 @@ pub struct GlobalSynchList {
 // GlobalSynchList is synchronized by an internal sharded lock.
 unsafe impl Sync for GlobalSynchList {}
 
-// Once allocated the SINGLETON is never deallocated.
-static SINGLETON: AtomicPtr<GlobalSynchList> = AtomicPtr::new(0 as _);
+fast_lazy_static! {
+    static SINGLETON: GlobalSynchList = GlobalSynchList {
+        synch_list: UnsafeCell::new(SynchList::new()),
+        mutex:      RawRwLock::INIT,
+    };
+}
 
 impl GlobalSynchList {
-    // slow path
-    #[inline(never)]
-    #[cold]
-    fn init() -> &'static Self {
-        // Once handles two threads racing to initialize the GlobalSynchList
-        static INIT_QUIESCE_LIST: Once = Once::new();
-
-        #[inline(never)]
-        #[cold]
-        fn do_init() {
-            SINGLETON.store(
-                Box::into_raw(Box::new(GlobalSynchList {
-                    synch_list: UnsafeCell::new(SynchList::new()),
-                    mutex:      RawRwLock::INIT,
-                })),
-                Release,
-            );
-        }
-
-        INIT_QUIESCE_LIST.call_once(do_init);
-
-        Self::instance()
-    }
-
     /// Returns a references to the global thread list.
     #[inline]
     pub fn instance() -> &'static Self {
-        let raw = SINGLETON.load(Acquire);
-        if likely!(!raw.is_null()) {
-            // SINGLETON is never freed, so once initialized, it is always valid
-            unsafe { &*raw }
-        } else {
-            GlobalSynchList::init()
-        }
+        SINGLETON.get()
     }
 
     /// Returns a references to the global thread list. If `instance` has been called, then
     /// instance_unchecked is safe to call.
     #[inline]
     pub unsafe fn instance_unchecked() -> &'static Self {
-        let raw = SINGLETON.load(Relaxed);
-        debug_assert!(
-            !raw.is_null(),
-            "`GlobalSynchList::instance_unchecked` called before instance was created"
-        );
-        &*raw
+        SINGLETON.get_unchecked()
     }
 
     /// Unsafe without holding atleast one of the locks in the GlobalSynchList.

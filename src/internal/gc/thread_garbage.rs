@@ -156,7 +156,7 @@ impl ThreadGarbage {
 
     /// Used to help move allocations out of the fast path.
     #[inline]
-    pub fn next_trash_allocates<T: 'static + Send>(&self) -> bool {
+    pub fn next_dispose_allocates<T: 'static + Send>(&self) -> bool {
         self.speculative_bag
             .queued
             .next_push_allocates::<Queued<T>>()
@@ -164,7 +164,7 @@ impl ThreadGarbage {
 
     /// Queues value up to be dropped should the current transaction succeed.
     #[inline]
-    pub fn trash<T: 'static + Send>(&mut self, value: ManuallyDrop<T>) {
+    pub fn dispose<T: 'static + Send>(&mut self, value: ManuallyDrop<T>) {
         self.speculative_bag.queued.push(Queued::new(value))
     }
 
@@ -172,7 +172,7 @@ impl ThreadGarbage {
     ///
     /// Assumes that the current bag has a large enough capacity to store the new garbage.
     #[inline]
-    pub unsafe fn trash_unchecked<T: 'static + Send>(&mut self, value: ManuallyDrop<T>) {
+    pub unsafe fn dispose_unchecked<T: 'static + Send>(&mut self, value: ManuallyDrop<T>) {
         self.speculative_bag
             .queued
             .push_unchecked(Queued::new(value))

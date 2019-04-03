@@ -4,6 +4,9 @@ pub mod optim;
 #[macro_use]
 pub mod alloc;
 
+#[macro_use]
+pub mod fast_lazy_static;
+
 pub mod epoch;
 pub mod frw_lock;
 pub mod gc;
