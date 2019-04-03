@@ -475,10 +475,12 @@ impl<'tx, 'tcell> PinRw<'tx, 'tcell> {
     fn commit_slow(self) -> bool {
         if swym_htm::htm_supported() && self.logs().write_log.word_len() >= 9 {
             let htx = unsafe {
-                HardwareTx::new(|code| {
-                    if code.is_explicit_abort() {
+                let mut fail_count = 0;
+                HardwareTx::new(move |code| {
+                    if code.is_explicit_abort() || code.is_conflict() {
                         Err(true)
-                    } else if code.is_retry() {
+                    } else if code.is_retry() && fail_count < 3 {
+                        fail_count += 1;
                         Ok(())
                     } else {
                         Err(false)
@@ -495,7 +497,6 @@ impl<'tx, 'tcell> PinRw<'tx, 'tcell> {
         }
     }
 
-    /// This performs a lot of lock cmpxchgs, so inlining doesn't really doesn't give us much.
     #[inline(never)]
     fn commit_hard(self, htx: HardwareTx) -> bool {
         unsafe {
