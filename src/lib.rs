@@ -75,6 +75,7 @@
 #![feature(align_offset)]
 #![feature(allocator_api)]
 #![feature(cfg_target_thread_local)]
+#![feature(const_fn)]
 #![feature(core_intrinsics)]
 #![feature(non_exhaustive)]
 #![feature(optin_builtin_traits)]
@@ -87,10 +88,6 @@
 // #![warn(missing_docs)]
 #![deny(rust_2018_idioms)]
 #![deny(unused_must_use)]
-
-#[cfg(feature = "stats")]
-#[macro_use]
-extern crate lazy_static;
 
 #[macro_use]
 mod internal;

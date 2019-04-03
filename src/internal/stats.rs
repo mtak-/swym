@@ -1,6 +1,4 @@
-use std::cell::RefCell;
-#[cfg(feature = "stats")]
-use std::sync::Mutex;
+use std::{cell::RefCell, sync::Mutex};
 
 #[derive(Default, Debug)]
 pub struct Size {
@@ -81,7 +79,6 @@ macro_rules! stats {
         }
 
         impl Stats {
-            #[cfg_attr(not(feature = "stats"), allow(unused))]
             fn merge(&mut self, rhs: &Self) {
                 $(self.$names.merge(&rhs.$names));*
             }
@@ -106,7 +103,6 @@ stats! {
 }
 
 impl Stats {
-    #[cfg_attr(not(feature = "stats"), allow(unused))]
     fn print_summary(&self) {
         println!("{:#?}", self);
         let transactions = self.read_transaction.count + self.write_transaction.count;
@@ -138,26 +134,26 @@ struct ThreadStats(Stats);
 
 impl Drop for ThreadStats {
     fn drop(&mut self) {
-        #[cfg(feature = "stats")]
-        GLOBAL.lock().unwrap().merge(&self.0);
+        GLOBAL.get().lock().unwrap().merge(&self.0);
     }
 }
 
 thread_local! {
     static THREAD_STAT: RefCell<ThreadStats> = {
-        #[cfg(feature = "stats")]
-        drop(&*GLOBAL); // initialize global now, else we may get panics on drop because lazy_static
-                        // uses thread_locals to initialize it.
+        drop(GLOBAL.get()); // initialize global now, else we may get panics on drop because
+                            // lazy_static uses thread_locals to initialize it.
         RefCell::default()
     };
 }
 
-#[cfg(feature = "stats")]
-lazy_static! {
-    static ref GLOBAL: Mutex<Stats> = Mutex::default();
+fast_lazy_static! {
+    static GLOBAL: Mutex<Stats> = Mutex::default();
 }
 
 pub fn print_stats() {
-    #[cfg(feature = "stats")]
-    GLOBAL.lock().unwrap().print_summary();
+    if cfg!(feature = "stats") {
+        GLOBAL.get().lock().unwrap().print_summary();
+    } else {
+        println!("`swym/stats` feature is not enabled")
+    }
 }
