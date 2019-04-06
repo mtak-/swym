@@ -3,13 +3,24 @@ language: rust
 
 cache: cargo
 
+branches:
+  only:
+    - master
+
 matrix:
   fast_finish: true
   include:
-
+  # linux 64bit
   - rust: nightly
     name: "swym"
     script: ./ci/swym.sh
   - rust: nightly
     name: "swym-htm"
     script: ./ci/htm.sh
+
+  # macos 64bit (no rtm)
+  - os: osx
+    osx_image: xcode10.2
+    rust: nightly
+    name: "swym"
+    script: ./ci/swym.sh

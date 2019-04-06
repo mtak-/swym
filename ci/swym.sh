@@ -4,26 +4,37 @@ set -ex
 
 cd "$(dirname "$0")"/..
 
-export RUSTFLAGS="-D warnings -Ctarget-cpu=skylake -Ctarget-feature=+rtm"
+export RUSTFLAGS="-D warnings -Ctarget-cpu=native -Ctarget-feature=+rtm"
+export RTM="rtm"
+export ASAN_FLAG="-Z sanitizer=address"
+export ASAN_OPTIONS="detect_odr_violation=0 detect_leaks=0"
+
+if [[ "$TRAVIS_OS_NAME" == "osx" ]]; then
+    # no rtm support
+    export RTM=""
+fi
 
 cargo check --no-default-features
 cargo check --benches --bins --examples --tests
 ./x.py test
 
-cargo check --features stats,rtm --benches --bins --examples --tests
+cargo check --features stats,$RTM --benches --bins --examples --tests
 
 RUST_TEST_THREADS=1 \
-    RUSTFLAGS="-Ctarget-cpu=skylake -Ctarget-feature=+rtm" \
-    cargo test --features debug-alloc,stats,rtm --lib --tests
+    cargo test --features debug-alloc,stats,$RTM --lib --tests
 
-ASAN_OPTIONS="detect_odr_violation=0 detect_leaks=0" \
-RUSTFLAGS="-Ctarget-cpu=skylake -Ctarget-feature=+rtm -Z sanitizer=address" \
+RUSTFLAGS="${RUSTFLAGS} ${ASAN_FLAG}" \
     cargo run \
         --release \
-        --target x86_64-unknown-linux-gnu \
-        --features stats,rtm \
+        --features stats,$RTM \
         --example stack
 
-./x.py bench \
-    --target x86_64-unknown-linux-gnu \
-    --features rtm
+cargo run \
+    --features stats,$RTM \
+    --example dining_philosophers
+
+if [[ -z $RTM ]]; then
+    ./x.py bench
+else
+    ./x.py bench --features rtm
+fi
