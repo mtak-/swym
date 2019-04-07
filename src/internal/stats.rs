@@ -2,19 +2,17 @@ use std::{cell::RefCell, sync::Mutex};
 
 #[derive(Default, Debug)]
 pub struct Size {
-    min:   Option<usize>,
-    max:   Option<usize>,
-    avg:   Option<f64>,
-    count: usize,
+    min:   Option<u64>,
+    max:   Option<u64>,
+    total: Option<u64>,
+    count: u64,
 }
 
 impl Size {
-    pub fn record(&mut self, size: usize) {
+    pub fn record(&mut self, size: u64) {
         self.min = Some(self.min.map(|min| min.min(size)).unwrap_or(size));
         self.max = Some(self.max.map(|max| max.max(size)).unwrap_or(size));
-        self.avg = Some(
-            (self.avg.unwrap_or(0.0) * self.count as f64 + size as f64) / ((self.count + 1) as f64),
-        );
+        self.total = Some(self.total.map(|total| total + size).unwrap_or(size));
         self.count += 1;
     }
 
@@ -27,10 +25,8 @@ impl Size {
             (Some(a), Some(b)) => Some(a.max(b)),
             (a, b) => a.or(b),
         };
-        self.avg = match (self.avg, rhs.avg) {
-            (Some(a), Some(b)) => Some(
-                (a * self.count as f64 + b * rhs.count as f64) / (self.count + rhs.count) as f64,
-            ),
+        self.total = match (self.total, rhs.total) {
+            (Some(a), Some(b)) => Some(a + b),
             (a, b) => a.or(b),
         };
         self.count += rhs.count;
@@ -65,7 +61,8 @@ macro_rules! stats_func {
         #[inline]
         pub fn $name(size: usize) {
             if cfg!(feature = "stats") {
-                THREAD_STAT.with(|ts| (ts.borrow_mut().0).$name.record(size))
+                let size = size as u64;
+                THREAD_STAT.with(move |ts| (ts.borrow_mut().0).$name.record(size))
             }
         }
     };
