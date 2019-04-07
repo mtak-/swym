@@ -53,7 +53,7 @@ macro_rules! stats_func {
         #[inline]
         pub fn $name() {
             if cfg!(feature = "stats") {
-                THREAD_STAT.with(|ts| (ts.borrow_mut().0).$name.happened())
+                (THREAD_STAT.get().borrow_mut().0).$name.happened()
             }
         }
     };
@@ -62,7 +62,7 @@ macro_rules! stats_func {
         pub fn $name(size: usize) {
             if cfg!(feature = "stats") {
                 let size = size as u64;
-                THREAD_STAT.with(move |ts| (ts.borrow_mut().0).$name.record(size))
+                (THREAD_STAT.get().borrow_mut().0).$name.record(size)
             }
         }
     };
@@ -135,7 +135,7 @@ impl Drop for ThreadStats {
     }
 }
 
-thread_local! {
+phoenix_tls! {
     static THREAD_STAT: RefCell<ThreadStats> = {
         drop(GLOBAL.get()); // initialize global now, else we may get panics on drop because
                             // lazy_static uses thread_locals to initialize it.

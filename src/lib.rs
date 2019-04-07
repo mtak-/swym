@@ -74,6 +74,7 @@
 
 #![feature(align_offset)]
 #![feature(allocator_api)]
+#![feature(box_into_raw_non_null)]
 #![feature(cfg_target_thread_local)]
 #![feature(const_fn)]
 #![feature(core_intrinsics)]
