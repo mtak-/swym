@@ -11,8 +11,8 @@ mod tls {
                 let tcell = TCell::new("foobar longish string".to_owned());
                 thread_key::get()
                     .try_rw(|tx| {
-                        let s = tcell.borrow(tx, Ordering::default())?;
-                        tcell.set(tx, "more ".to_owned() + &s)?;
+                        let s = "more ".to_owned() + &tcell.borrow(tx, Ordering::default())?;
+                        tcell.set(tx, s)?;
                         Ok(())
                     })
                     .unwrap();
