@@ -382,11 +382,13 @@ impl<'tcell> Pin<'tcell> {
                             self.logs().validate_start_state();
                             return o;
                         }
+                        stats::write_transaction_commit_failure();
                     }
-                    Err(Error::RETRY) => {}
+                    Err(Error::RETRY) => {
+                        stats::write_transaction_eager_failure();
+                    }
                 }
             }
-            stats::write_transaction_failure();
             self.repin();
         }
     }
@@ -474,24 +476,31 @@ impl<'tx, 'tcell> PinRw<'tx, 'tcell> {
     #[inline]
     fn commit_slow(self) -> bool {
         if swym_htm::htm_supported() && self.logs().write_log.word_len() >= 9 {
+            enum HtxFail {
+                SoftwareFallback,
+                Retry,
+            }
+            let mut fail_count = 0;
             let htx = unsafe {
-                let mut fail_count = 0;
+                let fail_count = &mut fail_count;
                 HardwareTx::new(move |code| {
-                    if code.is_explicit_abort() || code.is_conflict() {
-                        Err(true)
-                    } else if code.is_retry() && fail_count < 3 {
-                        fail_count += 1;
+                    if code.is_explicit_abort() {
+                        Err(HtxFail::Retry)
+                    } else if code.is_retry() && *fail_count < 3 {
+                        *fail_count += 1;
                         Ok(())
                     } else {
-                        Err(false)
+                        Err(HtxFail::SoftwareFallback)
                     }
                 })
             };
-            match htx {
+            let success = match htx {
                 Ok(htx) => self.commit_hard(htx),
-                Err(false) => self.commit_soft(),
-                Err(true) => false,
-            }
+                Err(HtxFail::SoftwareFallback) => self.commit_soft(),
+                Err(HtxFail::Retry) => false,
+            };
+            stats::htm_failure_size(fail_count);
+            success
         } else {
             self.commit_soft()
         }

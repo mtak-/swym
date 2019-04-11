@@ -1,35 +1,66 @@
-use std::{cell::RefCell, sync::Mutex};
+use std::{
+    cell::RefCell,
+    fmt::{self, Debug, Formatter},
+    sync::Mutex,
+};
 
-#[derive(Default, Debug)]
+#[derive(Copy, Clone, Default, Debug)]
+struct MinMaxTotal {
+    min:   u64,
+    max:   u64,
+    total: u64,
+}
+
+#[derive(Default)]
 pub struct Size {
-    min:   Option<u64>,
-    max:   Option<u64>,
-    total: Option<u64>,
-    count: u64,
+    min_max_total: Option<MinMaxTotal>,
+    count:         u64,
+}
+
+impl Debug for Size {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Size")
+            .field("count", &self.count)
+            .field("min", &self.min_max_total.map(|x| x.min))
+            .field("max", &self.min_max_total.map(|x| x.max))
+            .field("total", &self.min_max_total.map(|x| x.total))
+            .field(
+                "avg",
+                &self
+                    .min_max_total
+                    .map(|x| x.total as f64 / self.count as f64),
+            )
+            .finish()
+    }
 }
 
 impl Size {
     pub fn record(&mut self, size: u64) {
-        self.min = Some(self.min.map(|min| min.min(size)).unwrap_or(size));
-        self.max = Some(self.max.map(|max| max.max(size)).unwrap_or(size));
-        self.total = Some(self.total.map(|total| total + size).unwrap_or(size));
         self.count += 1;
+        if let Some(ref mut min_max_total) = &mut self.min_max_total {
+            min_max_total.min = min_max_total.min.min(size);
+            min_max_total.max = min_max_total.max.max(size);
+            min_max_total.total += size;
+        } else {
+            self.min_max_total = Some(MinMaxTotal {
+                min:   size,
+                max:   size,
+                total: size,
+            });
+        }
     }
 
     pub fn merge(&mut self, rhs: &Self) {
-        self.min = match (self.min, rhs.min) {
-            (Some(a), Some(b)) => Some(a.min(b)),
-            (a, b) => a.or(b),
-        };
-        self.max = match (self.max, rhs.max) {
-            (Some(a), Some(b)) => Some(a.max(b)),
-            (a, b) => a.or(b),
-        };
-        self.total = match (self.total, rhs.total) {
-            (Some(a), Some(b)) => Some(a + b),
-            (a, b) => a.or(b),
-        };
         self.count += rhs.count;
+        self.min_max_total = match (self.min_max_total, rhs.min_max_total) {
+            (Some(a), Some(b)) => Some(MinMaxTotal {
+                min:   a.min.min(b.min),
+                max:   a.max.max(b.max),
+                total: a.total + b.total,
+            }),
+            (a, b) => a.or(b),
+        };
     }
 }
 
@@ -86,17 +117,19 @@ macro_rules! stats {
 }
 
 stats! {
-    read_transaction:          Event,
-    write_transaction:         Event,
-    read_transaction_failure:  Event,
-    write_transaction_failure: Event,
-    bloom_check:               Event,
-    bloom_failure:             Event,
-    bloom_success_slow:        Event,
-    write_after_write:         Event,
-    write_after_logged_read:   Size,
-    write_word_size:           Size,
-    read_size:                 Size,
+    read_transaction:                 Event,
+    write_transaction:                Event,
+    read_transaction_failure:         Event,
+    write_transaction_eager_failure:  Event,
+    write_transaction_commit_failure: Event,
+    bloom_check:                      Event,
+    bloom_failure:                    Event,
+    bloom_success_slow:               Event,
+    write_after_write:                Event,
+    htm_failure_size:                 Size,
+    write_after_logged_read:          Size,
+    write_word_size:                  Size,
+    read_size:                        Size,
 }
 
 impl Stats {
@@ -104,13 +137,31 @@ impl Stats {
         println!("{:#?}", self);
         let transactions = self.read_transaction.count + self.write_transaction.count;
         println!(
-            "{:>12}: {:>12} {:>9} {:.2}%",
+            "{:>12}: {:>12} {:>9} {:.2}% {:>9} {:.2}%",
             "transactions",
             transactions,
             "fail rate",
-            (self.read_transaction_failure.count + self.write_transaction_failure.count) as f64
+            (self.read_transaction_failure.count
+                + self.write_transaction_eager_failure.count
+                + self.write_transaction_commit_failure.count) as f64
+                / transactions as f64
+                * 100.0,
+            "htm fails per tx rate",
+            self.htm_failure_size
+                .min_max_total
+                .unwrap_or_default()
+                .total as f64
                 / transactions as f64
                 * 100.0
+        );
+        println!(
+            "{:>12}: {:>12.6}",
+            "htm fail avg",
+            self.htm_failure_size
+                .min_max_total
+                .unwrap_or_default()
+                .total as f64
+                / self.htm_failure_size.count as f64
         );
         println!(
             "{:>12}: {:>12} {:>9} {:.2}% {:>9} {:.2}%",
