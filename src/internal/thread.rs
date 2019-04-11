@@ -22,6 +22,8 @@ use std::{
 };
 use swym_htm::HardwareTx;
 
+const MAX_HTX_RETRIES: usize = 3;
+
 /// Intrusive reference counted thread local data.
 ///
 /// Synch is aliased in the GlobalSynchList of the garbage collector by a NonNull<Synch> pointer.
@@ -351,17 +353,18 @@ impl<'tcell> Pin<'tcell> {
     where
         F: FnMut(&ReadTx<'tcell>) -> Result<O, Error>,
     {
-        loop {
-            stats::read_transaction();
-
+        let mut retries = 0;
+        let result = loop {
             let r = f(ReadTx::new(&mut self));
             match r {
                 Ok(o) => break o,
                 Err(Error::RETRY) => {}
             }
-            stats::read_transaction_failure();
+            retries += 1;
             self.repin()
-        }
+        };
+        stats::read_transaction_retries(retries);
+        result
     }
 
     /// Runs a read-write transaction.
@@ -370,8 +373,9 @@ impl<'tcell> Pin<'tcell> {
     where
         F: FnMut(&mut RwTx<'tcell>) -> Result<O, Error>,
     {
-        loop {
-            stats::write_transaction();
+        let mut eager_retries = 0;
+        let mut commit_retries = 0;
+        let result = loop {
             self.logs().validate_start_state();
             {
                 let mut pin = unsafe { PinRw::new(&mut self) };
@@ -380,17 +384,20 @@ impl<'tcell> Pin<'tcell> {
                     Ok(o) => {
                         if likely!(pin.commit()) {
                             self.logs().validate_start_state();
-                            return o;
+                            break o;
                         }
-                        stats::write_transaction_commit_failure();
+                        commit_retries += 1;
                     }
-                    Err(Error::RETRY) => {
-                        stats::write_transaction_eager_failure();
-                    }
+                    Err(Error::RETRY) => eager_retries += 1,
                 }
             }
+            // TODO: backoff
+            // std::thread::yield_now();
             self.repin();
-        }
+        };
+        stats::write_transaction_eager_retries(eager_retries);
+        stats::write_transaction_commit_retries(commit_retries);
+        result
     }
 }
 
@@ -476,30 +483,30 @@ impl<'tx, 'tcell> PinRw<'tx, 'tcell> {
     #[inline]
     fn commit_slow(self) -> bool {
         if swym_htm::htm_supported() && self.logs().write_log.word_len() >= 9 {
-            enum HtxFail {
+            enum HtxRetry {
                 SoftwareFallback,
-                Retry,
+                FullRetry,
             }
-            let mut fail_count = 0;
+            let mut retry_count = 0;
             let htx = unsafe {
-                let fail_count = &mut fail_count;
+                let retry_count = &mut retry_count;
                 HardwareTx::new(move |code| {
-                    if code.is_explicit_abort() {
-                        Err(HtxFail::Retry)
-                    } else if code.is_retry() && *fail_count < 3 {
-                        *fail_count += 1;
+                    if code.is_explicit_abort() || code.is_conflict() && !code.is_retry() {
+                        Err(HtxRetry::FullRetry)
+                    } else if code.is_retry() && *retry_count < MAX_HTX_RETRIES {
+                        *retry_count += 1;
                         Ok(())
                     } else {
-                        Err(HtxFail::SoftwareFallback)
+                        Err(HtxRetry::SoftwareFallback)
                     }
                 })
             };
             let success = match htx {
                 Ok(htx) => self.commit_hard(htx),
-                Err(HtxFail::SoftwareFallback) => self.commit_soft(),
-                Err(HtxFail::Retry) => false,
+                Err(HtxRetry::SoftwareFallback) => self.commit_soft(),
+                Err(HtxRetry::FullRetry) => false,
             };
-            stats::htm_failure_size(fail_count);
+            stats::htm_retries(retry_count);
             success
         } else {
             self.commit_soft()

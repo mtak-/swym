@@ -80,16 +80,18 @@ impl Event {
 }
 
 macro_rules! stats_func {
-    ($name:ident: Event) => {
+    ($(#[$attr:meta])* $name:ident: Event) => {
         #[inline]
+        $($attr)*
         pub fn $name() {
             if cfg!(feature = "stats") {
                 (THREAD_STAT.get().borrow_mut().0).$name.happened()
             }
         }
     };
-    ($name:ident: Size) => {
+    ($(#[$attr:meta])* $name:ident: Size) => {
         #[inline]
+        $(#[$attr])*
         pub fn $name(size: usize) {
             if cfg!(feature = "stats") {
                 let size = size as u64;
@@ -100,7 +102,7 @@ macro_rules! stats_func {
 }
 
 macro_rules! stats {
-    ($($names:ident: $kinds:tt),* $(,)*) => {
+    ($($(#[$attr:meta])* $names:ident: $kinds:tt),* $(,)*) => {
         #[derive(Default, Debug)]
         pub struct Stats {
             $($names: $kinds),*
@@ -112,56 +114,64 @@ macro_rules! stats {
             }
         }
 
-        $(stats_func!{$names: $kinds})*
+        $(stats_func!{$(#[$attr])* $names: $kinds})*
     };
 }
 
 stats! {
-    read_transaction:                 Event,
-    write_transaction:                Event,
-    read_transaction_failure:         Event,
-    write_transaction_eager_failure:  Event,
-    write_transaction_commit_failure: Event,
+    read_transaction_retries:         Size,
+    write_transaction_eager_retries:  Size,
+    write_transaction_commit_retries: Size,
+    htm_retries:                      Size,
+    read_size:                        Size,
+    write_word_size:                  Size,
     bloom_check:                      Event,
     bloom_failure:                    Event,
     bloom_success_slow:               Event,
     write_after_write:                Event,
-    htm_failure_size:                 Size,
     write_after_logged_read:          Size,
-    write_word_size:                  Size,
-    read_size:                        Size,
 }
 
 impl Stats {
     fn print_summary(&self) {
         println!("{:#?}", self);
-        let transactions = self.read_transaction.count + self.write_transaction.count;
+
+        // Retries are recorded once after the transaction has completed. Eager retries and commit
+        // retries are recorded in equal amounts, so just picking one of them is correct here.
+        let successful_transactions =
+            self.read_transaction_retries.count + self.write_transaction_eager_retries.count;
+
+        let failures = self
+            .read_transaction_retries
+            .min_max_total
+            .unwrap_or_default()
+            .total
+            + self
+                .write_transaction_eager_retries
+                .min_max_total
+                .unwrap_or_default()
+                .total
+            + self
+                .write_transaction_commit_retries
+                .min_max_total
+                .unwrap_or_default()
+                .total;
         println!(
             "{:>12}: {:>12} {:>9} {:.2}% {:>9} {:.2}%",
             "transactions",
-            transactions,
-            "fail rate",
-            (self.read_transaction_failure.count
-                + self.write_transaction_eager_failure.count
-                + self.write_transaction_commit_failure.count) as f64
-                / transactions as f64
-                * 100.0,
-            "htm fails per tx rate",
-            self.htm_failure_size
-                .min_max_total
-                .unwrap_or_default()
-                .total as f64
-                / transactions as f64
+            successful_transactions,
+            "fail avg",
+            failures as f64 / successful_transactions as f64 * 100.0,
+            "htm fails avg",
+            self.htm_retries.min_max_total.unwrap_or_default().total as f64
+                / successful_transactions as f64
                 * 100.0
         );
         println!(
             "{:>12}: {:>12.6}",
-            "htm fail avg",
-            self.htm_failure_size
-                .min_max_total
-                .unwrap_or_default()
-                .total as f64
-                / self.htm_failure_size.count as f64
+            "htm retry avg",
+            self.htm_retries.min_max_total.unwrap_or_default().total as f64
+                / self.htm_retries.count as f64
         );
         println!(
             "{:>12}: {:>12} {:>9} {:.2}% {:>9} {:.2}%",
