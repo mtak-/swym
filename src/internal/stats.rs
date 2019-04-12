@@ -128,6 +128,7 @@ stats! {
     bloom_check:                      Event,
     bloom_failure:                    Event,
     bloom_success_slow:               Event,
+    read_after_write:                 Event,
     write_after_write:                Event,
     write_after_logged_read:          Size,
 }
@@ -141,7 +142,7 @@ impl Stats {
         let successful_transactions =
             self.read_transaction_retries.count + self.write_transaction_eager_retries.count;
 
-        let failures = self
+        let retries = self
             .read_transaction_retries
             .min_max_total
             .unwrap_or_default()
@@ -157,32 +158,24 @@ impl Stats {
                 .unwrap_or_default()
                 .total;
         println!(
-            "{:>12}: {:>12} {:>9} {:.2}% {:>9} {:.2}%",
+            "{:>12}: {:>12} {:>9}: {:.4} {:>13}: {:.4}",
             "transactions",
             successful_transactions,
-            "fail avg",
-            failures as f64 / successful_transactions as f64 * 100.0,
-            "htm fails avg",
-            self.htm_retries.min_max_total.unwrap_or_default().total as f64
-                / successful_transactions as f64
-                * 100.0
-        );
-        println!(
-            "{:>12}: {:>12.6}",
+            "retry avg",
+            retries as f64 / successful_transactions as f64,
             "htm retry avg",
             self.htm_retries.min_max_total.unwrap_or_default().total as f64
-                / self.htm_retries.count as f64
+                / successful_transactions as f64
         );
         println!(
-            "{:>12}: {:>12} {:>9} {:.2}% {:>9} {:.2}%",
+            "{:>12}: {:>12} {:>9}: {:.4} {:>13}: {:.4}",
             "bloom checks",
             self.bloom_check.count,
             "fail rate",
-            self.bloom_failure.count as f64 / self.bloom_check.count as f64 * 100.0,
+            self.bloom_failure.count as f64 / self.bloom_check.count as f64,
             "slow rate",
             (self.bloom_success_slow.count + self.bloom_failure.count) as f64
                 / self.bloom_check.count as f64
-                * 100.0
         );
     }
 }
