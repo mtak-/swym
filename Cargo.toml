@@ -23,11 +23,11 @@ rtm = ["swym-htm/rtm"]
 stats = []
 
 [dependencies]
+crossbeam-utils = "0.6.5"
 lock_api = "0.1.5"
 swym-htm = { path = "./swym-htm", version = "0.1.0" }
 
 [dev-dependencies]
-crossbeam-utils = "0.6.5"
 jemallocator = "0.3.0"
 
 [profile.bench]

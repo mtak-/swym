@@ -9,6 +9,7 @@ use crate::{
     rw::RwTx,
     tx::Error,
 };
+use crossbeam_utils::Backoff;
 
 // TODO: rustfmt bug causes other imports to be deleted.
 use crate::stats;
@@ -357,6 +358,7 @@ impl<'tcell> Pin<'tcell> {
         F: FnMut(&ReadTx<'tcell>) -> Result<O, Error>,
     {
         let mut retries = 0;
+        let backoff = Backoff::new();
         let result = loop {
             let r = f(ReadTx::new(&mut self));
             match r {
@@ -364,8 +366,7 @@ impl<'tcell> Pin<'tcell> {
                 Err(Error::RETRY) => {}
             }
             retries += 1;
-            // TODO: better backoff
-            std::thread::yield_now();
+            backoff.snooze();
             self.repin()
         };
         stats::read_transaction_retries(retries);
@@ -380,6 +381,7 @@ impl<'tcell> Pin<'tcell> {
     {
         let mut eager_retries = 0;
         let mut commit_retries = 0;
+        let backoff = Backoff::new();
         let result = loop {
             self.logs().validate_start_state();
             {
@@ -396,8 +398,7 @@ impl<'tcell> Pin<'tcell> {
                     Err(Error::RETRY) => eager_retries += 1,
                 }
             }
-            // TODO: better backoff
-            std::thread::yield_now();
+            backoff.snooze();
             self.repin();
         };
         stats::write_transaction_eager_retries(eager_retries);
