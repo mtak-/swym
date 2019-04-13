@@ -507,7 +507,9 @@ impl<'tx, 'tcell> PinRw<'tx, 'tcell> {
                     stats::htm_retries(retry_count);
                     return success;
                 }
-                Err(HtxRetry::SoftwareFallback) => {}
+                Err(HtxRetry::SoftwareFallback) => {
+                    stats::htm_retries(retry_count);
+                }
                 Err(HtxRetry::FullRetry) => {
                     stats::htm_retries(retry_count);
                     return false;
