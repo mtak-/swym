@@ -31,7 +31,7 @@ mod set_one {
                 });
             })
             .unwrap();
-            swym::print_stats();
+            swym::stats::print_stats();
         }
     }
 
@@ -62,7 +62,7 @@ mod set_one {
                 });
             })
             .unwrap();
-            swym::print_stats();
+            swym::stats::print_stats();
         }
     }
 
@@ -87,7 +87,7 @@ mod set_one {
                 });
             })
             .unwrap();
-            swym::print_stats();
+            swym::stats::print_stats();
         }
     }
 }
