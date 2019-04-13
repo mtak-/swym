@@ -14,22 +14,30 @@ impl<T> FastTls<T> {
 
     #[inline]
     fn initialize(&self, value: &T) {
-        debug_assert!(
-            self.fast_ptr.get().is_none(),
-            "attempted to have two phoenix TLS vars at once"
-        );
-        self.fast_ptr.set(Some(value.into()))
+        if cfg!(target_thread_local) {
+            debug_assert!(
+                self.fast_ptr.get().is_none(),
+                "attempted to have two phoenix TLS vars at once"
+            );
+            self.fast_ptr.set(Some(value.into()))
+        }
     }
 
     #[inline]
     fn get(&self) -> Option<NonNull<T>> {
-        self.fast_ptr.get()
+        if cfg!(target_thread_local) {
+            self.fast_ptr.get()
+        } else {
+            None
+        }
     }
 
     #[inline]
     fn clear(&self) {
-        debug_assert!(self.fast_ptr.get().is_some(), "double free on tls var");
-        self.fast_ptr.set(None)
+        if cfg!(target_thread_local) {
+            debug_assert!(self.fast_ptr.get().is_some(), "double free on tls var");
+            self.fast_ptr.set(None)
+        }
     }
 }
 
@@ -183,14 +191,19 @@ macro_rules! __phoenix_tls_inner {
 
                 #[inline]
                 fn apply_fast_tls<F: FnOnce(&$crate::internal::phoenix_tls::FastTls<Self::Item>) -> O, O>(f: F) -> O {
+                    #[cfg(target_thread_local)]
                     #[thread_local]
                     static TLS: $crate::internal::phoenix_tls::FastTls<$t> = $crate::internal::phoenix_tls::FastTls::none();
+
+                    #[cfg(not(target_thread_local))]
+                    const TLS: $crate::internal::phoenix_tls::FastTls<$t> = $crate::internal::phoenix_tls::FastTls::none();
 
                     f(&TLS)
                 }
 
-                #[inline(never)]
-                #[cold]
+                #[cfg_attr(target_thread_local, inline(never))]
+                #[cfg_attr(not(target_thread_local), inline)]
+                #[cfg_attr(target_thread_local, cold)]
                 fn init() -> $crate::internal::phoenix_tls::Phoenix<Self::Item, Self> {
                     thread_local!{
                         static TLS: $crate::internal::phoenix_tls::Phoenix<$t, $name>
