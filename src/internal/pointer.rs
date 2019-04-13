@@ -309,6 +309,7 @@ impl<T> PtrExt for *mut T {
 
     #[inline]
     unsafe fn add(self, value: usize) -> Self {
+        #[cfg(not(miri))]
         assume!(
             (self.as_ptr() as usize).checked_add(value).is_some(),
             "overflow on `PtrExt::add`"
@@ -318,6 +319,7 @@ impl<T> PtrExt for *mut T {
 
     #[inline]
     unsafe fn sub(self, value: usize) -> Self {
+        #[cfg(not(miri))]
         assume!(
             (self.as_ptr() as usize).checked_sub(value).is_some(),
             "overflow on `PtrExt::sub`"

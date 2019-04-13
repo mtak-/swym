@@ -40,5 +40,5 @@ fn insert_remove(b: &mut Bencher) {
         });
     })
     .unwrap();
-    swym::print_stats();
+    swym::stats::print_stats();
 }

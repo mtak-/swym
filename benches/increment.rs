@@ -28,7 +28,7 @@ mod increment {
             });
         })
         .unwrap();
-        swym::print_stats();
+        swym::stats::print_stats();
     }
 
     #[bench]
@@ -49,6 +49,6 @@ mod increment {
             });
         })
         .unwrap();
-        swym::print_stats();
+        swym::stats::print_stats();
     }
 }

@@ -48,7 +48,7 @@ mod rbtree {
                     .unwrap();
                     std::mem::forget(_tree);
                 });
-                swym::print_stats();
+                swym::stats::print_stats();
             }
         };
     }
@@ -96,7 +96,7 @@ mod rbtree {
                     })
                     .unwrap();
                 });
-                swym::print_stats();
+                swym::stats::print_stats();
             }
         };
     }
@@ -150,7 +150,7 @@ mod rbtree {
                     })
                     .unwrap();
                 });
-                swym::print_stats();
+                swym::stats::print_stats();
             }
         };
     }
@@ -204,7 +204,7 @@ mod rbtree {
                     })
                     .unwrap();
                 });
-                swym::print_stats();
+                swym::stats::print_stats();
             }
         };
     }

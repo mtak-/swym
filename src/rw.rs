@@ -14,6 +14,7 @@ use crate::{
         thread::{PinMutRef, PinRw},
         write_log::{bloom_hash, Contained, Entry, WriteEntryImpl},
     },
+    stats,
     tcell::{Ref, TCell},
     tx::{self, Error, Ordering, SetError, Write, _TValue},
 };
@@ -73,6 +74,7 @@ impl<'tx, 'tcell> RwTxImpl<'tx, 'tcell> {
                     }
                 }
                 Some(entry) => {
+                    stats::read_after_write();
                     let value = Ref::new(entry.read::<T>());
                     if likely!(self.rw_valid(&tcell.erased)) {
                         return Ok(value);
@@ -115,6 +117,7 @@ impl<'tx, 'tcell> RwTxImpl<'tx, 'tcell> {
                     }
                 }
                 Some(entry) => {
+                    stats::read_after_write();
                     let value = Ref::new(entry.read::<T>());
                     if likely!(self.rw_valid(&tcell.erased)) {
                         return Ok(value);

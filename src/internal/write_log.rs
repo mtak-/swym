@@ -1,11 +1,14 @@
-use crate::internal::{
-    alloc::{dyn_vec::DynElemMut, DynVec},
-    epoch::QuiesceEpoch,
-    pointer::PtrExt,
+use crate::{
+    internal::{
+        alloc::{dyn_vec::DynElemMut, DynVec},
+        epoch::QuiesceEpoch,
+        pointer::PtrExt,
+        tcell_erased::TCellErased,
+        usize_aligned::ForcedUsizeAligned,
+    },
     stats,
-    tcell_erased::TCellErased,
-    usize_aligned::ForcedUsizeAligned,
 };
+
 use std::{
     mem::{self, ManuallyDrop},
     num::NonZeroUsize,
@@ -224,7 +227,7 @@ impl<'tcell> WriteLog<'tcell> {
         if result.is_some() {
             stats::bloom_success_slow()
         } else {
-            stats::bloom_failure()
+            stats::bloom_collision()
         }
         result
     }
@@ -261,7 +264,7 @@ impl<'tcell> WriteLog<'tcell> {
                 Entry::new_occupied(unsafe { mem::transmute(entry) }, hash)
             }
             None => {
-                stats::bloom_failure();
+                stats::bloom_collision();
                 Entry::new_hash(self, hash)
             }
         }

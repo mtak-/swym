@@ -44,7 +44,7 @@ fn count() {
     })
     .unwrap();
     assert_eq!(COUNT.load(Relaxed), 0);
-    swym::print_stats();
+    swym::stats::print_stats();
 }
 
 #[test]
@@ -67,7 +67,7 @@ fn count_rev() {
     })
     .unwrap();
     assert_eq!(COUNT.load(Relaxed), 0);
-    swym::print_stats();
+    swym::stats::print_stats();
 }
 
 #[test]
@@ -94,7 +94,7 @@ fn count_remove() {
     })
     .unwrap();
     assert_eq!(COUNT.load(Relaxed), 0);
-    swym::print_stats();
+    swym::stats::print_stats();
 }
 
 #[test]
@@ -121,5 +121,5 @@ fn count_remove_rev() {
     })
     .unwrap();
     assert_eq!(COUNT.load(Relaxed), 0);
-    swym::print_stats();
+    swym::stats::print_stats();
 }

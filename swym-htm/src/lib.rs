@@ -169,19 +169,36 @@ impl HardwareTx {
     /// It is unsafe to pass in a retry handler that never returns `Err`. It is also unsafe to leak
     /// the transaction, unless `end` is manually called sometime after.
     #[inline]
-    pub unsafe fn new<F, E>(mut retry_handler: F) -> Result<Self, E>
+    pub unsafe fn new<F, E>(retry_handler: F) -> Result<Self, E>
     where
         F: FnMut(BeginCode) -> Result<(), E>,
     {
-        loop {
-            let b = begin();
-            if core::intrinsics::likely(b.is_started()) {
-                return Ok(HardwareTx {
-                    _private: PhantomData,
-                });
-            } else {
-                retry_handler(b)?
+        let b = begin();
+        if core::intrinsics::likely(b.is_started()) {
+            return Ok(HardwareTx {
+                _private: PhantomData,
+            });
+        } else {
+            #[inline(never)]
+            #[cold]
+            unsafe fn do_retry<F, E>(mut retry_handler: F, b: BeginCode) -> Result<HardwareTx, E>
+            where
+                F: FnMut(BeginCode) -> Result<(), E>,
+            {
+                retry_handler(b)?;
+                loop {
+                    let b = begin();
+                    if b.is_started() {
+                        return Ok(HardwareTx {
+                            _private: PhantomData,
+                        });
+                    } else {
+                        retry_handler(b)?
+                    }
+                }
             }
+
+            do_retry(retry_handler, b)
         }
     }
 

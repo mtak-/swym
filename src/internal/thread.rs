@@ -3,13 +3,16 @@ use crate::{
         epoch::{QuiesceEpoch, EPOCH_CLOCK},
         gc::{GlobalSynchList, OwnedSynch, ThreadGarbage},
         read_log::ReadLog,
-        stats,
         write_log::WriteLog,
     },
     read::ReadTx,
     rw::RwTx,
     tx::Error,
 };
+
+// TODO: rustfmt bug causes other imports to be deleted.
+use crate::stats;
+
 use std::{
     cell::{Cell, UnsafeCell},
     fmt::{self, Debug, Formatter},
@@ -21,6 +24,8 @@ use std::{
     sync::atomic::Ordering::Release,
 };
 use swym_htm::HardwareTx;
+
+const MAX_HTX_RETRIES: usize = 3;
 
 /// Intrusive reference counted thread local data.
 ///
@@ -351,17 +356,18 @@ impl<'tcell> Pin<'tcell> {
     where
         F: FnMut(&ReadTx<'tcell>) -> Result<O, Error>,
     {
-        loop {
-            stats::read_transaction();
-
+        let mut retries = 0;
+        let result = loop {
             let r = f(ReadTx::new(&mut self));
             match r {
                 Ok(o) => break o,
                 Err(Error::RETRY) => {}
             }
-            stats::read_transaction_failure();
+            retries += 1;
             self.repin()
-        }
+        };
+        stats::read_transaction_retries(retries);
+        result
     }
 
     /// Runs a read-write transaction.
@@ -370,8 +376,9 @@ impl<'tcell> Pin<'tcell> {
     where
         F: FnMut(&mut RwTx<'tcell>) -> Result<O, Error>,
     {
-        loop {
-            stats::write_transaction();
+        let mut eager_retries = 0;
+        let mut commit_retries = 0;
+        let result = loop {
             self.logs().validate_start_state();
             {
                 let mut pin = unsafe { PinRw::new(&mut self) };
@@ -380,15 +387,20 @@ impl<'tcell> Pin<'tcell> {
                     Ok(o) => {
                         if likely!(pin.commit()) {
                             self.logs().validate_start_state();
-                            return o;
+                            break o;
                         }
+                        commit_retries += 1;
                     }
-                    Err(Error::RETRY) => {}
+                    Err(Error::RETRY) => eager_retries += 1,
                 }
             }
-            stats::write_transaction_failure();
+            // TODO: backoff
+            // std::thread::yield_now();
             self.repin();
-        }
+        };
+        stats::write_transaction_eager_retries(eager_retries);
+        stats::write_transaction_commit_retries(commit_retries);
+        result
     }
 }
 
@@ -474,27 +486,40 @@ impl<'tx, 'tcell> PinRw<'tx, 'tcell> {
     #[inline]
     fn commit_slow(self) -> bool {
         if swym_htm::htm_supported() && self.logs().write_log.word_len() >= 9 {
+            enum HtxRetry {
+                SoftwareFallback,
+                FullRetry,
+            }
+            let mut retry_count = 0;
             let htx = unsafe {
-                let mut fail_count = 0;
+                let retry_count = &mut retry_count;
                 HardwareTx::new(move |code| {
-                    if code.is_explicit_abort() || code.is_conflict() {
-                        Err(true)
-                    } else if code.is_retry() && fail_count < 3 {
-                        fail_count += 1;
+                    if code.is_explicit_abort() || code.is_conflict() && !code.is_retry() {
+                        Err(HtxRetry::FullRetry)
+                    } else if code.is_retry() && *retry_count < MAX_HTX_RETRIES {
+                        *retry_count += 1;
                         Ok(())
                     } else {
-                        Err(false)
+                        Err(HtxRetry::SoftwareFallback)
                     }
                 })
             };
             match htx {
-                Ok(htx) => self.commit_hard(htx),
-                Err(false) => self.commit_soft(),
-                Err(true) => false,
+                Ok(htx) => {
+                    let success = self.commit_hard(htx);
+                    stats::htm_retries(retry_count);
+                    return success;
+                }
+                Err(HtxRetry::SoftwareFallback) => {
+                    stats::htm_retries(retry_count);
+                }
+                Err(HtxRetry::FullRetry) => {
+                    stats::htm_retries(retry_count);
+                    return false;
+                }
             }
-        } else {
-            self.commit_soft()
         }
+        self.commit_soft()
     }
 
     #[inline(never)]
