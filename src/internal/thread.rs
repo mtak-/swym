@@ -364,6 +364,8 @@ impl<'tcell> Pin<'tcell> {
                 Err(Error::RETRY) => {}
             }
             retries += 1;
+            // TODO: better backoff
+            std::thread::yield_now();
             self.repin()
         };
         stats::read_transaction_retries(retries);
@@ -394,8 +396,8 @@ impl<'tcell> Pin<'tcell> {
                     Err(Error::RETRY) => eager_retries += 1,
                 }
             }
-            // TODO: backoff
-            // std::thread::yield_now();
+            // TODO: better backoff
+            std::thread::yield_now();
             self.repin();
         };
         stats::write_transaction_eager_retries(eager_retries);
