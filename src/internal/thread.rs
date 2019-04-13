@@ -501,16 +501,20 @@ impl<'tx, 'tcell> PinRw<'tx, 'tcell> {
                     }
                 })
             };
-            let success = match htx {
-                Ok(htx) => self.commit_hard(htx),
-                Err(HtxRetry::SoftwareFallback) => self.commit_soft(),
-                Err(HtxRetry::FullRetry) => false,
-            };
-            stats::htm_retries(retry_count);
-            success
-        } else {
-            self.commit_soft()
+            match htx {
+                Ok(htx) => {
+                    let success = self.commit_hard(htx);
+                    stats::htm_retries(retry_count);
+                    return success;
+                }
+                Err(HtxRetry::SoftwareFallback) => {}
+                Err(HtxRetry::FullRetry) => {
+                    stats::htm_retries(retry_count);
+                    return false;
+                }
+            }
         }
+        self.commit_soft()
     }
 
     #[inline(never)]

@@ -224,7 +224,7 @@ impl<'tcell> WriteLog<'tcell> {
         if result.is_some() {
             stats::bloom_success_slow()
         } else {
-            stats::bloom_failure()
+            stats::bloom_collision()
         }
         result
     }
@@ -261,7 +261,7 @@ impl<'tcell> WriteLog<'tcell> {
                 Entry::new_occupied(unsafe { mem::transmute(entry) }, hash)
             }
             None => {
-                stats::bloom_failure();
+                stats::bloom_collision();
                 Entry::new_hash(self, hash)
             }
         }

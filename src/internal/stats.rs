@@ -36,7 +36,7 @@ impl Debug for Size {
 }
 
 impl Size {
-    pub fn record(&mut self, size: u64) {
+    pub(crate) fn record(&mut self, size: u64) {
         self.count += 1;
         if let Some(ref mut min_max_total) = &mut self.min_max_total {
             min_max_total.min = min_max_total.min.min(size);
@@ -51,7 +51,7 @@ impl Size {
         }
     }
 
-    pub fn merge(&mut self, rhs: &Self) {
+    pub(crate) fn merge(&mut self, rhs: &Self) {
         self.count += rhs.count;
         self.min_max_total = match (self.min_max_total, rhs.min_max_total) {
             (Some(a), Some(b)) => Some(MinMaxTotal {
@@ -82,8 +82,8 @@ impl Event {
 macro_rules! stats_func {
     ($(#[$attr:meta])* $name:ident: Event) => {
         #[inline]
-        $($attr)*
-        pub fn $name() {
+        $(#[$attr])*
+        pub(crate) fn $name() {
             if cfg!(feature = "stats") {
                 (THREAD_STAT.get().borrow_mut().0).$name.happened()
             }
@@ -92,7 +92,7 @@ macro_rules! stats_func {
     ($(#[$attr:meta])* $name:ident: Size) => {
         #[inline]
         $(#[$attr])*
-        pub fn $name(size: usize) {
+        pub(crate) fn $name(size: usize) {
             if cfg!(feature = "stats") {
                 let size = size as u64;
                 (THREAD_STAT.get().borrow_mut().0).$name.record(size)
@@ -119,22 +119,51 @@ macro_rules! stats {
 }
 
 stats! {
+    /// Number of retries per successful read transaction.
     read_transaction_retries:         Size,
+
+    /// Number of eager (before commit) retries per successful write transaction.
     write_transaction_eager_retries:  Size,
+
+    /// Number of commit retries per successful write transaction.
     write_transaction_commit_retries: Size,
+
+    /// Number of hardware retries per successful hardware transaction or software fallback.
+    ///
+    /// This is a less obvious metric. If a transaction completely fails and retries from the start
+    /// 10 times, each one attempting a hardware commit, then this will be recorded 10 times with
+    /// 10 different values.
     htm_retries:                      Size,
+
+    /// Number of `TCell`s in the read log at commit time.
     read_size:                        Size,
+
+    /// Number of cpu words in the write log at commit time. Each write is a minimum of 3 words.
     write_word_size:                  Size,
+
+    /// A bloom filter check.
     bloom_check:                      Event,
-    bloom_failure:                    Event,
+
+    /// A bloom filter collision.
+    bloom_collision:                  Event,
+
+    /// A bloom filter hit that required a full lookup to verify.
     bloom_success_slow:               Event,
+
+    /// A transactional read of data that exists in the write log. Considered slow.
     read_after_write:                 Event,
+
+    /// A transactional overwrite of data that exists in the write log. Considered slow.
     write_after_write:                Event,
+
+    /// Number of transactional writes to data that has been logged as read from first. Considered slowish.
+    ///
+    /// Writes after logged reads currently causes the commit algorithm to do more work.
     write_after_logged_read:          Size,
 }
 
 impl Stats {
-    fn print_summary(&self) {
+    pub fn print_summary(&self) {
         println!("{:#?}", self);
 
         // Retries are recorded once after the transaction has completed. Eager retries and commit
@@ -172,9 +201,9 @@ impl Stats {
             "bloom checks",
             self.bloom_check.count,
             "fail rate",
-            self.bloom_failure.count as f64 / self.bloom_check.count as f64,
+            self.bloom_collision.count as f64 / self.bloom_check.count as f64,
             "slow rate",
-            (self.bloom_success_slow.count + self.bloom_failure.count) as f64
+            (self.bloom_success_slow.count + self.bloom_collision.count) as f64
                 / self.bloom_check.count as f64
         );
     }
@@ -185,7 +214,14 @@ struct ThreadStats(Stats);
 
 impl Drop for ThreadStats {
     fn drop(&mut self) {
+        self.flush()
+    }
+}
+
+impl ThreadStats {
+    pub fn flush(&mut self) {
         GLOBAL.get().lock().unwrap().merge(&self.0);
+        self.0 = Default::default()
     }
 }
 
@@ -206,5 +242,11 @@ pub fn print_stats() {
         GLOBAL.get().lock().unwrap().print_summary();
     } else {
         println!("`swym/stats` feature is not enabled")
+    }
+}
+
+pub fn thread_flush() {
+    if cfg!(feature = "stats") {
+        THREAD_STAT.get().borrow_mut().flush()
     }
 }
