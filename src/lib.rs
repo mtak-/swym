@@ -95,12 +95,12 @@ mod internal;
 
 mod read;
 mod rw;
+pub mod stats;
 pub mod tcell;
 pub mod thread_key;
 pub mod tptr;
 pub mod tx;
 
-pub use internal::stats::print_stats;
 pub use read::ReadTx;
 pub use rw::RwTx;
 #[doc(inline)]

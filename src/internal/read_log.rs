@@ -3,7 +3,10 @@
 //! The only meaningful operations are filtering out writes from the ReadLog (see thread.rs), and
 //! checking that the reads are still valid (validate_reads).
 
-use crate::internal::{alloc::FVec, epoch::QuiesceEpoch, stats, tcell_erased::TCellErased};
+use crate::{
+    internal::{alloc::FVec, epoch::QuiesceEpoch, tcell_erased::TCellErased},
+    stats,
+};
 use std::num::NonZeroUsize;
 use swym_htm::HardwareTx;
 

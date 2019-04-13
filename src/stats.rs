@@ -1,3 +1,5 @@
+//! Statistics collection. Enabled with `--features stats`.
+
 use std::{
     cell::RefCell,
     fmt::{self, Debug, Formatter},
@@ -11,6 +13,7 @@ struct MinMaxTotal {
     total: u64,
 }
 
+#[doc(hidden)]
 #[derive(Default)]
 pub struct Size {
     min_max_total: Option<MinMaxTotal>,
@@ -64,6 +67,7 @@ impl Size {
     }
 }
 
+#[doc(hidden)]
 #[derive(Default, Debug)]
 pub struct Event {
     count: usize,
@@ -103,9 +107,10 @@ macro_rules! stats_func {
 
 macro_rules! stats {
     ($($(#[$attr:meta])* $names:ident: $kinds:tt),* $(,)*) => {
+        /// A collection of swym statistics.
         #[derive(Default, Debug)]
         pub struct Stats {
-            $($names: $kinds),*
+            $($(#[$attr])*pub $names: $kinds),*
         }
 
         impl Stats {
@@ -163,6 +168,7 @@ stats! {
 }
 
 impl Stats {
+    /// Prints a summary of the stats object.
     pub fn print_summary(&self) {
         println!("{:#?}", self);
 
@@ -209,8 +215,11 @@ impl Stats {
     }
 }
 
-#[derive(Default)]
-struct ThreadStats(Stats);
+/// Thread local statistics.
+///
+/// To reduce overhead of stats tracking, each thread has it's own `Stats` object which is flushed
+/// to the global `Stats` object on thread exit or when manually requested.
+pub struct ThreadStats(Stats);
 
 impl Drop for ThreadStats {
     fn drop(&mut self) {
@@ -219,6 +228,14 @@ impl Drop for ThreadStats {
 }
 
 impl ThreadStats {
+    /// Returns the actual statistics object.
+    pub fn get(&self) -> &Stats {
+        &self.0
+    }
+
+    /// Flushes the thread stats to the global thread stats object.
+    ///
+    /// After flushing, `self` is reset.
     pub fn flush(&mut self) {
         GLOBAL.get().lock().unwrap().merge(&self.0);
         self.0 = Default::default()
@@ -229,7 +246,7 @@ phoenix_tls! {
     static THREAD_STAT: RefCell<ThreadStats> = {
         drop(GLOBAL.get()); // initialize global now, else we may get panics on drop because
                             // lazy_static uses thread_locals to initialize it.
-        RefCell::default()
+        RefCell::new(ThreadStats(Default::default()))
     };
 }
 
@@ -237,16 +254,32 @@ fast_lazy_static! {
     static GLOBAL: Mutex<Stats> = Mutex::default();
 }
 
-pub fn print_stats() {
+
+/// Returns the global stats object, or None if the feature is disabled.
+pub fn stats() -> Option<impl std::ops::Deref<Target = Stats>> {
     if cfg!(feature = "stats") {
-        GLOBAL.get().lock().unwrap().print_summary();
+        Some(GLOBAL.get().lock().unwrap())
     } else {
-        println!("`swym/stats` feature is not enabled")
+        None
     }
 }
 
-pub fn thread_flush() {
+/// Returns the thread local stats object, or None if the feature is disabled.
+pub fn thread_stats() -> Option<impl std::ops::Deref<Target = RefCell<ThreadStats>>> {
     if cfg!(feature = "stats") {
-        THREAD_STAT.get().borrow_mut().flush()
+        Some(THREAD_STAT.get())
+    } else {
+        None
+    }
+}
+
+
+/// Prints a summary of the global stats object.
+///
+/// It may be necessary to run `stats::thread_stats().borrow_mut().flush()` first.
+pub fn print_stats() {
+    match self::stats() {
+        Some(stats) => stats.print_summary(),
+        None => println!("`swym/stats` feature is not enabled"),
     }
 }

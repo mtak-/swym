@@ -10,11 +10,11 @@
 use crate::{
     internal::{
         alloc::dyn_vec::DynElemMut,
-        stats,
         tcell_erased::TCellErased,
         thread::{PinMutRef, PinRw},
         write_log::{bloom_hash, Contained, Entry, WriteEntryImpl},
     },
+    stats,
     tcell::{Ref, TCell},
     tx::{self, Error, Ordering, SetError, Write, _TValue},
 };

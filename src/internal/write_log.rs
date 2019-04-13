@@ -1,11 +1,14 @@
-use crate::internal::{
-    alloc::{dyn_vec::DynElemMut, DynVec},
-    epoch::QuiesceEpoch,
-    pointer::PtrExt,
+use crate::{
+    internal::{
+        alloc::{dyn_vec::DynElemMut, DynVec},
+        epoch::QuiesceEpoch,
+        pointer::PtrExt,
+        tcell_erased::TCellErased,
+        usize_aligned::ForcedUsizeAligned,
+    },
     stats,
-    tcell_erased::TCellErased,
-    usize_aligned::ForcedUsizeAligned,
 };
+
 use std::{
     mem::{self, ManuallyDrop},
     num::NonZeroUsize,

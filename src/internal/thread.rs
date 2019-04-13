@@ -3,13 +3,16 @@ use crate::{
         epoch::{QuiesceEpoch, EPOCH_CLOCK},
         gc::{GlobalSynchList, OwnedSynch, ThreadGarbage},
         read_log::ReadLog,
-        stats,
         write_log::WriteLog,
     },
     read::ReadTx,
     rw::RwTx,
     tx::Error,
 };
+
+// TODO: rustfmt bug causes other imports to be deleted.
+use crate::stats;
+
 use std::{
     cell::{Cell, UnsafeCell},
     fmt::{self, Debug, Formatter},
