@@ -351,6 +351,12 @@ impl<'tcell> Pin<'tcell> {
         }
     }
 
+    #[inline]
+    fn snooze_repin(&mut self, backoff: &Backoff) {
+        backoff.snooze();
+        self.repin()
+    }
+
     /// Runs a read only transaction.
     #[inline]
     pub fn run_read<F, O>(mut self, mut f: F) -> O
@@ -366,8 +372,7 @@ impl<'tcell> Pin<'tcell> {
                 Err(Error::RETRY) => {}
             }
             retries += 1;
-            backoff.snooze();
-            self.repin()
+            self.snooze_repin(&backoff);
         };
         stats::read_transaction_retries(retries);
         result
@@ -398,8 +403,7 @@ impl<'tcell> Pin<'tcell> {
                     Err(Error::RETRY) => eager_retries += 1,
                 }
             }
-            backoff.snooze();
-            self.repin();
+            self.snooze_repin(&backoff);
         };
         stats::write_transaction_eager_retries(eager_retries);
         stats::write_transaction_commit_retries(commit_retries);
