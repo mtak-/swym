@@ -41,8 +41,13 @@ impl<T> FastTls<T> {
     }
 }
 
+pub trait PhoenixTarget {
+    fn subscribe(&self);
+    fn unsubscribe(&self);
+}
+
 pub trait PhoenixTlsApply: Sized {
-    type Item;
+    type Item: PhoenixTarget;
 
     fn apply_fast_tls<F: FnOnce(&FastTls<Self::Item>) -> O, O>(f: F) -> O;
     fn init() -> Phoenix<Self::Item, Self>;
@@ -56,12 +61,12 @@ struct PhoenixImpl<T> {
 }
 
 #[derive(Debug)]
-pub struct Phoenix<T: 'static, D: PhoenixTlsApply<Item = T>> {
+pub struct Phoenix<T: 'static + PhoenixTarget, D: PhoenixTlsApply<Item = T>> {
     raw:     NonNull<PhoenixImpl<T>>,
     phantom: PhantomData<(PhoenixImpl<T>, D)>,
 }
 
-impl<T: 'static, D: PhoenixTlsApply<Item = T>> Clone for Phoenix<T, D> {
+impl<T: 'static + PhoenixTarget, D: PhoenixTlsApply<Item = T>> Clone for Phoenix<T, D> {
     #[inline]
     fn clone(&self) -> Self {
         let count = self.as_ref().ref_count.get();
@@ -74,7 +79,7 @@ impl<T: 'static, D: PhoenixTlsApply<Item = T>> Clone for Phoenix<T, D> {
     }
 }
 
-impl<T: 'static, D: PhoenixTlsApply<Item = T>> Drop for Phoenix<T, D> {
+impl<T: 'static + PhoenixTarget, D: PhoenixTlsApply<Item = T>> Drop for Phoenix<T, D> {
     #[inline]
     fn drop(&mut self) {
         let count = self.as_ref().ref_count.get();
@@ -89,7 +94,10 @@ impl<T: 'static, D: PhoenixTlsApply<Item = T>> Drop for Phoenix<T, D> {
 
             #[inline(never)]
             #[cold]
-            unsafe fn dealloc<T: 'static, D: PhoenixTlsApply>(this_ptr: NonNull<PhoenixImpl<T>>) {
+            unsafe fn dealloc<T: 'static + PhoenixTarget, D: PhoenixTlsApply>(
+                this_ptr: NonNull<PhoenixImpl<T>>,
+            ) {
+                this_ptr.as_ref().value.unsubscribe();
                 D::apply_fast_tls(|tls| tls.clear());
                 drop(Box::from_raw(this_ptr.as_ptr()));
             }
@@ -97,7 +105,7 @@ impl<T: 'static, D: PhoenixTlsApply<Item = T>> Drop for Phoenix<T, D> {
     }
 }
 
-impl<T: 'static, D: PhoenixTlsApply<Item = T>> Phoenix<T, D> {
+impl<T: 'static + PhoenixTarget, D: PhoenixTlsApply<Item = T>> Phoenix<T, D> {
     #[inline]
     pub fn new(value: T) -> Self {
         let phoenix = Box::new(PhoenixImpl {
@@ -111,6 +119,7 @@ impl<T: 'static, D: PhoenixTlsApply<Item = T>> Phoenix<T, D> {
                 phantom: PhantomData,
             };
             tls.initialize(&phoenix);
+            phoenix.subscribe();
             phoenix
         })
     }
@@ -139,7 +148,7 @@ impl<T: 'static, D: PhoenixTlsApply<Item = T>> Phoenix<T, D> {
     }
 }
 
-impl<T: 'static, D: PhoenixTlsApply<Item = T>> Deref for Phoenix<T, D> {
+impl<T: 'static + PhoenixTarget, D: PhoenixTlsApply<Item = T>> Deref for Phoenix<T, D> {
     type Target = T;
 
     #[inline]
@@ -149,11 +158,11 @@ impl<T: 'static, D: PhoenixTlsApply<Item = T>> Deref for Phoenix<T, D> {
 }
 
 #[derive(Copy, Clone, Debug)]
-pub struct PhoenixKey<T: 'static, D: PhoenixTlsApply<Item = T>> {
+pub struct PhoenixKey<T: 'static + PhoenixTarget, D: PhoenixTlsApply<Item = T>> {
     phantom: PhantomData<(PhoenixImpl<T>, D)>,
 }
 
-impl<T: 'static, D: PhoenixTlsApply<Item = T>> PhoenixKey<T, D> {
+impl<T: 'static + PhoenixTarget, D: PhoenixTlsApply<Item = T>> PhoenixKey<T, D> {
     #[inline]
     pub const fn new() -> Self {
         PhoenixKey {
