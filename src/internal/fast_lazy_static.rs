@@ -1,3 +1,7 @@
+/// Lazy static that has less code bloat.
+///
+/// Implementation based on fast thread locals in libstd.
+
 use std::sync::atomic::{
     AtomicPtr,
     Ordering::{Acquire, Relaxed},
@@ -9,7 +13,7 @@ pub struct Fls<T: 'static> {
     get_:  fn() -> &'static AtomicPtr<T>,
 }
 
-impl<T: 'static> Fls<T> {
+impl<T: 'static + Sync> Fls<T> {
     #[inline]
     pub const unsafe fn new(
         get_: fn() -> &'static AtomicPtr<T>,

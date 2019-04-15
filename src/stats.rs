@@ -1,8 +1,10 @@
 //! Statistics collection. Enabled with `--features stats`.
 
+use crate::internal::phoenix_tls::PhoenixTarget;
 use std::{
     cell::RefCell,
     fmt::{self, Debug, Formatter},
+    ops::{Deref, DerefMut},
     sync::Mutex,
 };
 
@@ -89,7 +91,7 @@ macro_rules! stats_func {
         $(#[$attr])*
         pub(crate) fn $name() {
             if cfg!(feature = "stats") {
-                (THREAD_STAT.get().borrow_mut().0).$name.happened()
+                THREAD_STAT.get().get().$name.happened()
             }
         }
     };
@@ -99,7 +101,7 @@ macro_rules! stats_func {
         pub(crate) fn $name(size: usize) {
             if cfg!(feature = "stats") {
                 let size = size as u64;
-                (THREAD_STAT.get().borrow_mut().0).$name.record(size)
+                THREAD_STAT.get().get().$name.record(size)
             }
         }
     };
@@ -219,7 +221,7 @@ impl Stats {
 ///
 /// To reduce overhead of stats tracking, each thread has it's own `Stats` object which is flushed
 /// to the global `Stats` object on thread exit or when manually requested.
-pub struct ThreadStats(Stats);
+pub struct ThreadStats(RefCell<Stats>);
 
 impl Drop for ThreadStats {
     fn drop(&mut self) {
@@ -227,26 +229,35 @@ impl Drop for ThreadStats {
     }
 }
 
+impl PhoenixTarget for ThreadStats {
+    #[inline]
+    fn subscribe(&self) {}
+
+    #[inline]
+    fn unsubscribe(&self) {}
+}
+
 impl ThreadStats {
     /// Returns the actual statistics object.
-    pub fn get(&self) -> &Stats {
-        &self.0
+    pub fn get<'a>(&'a self) -> impl DerefMut<Target = Stats> + 'a {
+        self.0.borrow_mut()
     }
 
     /// Flushes the thread stats to the global thread stats object.
     ///
     /// After flushing, `self` is reset.
     pub fn flush(&mut self) {
-        GLOBAL.get().lock().unwrap().merge(&self.0);
-        self.0 = Default::default()
+        let mut borrow = self.get();
+        GLOBAL.get().lock().unwrap().merge(&*borrow);
+        *borrow = Default::default()
     }
 }
 
 phoenix_tls! {
-    static THREAD_STAT: RefCell<ThreadStats> = {
+    static THREAD_STAT: ThreadStats = {
         drop(GLOBAL.get()); // initialize global now, else we may get panics on drop because
                             // lazy_static uses thread_locals to initialize it.
-        RefCell::new(ThreadStats(Default::default()))
+        ThreadStats(Default::default())
     };
 }
 
@@ -256,7 +267,7 @@ fast_lazy_static! {
 
 
 /// Returns the global stats object, or None if the feature is disabled.
-pub fn stats() -> Option<impl std::ops::Deref<Target = Stats>> {
+pub fn stats() -> Option<impl Deref<Target = Stats>> {
     if cfg!(feature = "stats") {
         Some(GLOBAL.get().lock().unwrap())
     } else {
@@ -265,7 +276,7 @@ pub fn stats() -> Option<impl std::ops::Deref<Target = Stats>> {
 }
 
 /// Returns the thread local stats object, or None if the feature is disabled.
-pub fn thread_stats() -> Option<impl std::ops::Deref<Target = RefCell<ThreadStats>>> {
+pub fn thread_stats() -> Option<impl Deref<Target = ThreadStats>> {
     if cfg!(feature = "stats") {
         Some(THREAD_STAT.get())
     } else {
