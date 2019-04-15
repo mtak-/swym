@@ -364,6 +364,7 @@ impl<'tcell> Pin<'tcell> {
         F: FnMut(&ReadTx<'tcell>) -> Result<O, Error>,
     {
         let mut retries = 0;
+        let mut exceeded_backoff = 0;
         let backoff = Backoff::new();
         let result = loop {
             let r = f(ReadTx::new(&mut self));
@@ -373,8 +374,12 @@ impl<'tcell> Pin<'tcell> {
             }
             retries += 1;
             self.snooze_repin(&backoff);
+            if backoff.is_completed() {
+                exceeded_backoff += 1;
+            }
         };
         stats::read_transaction_retries(retries);
+        stats::should_park_read(exceeded_backoff);
         result
     }
 
@@ -386,6 +391,7 @@ impl<'tcell> Pin<'tcell> {
     {
         let mut eager_retries = 0;
         let mut commit_retries = 0;
+        let mut exceeded_backoff = 0;
         let backoff = Backoff::new();
         let result = loop {
             self.logs().validate_start_state();
@@ -404,9 +410,13 @@ impl<'tcell> Pin<'tcell> {
                 }
             }
             self.snooze_repin(&backoff);
+            if backoff.is_completed() {
+                exceeded_backoff += 1;
+            }
         };
         stats::write_transaction_eager_retries(eager_retries);
         stats::write_transaction_commit_retries(commit_retries);
+        stats::should_park_write(exceeded_backoff);
         result
     }
 }

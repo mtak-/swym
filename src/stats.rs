@@ -167,6 +167,12 @@ stats! {
     ///
     /// Writes after logged reads currently causes the commit algorithm to do more work.
     write_after_logged_read:          Size,
+
+    /// Number of times a read transaction hit the maximum Backoff.
+    should_park_read:                 Size,
+
+    /// Number of times a read/write transaction hit the maximum Backoff.
+    should_park_write:                Size,
 }
 
 impl Stats {
