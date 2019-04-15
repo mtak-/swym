@@ -1,4 +1,10 @@
-use std::{cell::Cell, marker::PhantomData, mem::ManuallyDrop, ops::Deref, ptr::NonNull};
+use std::{
+    cell::Cell,
+    marker::PhantomData,
+    mem::ManuallyDrop,
+    ops::Deref,
+    ptr::{self, NonNull},
+};
 
 pub struct FastTls<T> {
     fast_ptr: Cell<Option<NonNull<T>>>,
@@ -33,17 +39,21 @@ impl<T> FastTls<T> {
     }
 
     #[inline]
-    fn clear(&self) {
+    fn clear(&self, value: NonNull<T>) {
         if cfg!(target_thread_local) {
             debug_assert!(self.fast_ptr.get().is_some(), "double free on tls var");
+            debug_assert!(
+                ptr::eq(self.fast_ptr.get().unwrap().as_ptr(), value.as_ptr()),
+                "clearing tls var that is not set correctly"
+            );
             self.fast_ptr.set(None)
         }
     }
 }
 
 pub trait PhoenixTarget {
-    fn subscribe(&self);
-    fn unsubscribe(&self);
+    fn subscribe(&mut self);
+    fn unsubscribe(&mut self);
 }
 
 pub trait PhoenixTlsApply: Sized {
@@ -94,11 +104,11 @@ impl<T: 'static + PhoenixTarget, D: PhoenixTlsApply<Item = T>> Drop for Phoenix<
 
             #[inline(never)]
             #[cold]
-            unsafe fn dealloc<T: 'static + PhoenixTarget, D: PhoenixTlsApply>(
-                this_ptr: NonNull<PhoenixImpl<T>>,
+            unsafe fn dealloc<T: 'static + PhoenixTarget, D: PhoenixTlsApply<Item = T>>(
+                mut this_ptr: NonNull<PhoenixImpl<T>>,
             ) {
-                this_ptr.as_ref().value.unsubscribe();
-                D::apply_fast_tls(|tls| tls.clear());
+                this_ptr.as_mut().value.unsubscribe();
+                D::apply_fast_tls(move |tls| tls.clear((&this_ptr.as_ref().value).into()));
                 drop(Box::from_raw(this_ptr.as_ptr()));
             }
         }
@@ -108,10 +118,11 @@ impl<T: 'static + PhoenixTarget, D: PhoenixTlsApply<Item = T>> Drop for Phoenix<
 impl<T: 'static + PhoenixTarget, D: PhoenixTlsApply<Item = T>> Phoenix<T, D> {
     #[inline]
     pub fn new(value: T) -> Self {
-        let phoenix = Box::new(PhoenixImpl {
+        let mut phoenix = Box::new(PhoenixImpl {
             value,
             ref_count: Cell::new(1),
         });
+        phoenix.value.subscribe();
         let raw = Box::into_raw_non_null(phoenix);
         D::apply_fast_tls(move |tls| {
             let phoenix = Phoenix {
@@ -119,7 +130,6 @@ impl<T: 'static + PhoenixTarget, D: PhoenixTlsApply<Item = T>> Phoenix<T, D> {
                 phantom: PhantomData,
             };
             tls.initialize(&phoenix);
-            phoenix.subscribe();
             phoenix
         })
     }
@@ -231,7 +241,7 @@ macro_rules! __phoenix_tls_inner {
     };
     ($(#[$attr:meta])* $vis:vis $name:ident, $t:ty, $init:expr) => {
         #[allow(non_camel_case_types)]
-        enum $name {}
+        $vis enum $name {}
         $(#[$attr])* $vis const $name: $crate::internal::phoenix_tls::PhoenixKey<
             $t,
             $name,

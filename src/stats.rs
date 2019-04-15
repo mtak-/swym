@@ -237,10 +237,10 @@ impl Drop for ThreadStats {
 
 impl PhoenixTarget for ThreadStats {
     #[inline]
-    fn subscribe(&self) {}
+    fn subscribe(&mut self) {}
 
     #[inline]
-    fn unsubscribe(&self) {}
+    fn unsubscribe(&mut self) {}
 }
 
 impl ThreadStats {

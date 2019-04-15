@@ -1,3 +1,4 @@
+
 use crate::{
     internal::{
         epoch::{QuiesceEpoch, EPOCH_CLOCK},
@@ -12,30 +13,25 @@ use crate::{
 use crossbeam_utils::Backoff;
 
 // TODO: rustfmt bug causes other imports to be deleted.
-use crate::stats;
-
+use crate::{internal::phoenix_tls::PhoenixTarget, stats};
 use std::{
-    cell::{Cell, UnsafeCell},
+    cell::UnsafeCell,
     fmt::{self, Debug, Formatter},
     marker::PhantomData,
     mem,
     ops::{Deref, DerefMut},
-    process,
-    ptr::{self, NonNull},
+    process, ptr,
     sync::atomic::Ordering::Release,
 };
 use swym_htm::HardwareTx;
 
 const MAX_HTX_RETRIES: usize = 3;
 
-/// Intrusive reference counted thread local data.
+/// Thread local data.
 ///
 /// Synch is aliased in the GlobalSynchList of the garbage collector by a NonNull<Synch> pointer.
 /// This strongly hints that Synch and TxLogs should not be stored in the same struct; however, it
 /// is an optimization win for RwTx to only have one pointer to all of the threads state.
-///
-/// TODO: It's possible we don't need reference counting, if read/try_read/rw/try_rw are made free
-/// functions. But, doing so, makes 'tcell lifetimes hard/impossible to create.
 #[repr(C, align(64))]
 pub struct Thread {
     /// Contains the Read/Write logs plus the ThreadGarbage. This field needs to be referenced
@@ -46,19 +42,15 @@ pub struct Thread {
     /// The part of a Thread that is visible to other threads in swym (an atomic epoch, and sharded
     /// lock).
     synch: OwnedSynch,
-
-    /// The reference count.
-    ref_count: Cell<usize>,
 }
 
 impl Thread {
     #[inline(never)]
     #[cold]
-    fn new() -> Self {
+    pub fn new() -> Self {
         Thread {
-            logs:      UnsafeCell::new(Logs::new()),
-            synch:     OwnedSynch::new(),
-            ref_count: Cell::new(1),
+            logs:  UnsafeCell::new(Logs::new()),
+            synch: OwnedSynch::new(),
         }
     }
 
@@ -74,6 +66,29 @@ impl Thread {
     #[inline]
     pub fn try_pin<'tcell>(&'tcell self) -> Option<Pin<'tcell>> {
         Pin::try_new(self)
+    }
+}
+
+impl PhoenixTarget for Thread {
+    fn subscribe(&mut self) {
+        unsafe {
+            GlobalSynchList::instance().write().register(&self.synch);
+        }
+    }
+
+    fn unsubscribe(&mut self) {
+        unsafe {
+            // All thread garbage must be collected before the Thread is dropped.
+            (&mut *self.logs.get())
+                .garbage
+                .synch_and_collect_all(&self.synch);
+
+            // fullfilling the promise we made in `Self::new`. we must unregister before
+            // deallocation, or there will be UB
+            GlobalSynchList::instance_unchecked()
+                .write()
+                .unregister(&self.synch);
+        }
     }
 }
 
@@ -128,88 +143,6 @@ impl<'tcell> Logs<'tcell> {
 impl<'tcell> Drop for Logs<'tcell> {
     fn drop(&mut self) {
         self.validate_start_state();
-    }
-}
-
-/// Reference counted pointer to Thread.
-pub struct ThreadKeyInner {
-    thread: NonNull<Thread>,
-}
-
-impl Debug for ThreadKeyInner {
-    #[cold]
-    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
-        formatter.pad("ThreadKeyInner { .. }")
-    }
-}
-
-impl Deref for ThreadKeyInner {
-    type Target = Thread;
-
-    #[inline]
-    fn deref(&self) -> &Thread {
-        unsafe { self.thread.as_ref() }
-    }
-}
-
-impl Clone for ThreadKeyInner {
-    #[inline]
-    fn clone(&self) -> Self {
-        let count = self.ref_count.get();;
-        debug_assert!(count > 0, "attempt to clone a deallocated `ThreadKey`");
-        self.ref_count.set(count + 1);
-        ThreadKeyInner {
-            thread: self.thread,
-        }
-    }
-}
-
-impl Drop for ThreadKeyInner {
-    #[inline]
-    fn drop(&mut self) {
-        let count = self.ref_count.get();
-        debug_assert!(count > 0, "double free on `ThreadKey` attempted");
-        if likely!(count != 1) {
-            self.ref_count.set(count - 1)
-        } else {
-            // this is safe as long as the reference counting logic is safe
-            unsafe {
-                dealloc(self.thread);
-            }
-
-            #[inline(never)]
-            #[cold]
-            unsafe fn dealloc(mut this_ptr: NonNull<Thread>) {
-                let this = this_ptr.as_mut();
-                // All thread garbage must be collected before the Thread is dropped.
-                (&mut *this.logs.get())
-                    .garbage
-                    .synch_and_collect_all(&this.synch);
-
-                // fullfilling the promise we made in `Self::new`. we must unregister before
-                // deallocation, or there will be UB
-                GlobalSynchList::instance_unchecked()
-                    .write()
-                    .unregister(&this.synch);
-                // clear the cached #[thread_local] pointer to `this`
-                crate::thread_key::tls::clear_tls();
-                drop(Box::from_raw(this_ptr.as_ptr()))
-            }
-        }
-    }
-}
-
-impl ThreadKeyInner {
-    #[inline]
-    pub fn new() -> Self {
-        let thread = Box::new(Thread::new());
-        unsafe {
-            // here we promise to never move or drop our thread until we unregister it.
-            GlobalSynchList::instance().write().register(&thread.synch);
-            ThreadKeyInner {
-                thread: NonNull::new_unchecked(Box::into_raw(thread)),
-            }
-        }
     }
 }
 

@@ -2,11 +2,13 @@
 //!
 //! A handle to the thread local state can be acquired by calling [`thread_key::get`].
 
-use crate::{internal::thread::ThreadKeyInner, read::ReadTx, rw::RwTx, tx::Error};
-use std::{
-    fmt::{self, Debug, Formatter},
-    thread::AccessError,
+use crate::{
+    internal::{phoenix_tls::Phoenix, thread::Thread},
+    read::ReadTx,
+    rw::RwTx,
+    tx::Error,
 };
+use std::fmt::{self, Debug, Formatter};
 
 /// A handle to `swym`'s thread local state.
 ///
@@ -14,20 +16,18 @@ use std::{
 ///
 /// `ThreadKey`'s encapsulate the state required to perform transactions, and provides the necessary
 /// methods for running transactions.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct ThreadKey {
-    thread: ThreadKeyInner,
+    thread: Phoenix<Thread, tls::THREAD_KEY>,
+}
+
+impl Debug for ThreadKey {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        formatter.pad("ThreadKey { .. }")
+    }
 }
 
 impl ThreadKey {
-    #[inline(never)]
-    #[cold]
-    fn new() -> Self {
-        ThreadKey {
-            thread: ThreadKeyInner::new(),
-        }
-    }
-
     /// Performs a transaction capabable of only reading.
     ///
     /// # Panics
@@ -155,73 +155,11 @@ impl ThreadKey {
     }
 }
 
-#[inline(never)]
-#[cold]
-fn new_thread_key() -> ThreadKey {
-    ThreadKey::new()
-}
+mod tls {
+    use crate::internal::thread::Thread;
 
-#[inline(never)]
-#[cold]
-fn err_into_thread_key(_: AccessError) -> ThreadKey {
-    new_thread_key()
-}
-
-thread_local! {
-    static THREAD_KEY: ThreadKey = new_thread_key();
-}
-
-#[cfg(not(target_thread_local))]
-pub(crate) mod tls {
-    use super::*;
-
-    #[inline(never)]
-    pub fn thread_key() -> ThreadKey {
-        THREAD_KEY
-            .try_with(ThreadKey::clone)
-            .unwrap_or_else(err_into_thread_key)
-    }
-
-    #[inline]
-    pub fn clear_tls() {}
-}
-
-#[cfg(target_thread_local)]
-pub(crate) mod tls {
-    use super::{err_into_thread_key, ThreadKey, THREAD_KEY};
-    use std::{cell::Cell, mem, ptr::NonNull};
-
-    #[thread_local]
-    static TLS: Cell<Option<NonNull<usize>>> = Cell::new(None);
-
-    #[inline]
-    pub fn clear_tls() {
-        TLS.set(None)
-    }
-
-    #[inline(never)]
-    #[cold]
-    fn thread_key_impl() -> ThreadKey {
-        THREAD_KEY
-            .try_with(|thread_key| {
-                TLS.set(Some(unsafe {
-                    mem::transmute_copy::<ThreadKey, _>(thread_key)
-                }));
-                thread_key.clone()
-            })
-            .unwrap_or_else(err_into_thread_key)
-    }
-
-    #[inline]
-    pub fn thread_key() -> ThreadKey {
-        match TLS.get() {
-            Some(thread) => {
-                let thread_key: ThreadKey = unsafe { mem::transmute(thread) };
-                mem::forget(thread_key.clone()); // bump ref_count since we created ThreadKey through other means
-                thread_key
-            }
-            None => thread_key_impl(),
-        }
+    phoenix_tls! {
+        pub static THREAD_KEY: Thread = Thread::new();
     }
 }
 
@@ -248,7 +186,9 @@ pub(crate) mod tls {
 /// ```
 #[inline]
 pub fn get() -> ThreadKey {
-    tls::thread_key()
+    ThreadKey {
+        thread: tls::THREAD_KEY.get(),
+    }
 }
 
 /// Error type indicating that the read transaction failed to even start due to nesting.
