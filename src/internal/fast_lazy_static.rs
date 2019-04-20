@@ -1,12 +1,17 @@
-/// Lazy static that has less code bloat.
-///
-/// Implementation based on fast thread locals in libstd.
+//! Lazy static that has less code bloat.
+//!
+//! Implementation based on fast thread locals in libstd.
 
 use std::sync::atomic::{
     AtomicPtr,
     Ordering::{Acquire, Relaxed},
 };
 
+/// Fast lazy static.
+///
+/// One of the more subtle overheads with STMs is code bloat. lazy_static! generates a lot of code
+/// when accessed. It should just be a simple "if" check with a `call` for the slow path
+/// (uninitialized). That's what Fls does.
 #[derive(Copy, Clone)]
 pub struct Fls<T: 'static> {
     init_: fn() -> &'static T,
@@ -14,6 +19,12 @@ pub struct Fls<T: 'static> {
 }
 
 impl<T: 'static + Sync> Fls<T> {
+    /// Creates a new fast lazy static.
+    ///
+    /// # Safety
+    ///
+    /// Once initialized the value should never be destructed or deallocated. The `fast_lazy_static`
+    /// macro is a safe wrapper for this.
     #[inline]
     pub const unsafe fn new(
         get_: fn() -> &'static AtomicPtr<T>,
@@ -22,6 +33,7 @@ impl<T: 'static + Sync> Fls<T> {
         Fls { init_, get_ }
     }
 
+    /// Returns a reference to the global, initializing it on first access.
     #[inline]
     pub fn get(self) -> &'static T {
         let raw = (self.get_)().load(Acquire);
@@ -29,10 +41,16 @@ impl<T: 'static + Sync> Fls<T> {
             // the singleton is never freed, so once initialized, it is always valid
             unsafe { &*raw }
         } else {
+            // slow path initialize it
             (self.init_)()
         }
     }
 
+    /// Returns a reference to the global, assumes it has already been initialized.
+    ///
+    /// # Safety
+    ///
+    /// Requires `get` has been called atleast once.
     #[inline]
     pub unsafe fn get_unchecked(self) -> &'static T {
         let raw = (self.get_)().load(Relaxed);
@@ -44,6 +62,7 @@ impl<T: 'static + Sync> Fls<T> {
     }
 }
 
+/// Like lazy_static! but is much more friendly to inlining (less code bloat on fast path).
 macro_rules! fast_lazy_static {
     // empty (base case for the recursion)
     () => {};
@@ -81,6 +100,7 @@ macro_rules! __fast_lazy_static_inner {
                 fn do_init() {
                     __get().store(
                         Box::into_raw(Box::new($init)),
+                        // matching acquire in `Fls::get`
                         std::sync::atomic::Ordering::Release,
                     );
                 }
@@ -96,6 +116,7 @@ macro_rules! __fast_lazy_static_inner {
         }
     };
     ($(#[$attr:meta])* $vis:vis $name:ident, $t:ty, $init:expr) => {
+        // const makes the function pointers inlineable
         $(#[$attr])* $vis const $name: $crate::internal::fast_lazy_static::Fls<$t> =
             __fast_lazy_static_inner!(@key $(#[$attr])* $vis $name, $t, $init);
     }

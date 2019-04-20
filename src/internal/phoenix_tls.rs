@@ -1,3 +1,17 @@
+//! Utilities for creating always present thread locals.
+//!
+//! `phoenix_tls` combines everything in this module to create a `thread_local!` style variable that
+//! is lazily initialized. If the `thread_local` is accessed after it's destroyed, a new temporary
+//! will be created using the same initialization expression (that's where the phoenix comes from).
+//!
+//! #[thread_local] is used to cache a pointer to the underlying thread_local! to improve access
+//! times for the fast path.
+//!
+//! All phoenix thread locals (Phoenix) are internally reference counted heap allocated structures.
+//!
+//! Additionally the user type receives two callbacks `subscribe`/`unsubscribe`, which are invoked
+//! at creation/desctruction. The address is stable between those two calls.
+
 use std::{
     cell::Cell,
     marker::PhantomData,
@@ -6,11 +20,13 @@ use std::{
     ptr::{self, NonNull},
 };
 
+/// The #[thread_local] type used to improve access times on platforms that support it.
 pub struct FastTls<T> {
     fast_ptr: Cell<Option<NonNull<T>>>,
 }
 
 impl<T> FastTls<T> {
+    /// Creates a new zero initialized FastTls var.
     #[inline]
     pub const fn none() -> Self {
         FastTls {
@@ -18,6 +34,9 @@ impl<T> FastTls<T> {
         }
     }
 
+    /// Initializes the pointer to the thread local.
+    ///
+    /// Note: Does nothing if #[thread_local] is not supported.
     #[inline]
     fn initialize(&self, value: &T) {
         if cfg!(target_thread_local) {
@@ -29,6 +48,9 @@ impl<T> FastTls<T> {
         }
     }
 
+    /// Gets the pointer to the actual thread local.
+    ///
+    /// Note: Returns None if #[thread_local] is not supported.
     #[inline]
     fn get(&self) -> Option<NonNull<T>> {
         if cfg!(target_thread_local) {
@@ -38,6 +60,7 @@ impl<T> FastTls<T> {
         }
     }
 
+    /// Clears the pointer to the thread local.
     #[inline]
     fn clear(&self, value: NonNull<T>) {
         if cfg!(target_thread_local) {
@@ -51,15 +74,25 @@ impl<T> FastTls<T> {
     }
 }
 
+/// Types that can be stored in phoenix_tls's can implement this for optional callback hooks for
+/// when they are created/destroyed.
+///
+/// A `Self` lives at the address passed into subscribe until unsubscribe is called.
 pub trait PhoenixTarget {
     fn subscribe(&mut self);
     fn unsubscribe(&mut self);
 }
 
+/// Unfortunately this is required to get access to the actual thread local at destruction time.
+///
+/// Having FastTls is probably unnecessary if std's thread_local were more optimized.
 pub trait PhoenixTlsApply: Sized {
     type Item: PhoenixTarget;
 
+    /// Applies a function to the inner #[thread_local]
     fn apply_fast_tls<F: FnOnce(&FastTls<Self::Item>) -> O, O>(f: F) -> O;
+
+    /// Creates a new `Phoenix<Self>` without assigning the #[thread_local]
     fn init() -> Phoenix<Self::Item, Self>;
 }
 
@@ -144,14 +177,6 @@ impl<T: 'static + PhoenixTarget, D: PhoenixTlsApply<Item = T>> Phoenix<T, D> {
     }
 
     #[inline]
-    fn get() -> Self {
-        D::apply_fast_tls(|tls| match tls.get() {
-            Some(phoenix_ptr) => unsafe { Self::clone_raw(phoenix_ptr) },
-            None => D::init(),
-        })
-    }
-
-    #[inline]
     fn as_ref(&self) -> &PhoenixImpl<T> {
         // this is safe as long as the reference counting logic is safe
         unsafe { self.raw.as_ref() }
@@ -182,7 +207,10 @@ impl<T: 'static + PhoenixTarget, D: PhoenixTlsApply<Item = T>> PhoenixKey<T, D> 
 
     #[inline]
     pub fn get(self) -> Phoenix<T, D> {
-        Phoenix::get()
+        D::apply_fast_tls(|tls| match tls.get() {
+            Some(phoenix_ptr) => unsafe { Phoenix::clone_raw(phoenix_ptr) },
+            None => D::init(),
+        })
     }
 }
 
@@ -221,8 +249,8 @@ macro_rules! __phoenix_tls_inner {
                 }
 
                 #[cfg_attr(target_thread_local, inline(never))]
-                #[cfg_attr(not(target_thread_local), inline)]
                 #[cfg_attr(target_thread_local, cold)]
+                #[cfg_attr(not(target_thread_local), inline)]
                 fn init() -> $crate::internal::phoenix_tls::Phoenix<Self::Item, Self> {
                     thread_local!{
                         static TLS: $crate::internal::phoenix_tls::Phoenix<$t, $name>
