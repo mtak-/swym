@@ -156,7 +156,7 @@ impl<T: 'static + PhoenixTarget, D: PhoenixTlsApply<Item = T>> Phoenix<T, D> {
             ref_count: Cell::new(1),
         });
         phoenix.value.subscribe();
-        let raw = Box::into_raw_non_null(phoenix);
+        let raw = unsafe { NonNull::new_unchecked(Box::into_raw(phoenix)) };
         D::apply_fast_tls(move |tls| {
             let phoenix = Phoenix {
                 raw,

@@ -243,7 +243,7 @@ impl<'tcell> tx::Read<'tcell> for RwTx<'tcell> {
         if mem::size_of::<T>() != 0 {
             match ordering {
                 Ordering::ReadWrite => self.as_impl().borrow_impl(tcell),
-                Ordering::Read => self.as_impl().borrow_unlogged_impl(tcell),
+                _ => self.as_impl().borrow_unlogged_impl(tcell),
             }
         } else {
             // If the type is zero sized, there's no need to any synchronization.

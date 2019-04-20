@@ -103,7 +103,6 @@ impl<T> SetError<T> {
 
 /// Transactional memory orderings.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-#[non_exhaustive]
 pub enum Ordering {
     /// Ensures that values read were set before the transaction started, and haven't been modified
     /// by another thread before writing the results of the transaction.
@@ -163,6 +162,9 @@ pub enum Ordering {
     /// // (0,1), (1,2), (1,1)
     /// ```
     Read,
+
+    #[doc(hidden)]
+    _NonExhaustive { _private: () },
 }
 
 impl Default for Ordering {
