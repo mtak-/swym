@@ -81,6 +81,7 @@ impl QuiesceEpoch {
             !lock_bit_set(epoch) || epoch == INACTIVE_EPOCH,
             "creating a locked `QuieseEpoch` is a logic error"
         );
+        assume!(epoch != 0, "QuiesceEpoch with value of 0");
         QuiesceEpoch(NonZeroStorage::new_unchecked(epoch))
     }
 
