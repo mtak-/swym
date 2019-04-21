@@ -165,7 +165,7 @@ pub trait PtrExt: Copy {
             origin.as_ptr().is_aligned(),
             "attempt to calculate offset from a misaligned pointer"
         );
-        self.as_ptr().offset_from(origin.as_ptr()) as usize
+        self.as_ptr() as usize - origin.as_ptr() as usize
     }
 
     /// Copies a value from one pointer to another without bounds checking (i.e. memcpy).
