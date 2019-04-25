@@ -2,6 +2,7 @@ use crate::internal::{
     epoch::{QuiesceEpoch, ThreadEpoch},
     gc::quiesce::GlobalSynchList,
 };
+use crossbeam_utils::Backoff;
 use lock_api::RawRwLock as _;
 use parking_lot::RawRwLock;
 use std::{
@@ -59,8 +60,9 @@ impl Synch {
     #[inline(never)]
     #[cold]
     pub(super) fn local_quiesce(&self, quiesce_epoch: QuiesceEpoch) {
+        let backoff = Backoff::new();
         loop {
-            // backoff.snooze();
+            backoff.snooze();
             if self.is_quiesced(quiesce_epoch) {
                 break;
             }
