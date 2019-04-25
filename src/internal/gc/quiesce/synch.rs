@@ -1,9 +1,9 @@
 use crate::internal::{
     epoch::{QuiesceEpoch, ThreadEpoch},
-    frw_lock::{self, FrwLock},
     gc::quiesce::GlobalSynchList,
 };
-use lock_api::RawRwLock;
+use lock_api::RawRwLock as _;
+use parking_lot::RawRwLock;
 use std::{
     ptr,
     sync::atomic::Ordering::{self, Acquire},
@@ -24,12 +24,14 @@ pub struct Synch {
     current_epoch: ThreadEpoch,
 
     /// The sharded lock protecting the GlobalThreadList
-    lock: FrwLock,
+    lock: RawRwLock,
 }
 
 impl Synch {
     #[inline]
     fn new() -> Self {
+        let lock = RawRwLock::INIT;
+        lock.lock_shared();
         Synch {
             current_epoch: ThreadEpoch::inactive(),
             // Synchs are created in a locked state, since the GlobalThreadList is assumed to be
@@ -37,7 +39,7 @@ impl Synch {
             //
             // Immediately after creation the Synch is added to the GlobalThreadList where it will
             // be unlocked, when the list is unlocked.
-            lock: FrwLock::INIT_LOCKED,
+            lock,
         }
     }
 
@@ -58,7 +60,7 @@ impl Synch {
     #[cold]
     pub(super) fn local_quiesce(&self, quiesce_epoch: QuiesceEpoch) {
         loop {
-            frw_lock::backoff();
+            // backoff.snooze();
             if self.is_quiesced(quiesce_epoch) {
                 break;
             }
@@ -66,12 +68,12 @@ impl Synch {
     }
 
     #[inline]
-    pub fn lock(&self) {
+    pub(super) fn lock(&self) {
         self.lock.lock_exclusive()
     }
 
     #[inline]
-    pub fn unlock(&self) {
+    pub(super) fn unlock(&self) {
         self.lock.unlock_exclusive()
     }
 }
@@ -124,7 +126,7 @@ impl OwnedSynch {
 
 /// A read only guard for the GlobalSynchList.
 pub struct FreezeList<'a> {
-    lock: &'a FrwLock,
+    lock: &'a RawRwLock,
 }
 
 impl<'a> FreezeList<'a> {

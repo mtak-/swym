@@ -11,7 +11,6 @@ pub mod fast_lazy_static;
 pub mod phoenix_tls;
 
 pub mod epoch;
-pub mod frw_lock;
 pub mod gc;
 pub mod pointer;
 pub mod read_log;
