@@ -254,28 +254,29 @@ impl ThreadStats {
     /// After flushing, `self` is reset.
     pub fn flush(&mut self) {
         let mut borrow = self.get();
-        GLOBAL.get().lock().unwrap().merge(&*borrow);
+        GLOBAL.lock().unwrap().merge(&*borrow);
         *borrow = Default::default()
     }
 }
 
 phoenix_tls! {
     static THREAD_STAT: ThreadStats = {
-        drop(GLOBAL.get()); // initialize global now, else we may get panics on drop because
-                            // lazy_static uses thread_locals to initialize it.
+        fn force(_: &Mutex<Stats>) {}
+        force(&GLOBAL); // initialize global now, else we may get panics on drop because
+                        // lazy_static uses thread_locals to initialize it.
         ThreadStats(Default::default())
     };
 }
 
-fast_lazy_static! {
-    static GLOBAL: Mutex<Stats> = Mutex::default();
+lazy_static::lazy_static! {
+    static ref GLOBAL: Mutex<Stats> = Mutex::default();
 }
 
 
 /// Returns the global stats object, or None if the feature is disabled.
 pub fn stats() -> Option<impl Deref<Target = Stats>> {
     if cfg!(feature = "stats") {
-        Some(GLOBAL.get().lock().unwrap())
+        Some(GLOBAL.lock().unwrap())
     } else {
         None
     }

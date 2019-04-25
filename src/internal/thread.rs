@@ -81,13 +81,11 @@ impl PhoenixTarget for Thread {
             (&mut *self.logs.get())
                 .garbage
                 .synch_and_collect_all(&self.synch);
-
-            // fullfilling the promise we made in `Self::new`. we must unregister before
-            // deallocation, or there will be UB
-            GlobalSynchList::instance_unchecked()
-                .write()
-                .unregister(&self.synch);
         }
+
+        // fullfilling the promise we made in `Self::new`. we must unregister before
+        // deallocation, or there will be UB
+        GlobalSynchList::instance().write().unregister(&self.synch);
     }
 }
 

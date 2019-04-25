@@ -165,7 +165,7 @@ impl<'a> FreezeList<'a> {
     #[inline]
     pub fn quiesce(&self, epoch: QuiesceEpoch) -> QuiesceEpoch {
         // we hold one of the sharded locks, so read access is safe.
-        let synchs = unsafe { GlobalSynchList::instance_unchecked().raw().iter() };
+        let synchs = unsafe { GlobalSynchList::instance().raw().iter() };
         let result = synchs
             .flat_map(|synch| {
                 let td_epoch = synch.current_epoch.get(Acquire);

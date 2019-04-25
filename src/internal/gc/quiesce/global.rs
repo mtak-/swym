@@ -32,8 +32,8 @@ pub struct GlobalSynchList {
 // GlobalSynchList is synchronized by an internal sharded lock.
 unsafe impl Sync for GlobalSynchList {}
 
-fast_lazy_static! {
-    static SINGLETON: GlobalSynchList = GlobalSynchList {
+lazy_static::lazy_static! {
+    static ref SINGLETON: GlobalSynchList = GlobalSynchList {
         synch_list: UnsafeCell::new(SynchList::new()),
         mutex:      RawMutex::INIT,
     };
@@ -43,14 +43,7 @@ impl GlobalSynchList {
     /// Returns a references to the global thread list.
     #[inline]
     pub fn instance() -> &'static Self {
-        SINGLETON.get()
-    }
-
-    /// Returns a references to the global thread list. If `instance` has been called, then
-    /// instance_unchecked is safe to call.
-    #[inline]
-    pub unsafe fn instance_unchecked() -> &'static Self {
-        SINGLETON.get_unchecked()
+        &SINGLETON
     }
 
     /// Unsafe without holding atleast one of the locks in the GlobalSynchList.

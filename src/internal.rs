@@ -5,9 +5,6 @@ pub mod optim;
 pub mod alloc;
 
 #[macro_use]
-pub mod fast_lazy_static;
-
-#[macro_use]
 pub mod phoenix_tls;
 
 pub mod epoch;
