@@ -112,7 +112,9 @@ macro_rules! stats {
         /// A collection of swym statistics.
         #[derive(Default, Debug)]
         pub struct Stats {
-            $($(#[$attr])*pub $names: $kinds),*
+            $($(#[$attr])*pub $names: $kinds,)*
+
+            __private: (),
         }
 
         impl Stats {
@@ -173,6 +175,9 @@ stats! {
 
     /// Number of times a read/write transaction hit the maximum Backoff.
     should_park_write:                Size,
+
+    /// Number of times a garbage collection cycle hit the maximum Backoff during quiescing.
+    should_park_gc:                   Size,
 }
 
 impl Stats {

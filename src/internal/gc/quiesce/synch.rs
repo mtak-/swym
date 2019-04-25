@@ -1,6 +1,9 @@
-use crate::internal::{
-    epoch::{QuiesceEpoch, ThreadEpoch},
-    gc::quiesce::GlobalSynchList,
+use crate::{
+    internal::{
+        epoch::{QuiesceEpoch, ThreadEpoch},
+        gc::quiesce::GlobalSynchList,
+    },
+    stats,
 };
 use crossbeam_utils::Backoff;
 use lock_api::RawRwLock as _;
@@ -60,12 +63,20 @@ impl Synch {
     #[inline(never)]
     #[cold]
     pub(super) fn local_quiesce(&self, quiesce_epoch: QuiesceEpoch) {
+        // TODO: should backoff be a parameter?
         let backoff = Backoff::new();
+        let mut should_park_count = 0;
         loop {
             backoff.snooze();
             if self.is_quiesced(quiesce_epoch) {
                 break;
             }
+            if backoff.is_completed() {
+                should_park_count += 1
+            }
+        }
+        if backoff.is_completed() {
+            stats::should_park_gc(should_park_count)
         }
     }
 
