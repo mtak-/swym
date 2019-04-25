@@ -6,10 +6,7 @@ use crate::internal::{
         quiesce::OwnedSynch,
     },
 };
-use std::{
-    mem::{self, ManuallyDrop},
-    num::NonZeroUsize,
-};
+use std::mem::{self, ManuallyDrop};
 
 // TODO: measure to see what works best in practice.
 const UNUSED_BAG_COUNT: usize = 64;
@@ -61,16 +58,14 @@ struct UnusedBags {
 impl UnusedBags {
     #[inline]
     fn new() -> Self {
-        // We add 1 here because FVec allocates on the push when it becomes full, instead of the
-        // push after
-        let capacity = NonZeroUsize::new(UNUSED_BAG_COUNT + 1).unwrap();
         let mut result = UnusedBags {
-            bags: FVec::with_capacity(capacity),
+            bags: FVec::with_capacity(UNUSED_BAG_COUNT),
         };
 
         for _ in 0..UNUSED_BAG_COUNT {
             result.bags.push(Bag::new());
         }
+        debug_assert!(result.bags.next_push_allocates());
         result
     }
 
@@ -131,10 +126,15 @@ impl ThreadGarbage {
         let speculative_bag = unused_bags
             .open_bag()
             .expect("ThreadGarbage ran out of unused bagss");
-        let sealed_capacity = NonZeroUsize::new(UNUSED_BAG_COUNT).unwrap();
+        let sealed_bags = FVec::with_capacity(UNUSED_BAG_COUNT - 1);
+        debug_assert_eq!(
+            sealed_bags.len() + unused_bags.bags.len() + 1,
+            UNUSED_BAG_COUNT,
+            "unexpected starting bag count"
+        );
         ThreadGarbage {
             speculative_bag,
-            sealed_bags: FVec::with_capacity(sealed_capacity),
+            sealed_bags,
             unused_bags,
         }
     }
@@ -201,6 +201,12 @@ impl ThreadGarbage {
         let sealed_bag = prev_bag.seal(quiesce_epoch);
         self.sealed_bags.push_unchecked(sealed_bag);
 
+        debug_assert_eq!(
+            self.sealed_bags.len() + self.unused_bags.bags.len() + 1,
+            UNUSED_BAG_COUNT,
+            "lost or gained a bag!"
+        );
+
         // If we've run out of unused bags/room in the sealed_bags container, which should be the
         // same, then we need to collect garbage to make room for the next transaction.
         if unlikely!(self.sealed_bags.next_push_allocates()) {
@@ -251,10 +257,12 @@ impl ThreadGarbage {
             "`collect` called with no sealed bags"
         );
 
-        let drain_iter = self
+        let max_idx = self
             .sealed_bags
-            .drain_while(move |sealed_bag| sealed_bag.quiesce_epoch < max_epoch);
-        for sealed_bag in drain_iter {
+            .iter()
+            .position(move |sealed_bag| sealed_bag.quiesce_epoch >= max_epoch)
+            .unwrap_or_else(|| self.sealed_bags.len());
+        for sealed_bag in self.sealed_bags.drain(..max_idx) {
             // TODO: NESTING: tx's can start here
             self.unused_bags.recycle_bag_unchecked(sealed_bag.bag);
         }

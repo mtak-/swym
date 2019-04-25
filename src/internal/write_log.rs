@@ -1,6 +1,9 @@
 use crate::{
     internal::{
-        alloc::{dyn_vec::DynElemMut, DynVec},
+        alloc::{
+            dyn_vec::{DynElemMut, TraitObject},
+            DynVec,
+        },
         epoch::QuiesceEpoch,
         pointer::PtrExt,
         tcell_erased::TCellErased,
@@ -13,7 +16,6 @@ use std::{
     mem::{self, ManuallyDrop},
     num::NonZeroUsize,
     ptr::{self, NonNull},
-    raw::TraitObject,
     sync::atomic::{self, Ordering::Release},
 };
 use swym_htm::HardwareTx;

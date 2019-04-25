@@ -72,16 +72,13 @@
 //! [`try_rw`]: thread_key/struct.ThreadKey.html#method.try_rw
 //! [`try_read`]: thread_key/struct.ThreadKey.html#method.try_read
 
-#![feature(align_offset)]
-#![feature(allocator_api)]
 #![feature(cfg_target_thread_local)]
 #![feature(const_fn)]
-#![feature(core_intrinsics)]
 #![feature(optin_builtin_traits)]
-#![feature(raw)]
 #![feature(thread_local)]
-#![feature(trusted_len)]
 #![feature(unsize)]
+#![cfg_attr(feature = "unstable", feature(core_intrinsics))]
+#![cfg_attr(all(test, feature = "unstable"), feature(raw))]
 // #![warn(missing_docs)]
 #![deny(intra_doc_link_resolution_failure)]
 #![deny(rust_2018_idioms)]
@@ -105,7 +102,7 @@ pub use swym_htm as htm;
 
 #[cfg(test)]
 mod memory {
-    use crate::{internal::alloc::debug_alloc, tcell::TCell, thread_key, tx::Ordering};
+    use crate::{tcell::TCell, thread_key, tx::Ordering};
     use crossbeam_utils::thread;
 
     #[test]
@@ -118,12 +115,7 @@ mod memory {
                 for _ in 0..ITER_COUNT {
                     thread_key
                         .try_rw(|tx| {
-                            let count = debug_alloc::alloc_count();
                             x.set(tx, fvec![1, 2, 3, 4])?;
-                            assert!(
-                                count < debug_alloc::alloc_count(),
-                                "debug_alloc isn't on or working properly"
-                            );
                             Ok(())
                         })
                         .unwrap();
@@ -134,7 +126,6 @@ mod memory {
         })
         .unwrap();
         drop(x);
-        assert_eq!(debug_alloc::alloc_count(), 1, "memory leak detected");
     }
 
     #[test]
@@ -161,8 +152,7 @@ mod memory {
             }
         })
         .unwrap();
-        drop(x);
-        assert_eq!(debug_alloc::alloc_count(), 1, "memory leak detected");
+        drop(x)
     }
 
     #[test]
@@ -196,7 +186,6 @@ mod memory {
         })
         .unwrap();
         drop(x);
-        assert_eq!(debug_alloc::alloc_count(), 1, "memory leak detected");
     }
 
     #[test]
@@ -224,7 +213,6 @@ mod memory {
         })
         .unwrap();
         drop(x);
-        assert_eq!(debug_alloc::alloc_count(), 1, "memory leak detected");
     }
 
     #[test]
@@ -255,13 +243,12 @@ mod memory {
         })
         .unwrap();
         drop(x);
-        assert_eq!(debug_alloc::alloc_count(), 1, "memory leak detected");
     }
 }
 
 #[cfg(test)]
 mod panic {
-    use crate::{internal::alloc::debug_alloc, tcell::TCell, thread_key, tx::Ordering};
+    use crate::{tcell::TCell, thread_key, tx::Ordering};
     use crossbeam_utils::thread;
     use std::panic::{self, AssertUnwindSafe};
 
@@ -284,7 +271,6 @@ mod panic {
             });
         })
         .unwrap();
-        assert_eq!(debug_alloc::alloc_count(), 1);
 
         thread::scope(|s| {
             s.spawn(|_| {
@@ -303,7 +289,6 @@ mod panic {
             });
         })
         .unwrap();
-        assert_eq!(debug_alloc::alloc_count(), 1);
 
         thread::scope(|s| {
             s.spawn(|_| {
@@ -322,7 +307,6 @@ mod panic {
             });
         })
         .unwrap();
-        assert_eq!(debug_alloc::alloc_count(), 1);
 
         thread::scope(|s| {
             s.spawn(|_| {
@@ -341,7 +325,6 @@ mod panic {
             });
         })
         .unwrap();
-        assert_eq!(debug_alloc::alloc_count(), 1);
     }
 
     #[test]
@@ -375,7 +358,6 @@ mod panic {
             });
         })
         .unwrap();
-        assert_eq!(debug_alloc::alloc_count(), 1);
     }
 
     #[test]
@@ -437,6 +419,5 @@ mod panic {
             });
         })
         .unwrap();
-        assert_eq!(debug_alloc::alloc_count(), 1);
     }
 }

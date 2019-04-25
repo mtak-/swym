@@ -2,7 +2,7 @@ use crate::internal::{
     alloc::FVec,
     gc::quiesce::synch::{OwnedSynch, Synch},
 };
-use std::{iter::TrustedLen, ptr::NonNull};
+use std::ptr::NonNull;
 
 /// A list of pointers to each threads Synch (sharded lock and current epoch)
 pub struct SynchList {
@@ -32,7 +32,6 @@ impl SynchList {
         let position = self
             .synchs
             .iter()
-            .rev()
             .position(|&synch| synch == to_remove.into());
 
         debug_assert!(
@@ -40,14 +39,13 @@ impl SynchList {
             "failed to find thread in the global thread list"
         );
 
-        position.map(|position| self.synchs.rswap_erase(position));
+        position.map(|position| drop(self.synchs.swap_remove(position)));
     }
 
     #[inline]
     pub(super) fn iter<'a>(
         &'a self,
-    ) -> impl ExactSizeIterator<Item = &'a Synch> + DoubleEndedIterator<Item = &'a Synch> + TrustedLen
-    {
+    ) -> impl ExactSizeIterator<Item = &'a Synch> + DoubleEndedIterator<Item = &'a Synch> {
         self.synchs.iter().map(|p| unsafe {
             // register requires that Synchs aren't moved or dropped until after unregister is
             // called

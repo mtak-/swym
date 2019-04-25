@@ -7,7 +7,6 @@ use crate::{
     internal::{alloc::FVec, epoch::QuiesceEpoch, tcell_erased::TCellErased},
     stats,
 };
-use std::num::NonZeroUsize;
 use swym_htm::HardwareTx;
 
 const READ_CAPACITY: usize = 1024;
@@ -21,7 +20,7 @@ impl<'tcell> ReadLog<'tcell> {
     #[inline]
     pub fn new() -> Self {
         ReadLog {
-            data: FVec::with_capacity(NonZeroUsize::new(READ_CAPACITY).unwrap()),
+            data: FVec::with_capacity(READ_CAPACITY),
         }
     }
 
