@@ -277,7 +277,6 @@ lazy_static::lazy_static! {
     static ref GLOBAL: Mutex<Stats> = Mutex::default();
 }
 
-
 /// Returns the global stats object, or None if the feature is disabled.
 pub fn stats() -> Option<impl Deref<Target = Stats>> {
     if cfg!(feature = "stats") {
@@ -295,7 +294,6 @@ pub fn thread_stats() -> Option<impl Deref<Target = ThreadStats>> {
         None
     }
 }
-
 
 /// Prints a summary of the global stats object.
 ///

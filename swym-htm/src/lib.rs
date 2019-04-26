@@ -9,19 +9,18 @@
 #[cfg(test)]
 extern crate test;
 
-#[cfg_attr(
-    all(target_arch = "powerpc64", feature = "htm"),
-    path = "./powerpc64.rs"
-)]
-#[cfg_attr(all(target_arch = "x86_64", feature = "rtm"), path = "./x86_64.rs")]
-#[cfg_attr(
-    not(any(
-        all(target_arch = "x86_64", feature = "rtm"),
-        all(target_arch = "powerpc64", feature = "htm")
-    )),
-    path = "./unsupported.rs"
-)]
-pub mod back;
+cfg_if::cfg_if! {
+    if #[cfg(all(target_arch = "powerpc64", feature = "htm"))] {
+        pub mod powerpc64;
+        use powerpc64 as back;
+    } else if #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "rtm"))] {
+        pub mod x86_64;
+        use x86_64 as back;
+    } else {
+        pub mod unsupported;
+        use unsupported as back;
+    }
+}
 
 use core::{
     cell::UnsafeCell,
