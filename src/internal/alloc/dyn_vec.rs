@@ -1,9 +1,9 @@
 //! An contiguous container of Dynamically Sized Types.
 
-use crate::internal::{alloc::fvec::FVec, pointer::PtrExt};
+use crate::internal::pointer::PtrExt;
 use core::{
     borrow::{Borrow, BorrowMut},
-    marker::{PhantomData, Unsize},
+    marker::PhantomData,
     mem::{self, ManuallyDrop},
     ops::{Deref, DerefMut},
     ptr::{self, NonNull},
@@ -32,6 +32,8 @@ impl TraitObject {
 
     #[inline]
     pub unsafe fn cast<T: ?Sized>(self) -> NonNull<T> {
+        debug_assert!(!self.data.is_null());
+        debug_assert!(!self.vtable.is_null());
         assert_eq!(mem::size_of::<Self>(), mem::size_of::<NonNull<T>>());
         let result = mem::transmute_copy::<Self, NonNull<T>>(&self);
         debug_assert!(mem::align_of_val(result.as_ref()) <= mem::align_of::<usize>());
@@ -44,164 +46,165 @@ pub fn vtable<T: ?Sized>(value: &T) -> *mut () {
     TraitObject::from_pointer(value.into()).vtable
 }
 
+macro_rules! dyn_vec_decl {
+    ($vis:vis struct $name:ident: $trait:path;) => {
+        #[repr(C)]
+        #[derive(Debug)]
+        $vis struct $name<'a> {
+            data:    $crate::internal::alloc::FVec<usize>,
+            phantom: ::std::marker::PhantomData<dyn $trait + 'a>,
+        }
+
+        impl Drop for $name<'_> {
+            fn drop(&mut self) {
+                self.clear()
+            }
+        }
+
+        #[allow(unused)]
+        impl $name<'_> {
+            #[inline]
+            $vis fn new() -> Self {
+                $name {
+                    data:    $crate::internal::alloc::FVec::new(),
+                    phantom: ::std::marker::PhantomData,
+                }
+            }
+
+            #[inline]
+            $vis fn with_capacity(capacity: usize) -> Self {
+                $name {
+                    data:    $crate::internal::alloc::FVec::with_capacity(capacity),
+                    phantom: ::std::marker::PhantomData,
+                }
+            }
+
+            #[inline]
+            $vis fn is_empty(&self) -> bool {
+                self.data.is_empty()
+            }
+
+            #[inline]
+            $vis fn word_capacity(&self) -> usize {
+                self.data.capacity()
+            }
+
+            #[inline]
+            $vis fn word_len(&self) -> usize {
+                self.data.len()
+            }
+
+            #[inline]
+            $vis fn next_push_allocates<U: $trait>(&self) -> bool {
+                assert!(
+                    mem::align_of::<U>() <= mem::align_of::<usize>(),
+                    "overaligned types are currently unimplemented"
+                );
+                debug_assert!(mem::size_of::<$crate::internal::alloc::dyn_vec::Elem<U>>() % mem::size_of::<usize>() == 0);
+                self.data
+                    .next_n_pushes_allocates(mem::size_of::<$crate::internal::alloc::dyn_vec::Elem<U>>() / mem::size_of::<usize>())
+            }
+
+            #[inline]
+            $vis fn push<U: $trait>(&mut self, u: U) {
+                assert!(
+                    mem::align_of::<U>() <= mem::align_of::<usize>(),
+                    "overaligned types are currently unimplemented"
+                );
+                let elem = $crate::internal::alloc::dyn_vec::Elem::new($crate::internal::alloc::dyn_vec::vtable(&u as &dyn $trait), u);
+                self.data.extend(elem.as_slice());
+                mem::forget(elem)
+            }
+
+            #[inline]
+            $vis unsafe fn push_unchecked<U: $trait>(&mut self, u: U) {
+                assert!(
+                    mem::align_of::<U>() <= mem::align_of::<usize>(),
+                    "overaligned types are currently unimplemented"
+                );
+                let elem = $crate::internal::alloc::dyn_vec::Elem::new($crate::internal::alloc::dyn_vec::vtable(&u as &dyn $trait), u);
+                self.data.extend_unchecked(elem.as_slice());
+                mem::forget(elem)
+            }
+
+            #[inline]
+            $vis fn clear(&mut self) {
+                self.drain().for_each(|_| {})
+            }
+
+            #[inline]
+            $vis fn clear_no_drop(&mut self) {
+                self.data.clear();
+            }
+
+            #[inline]
+            $vis fn iter(&self) -> $crate::internal::alloc::dyn_vec::Iter<'_, dyn $trait> {
+                unsafe {
+                    $crate::internal::alloc::dyn_vec::Iter::new(
+                        self.data.iter()
+                    )
+                }
+            }
+
+            #[inline]
+            $vis fn iter_mut(&mut self) -> $crate::internal::alloc::dyn_vec::IterMut<'_, dyn $trait> {
+                unsafe {
+                    $crate::internal::alloc::dyn_vec::IterMut::new(
+                        self.data.iter_mut()
+                    )
+                }
+            }
+
+            #[inline]
+            $vis fn drain(&mut self) -> $crate::internal::alloc::dyn_vec::Drain<'_, dyn $trait> {
+                let slice: &mut [_] = &mut self.data;
+                let raw: ::std::ptr::NonNull<_> = slice.into();
+                self.data.clear();
+
+                unsafe {
+                    $crate::internal::alloc::dyn_vec::Drain::new(
+                        (*raw.as_ptr()).iter_mut()
+                    )
+                }
+            }
+        }
+
+        impl<'a> IntoIterator for &'a $name<'_> {
+            type IntoIter = $crate::internal::alloc::dyn_vec::Iter<'a, dyn $trait + 'static>;
+            type Item = &'a (dyn $trait + 'static);
+
+            #[inline]
+            fn into_iter(self) -> $crate::internal::alloc::dyn_vec::Iter<'a, dyn $trait> {
+                self.iter()
+            }
+        }
+
+        impl<'a> IntoIterator for &'a mut $name<'_> {
+            type IntoIter = $crate::internal::alloc::dyn_vec::IterMut<'a, dyn $trait>;
+            type Item = $crate::internal::alloc::dyn_vec::DynElemMut<'a, dyn $trait>;
+
+            #[inline]
+            fn into_iter(self) -> $crate::internal::alloc::dyn_vec::IterMut<'a, dyn $trait> {
+                self.iter_mut()
+            }
+        }
+    };
+}
+
 #[repr(C)]
-#[derive(Debug)]
-pub struct DynVec<T: ?Sized> {
-    data:    FVec<usize>,
-    phantom: PhantomData<T>,
-}
-
-impl<T: ?Sized> Drop for DynVec<T> {
-    fn drop(&mut self) {
-        self.clear()
-    }
-}
-
-impl<T: ?Sized> DynVec<T> {
-    #[inline]
-    pub fn new() -> Self {
-        DynVec {
-            data:    FVec::new(),
-            phantom: PhantomData,
-        }
-    }
-
-    #[inline]
-    pub fn with_capacity(capacity: usize) -> Self {
-        DynVec {
-            data:    FVec::with_capacity(capacity),
-            phantom: PhantomData,
-        }
-    }
-
-    #[inline]
-    pub fn is_empty(&self) -> bool {
-        self.data.is_empty()
-    }
-
-    #[inline]
-    pub fn word_capacity(&self) -> usize {
-        self.data.capacity()
-    }
-
-    #[inline]
-    pub fn word_len(&self) -> usize {
-        self.data.len()
-    }
-
-    #[inline]
-    pub fn next_push_allocates<U: Unsize<T>>(&self) -> bool {
-        assert!(
-            mem::align_of::<U>() <= mem::align_of::<usize>(),
-            "overaligned types are currently unimplemented"
-        );
-        debug_assert!(mem::size_of::<Elem<U>>() % mem::size_of::<usize>() == 0);
-        self.data
-            .next_n_pushes_allocates(mem::size_of::<Elem<U>>() / mem::size_of::<usize>())
-    }
-
-    #[inline]
-    pub fn push<U: Unsize<T>>(&mut self, u: U) {
-        assert!(
-            mem::align_of::<U>() <= mem::align_of::<usize>(),
-            "overaligned types are currently unimplemented"
-        );
-        let elem = Elem::new::<T>(u);
-        self.data.extend(elem.as_slice());
-        mem::forget(elem)
-    }
-
-    #[inline]
-    pub unsafe fn push_unchecked<U: Unsize<T>>(&mut self, u: U) {
-        assert!(
-            mem::align_of::<U>() <= mem::align_of::<usize>(),
-            "overaligned types are currently unimplemented"
-        );
-        let elem = Elem::new::<T>(u);
-        self.data.extend_unchecked(elem.as_slice());
-        mem::forget(elem)
-    }
-
-    #[inline]
-    pub fn clear(&mut self) {
-        self.drain().for_each(|_| {})
-    }
-
-    #[inline]
-    pub fn clear_no_drop(&mut self) {
-        self.data.clear();
-    }
-
-    #[inline]
-    pub fn iter(&self) -> Iter<'_, T> {
-        Iter {
-            iter:    self.data.iter(),
-            phantom: PhantomData,
-        }
-    }
-
-    #[inline]
-    pub fn iter_mut(&mut self) -> IterMut<'_, T> {
-        IterMut {
-            iter:    self.data.iter_mut(),
-            phantom: PhantomData,
-        }
-    }
-
-    #[inline]
-    pub fn drain(&mut self) -> Drain<'_, T> {
-        let slice: &mut [_] = &mut self.data;
-        let raw: NonNull<_> = slice.into();
-        self.data.clear();
-
-        Drain {
-            iter:    IterMut {
-                iter:    unsafe { &mut *raw.as_ptr() }.iter_mut(),
-                phantom: PhantomData,
-            },
-            phantom: PhantomData,
-        }
-    }
-}
-
-impl<'a, T: ?Sized> IntoIterator for &'a DynVec<T> {
-    type IntoIter = Iter<'a, T>;
-    type Item = &'a T;
-
-    #[inline]
-    fn into_iter(self) -> Iter<'a, T> {
-        self.iter()
-    }
-}
-
-impl<'a, T: ?Sized> IntoIterator for &'a mut DynVec<T> {
-    type IntoIter = IterMut<'a, T>;
-    type Item = DynElemMut<'a, T>;
-
-    #[inline]
-    fn into_iter(self) -> IterMut<'a, T> {
-        self.iter_mut()
-    }
-}
-
-#[repr(C)]
-struct Elem<U> {
+pub struct Elem<U> {
     vtable: *const (),
     elem:   U,
 }
 
 impl<U> Elem<U> {
     #[inline]
-    fn new<T: ?Sized>(elem: U) -> Self
-    where
-        U: Unsize<T>,
-    {
-        let vtable = vtable(&elem as &T);
+    pub fn new(vtable: *const (), elem: U) -> Self {
         Elem { vtable, elem }
     }
 
     #[inline]
-    fn as_slice(&self) -> &[usize] {
+    pub fn as_slice(&self) -> &[usize] {
         unsafe {
             std::slice::from_raw_parts(
                 self as *const _ as _,
@@ -233,7 +236,7 @@ impl<'a, T: ?Sized> DerefMut for DynElemMut<'a, T> {
 
 impl<'a, T: ?Sized> DynElemMut<'a, T> {
     #[inline]
-    pub unsafe fn assign_unchecked<U: Unsize<T>>(this: Self, rhs: U) {
+    pub unsafe fn assign_unchecked<U>(this: Self, new_vtable: *const (), rhs: U) {
         debug_assert_eq!(
             mem::size_of_val(this.value),
             mem::size_of::<U>(),
@@ -257,11 +260,6 @@ impl<'a, T: ?Sized> DynElemMut<'a, T> {
                 (mem::replace(&mut raw.data, &mut punned as *mut _ as _) as *mut *const ()).sub(1);
             raw
         };
-        let new_vtable = {
-            let null = ptr::null_mut::<U>() as *mut T;
-            let raw: TraitObject = mem::transmute_copy(&null);
-            raw.vtable
-        };
         vtable_storage.write(new_vtable);
         (this.value as *mut T as *mut U).write(rhs);
 
@@ -272,6 +270,15 @@ impl<'a, T: ?Sized> DynElemMut<'a, T> {
 pub struct Iter<'a, T: ?Sized> {
     iter:    std::slice::Iter<'a, usize>,
     phantom: PhantomData<&'a T>,
+}
+
+impl<'a, T: ?Sized> Iter<'a, T> {
+    pub unsafe fn new(iter: std::slice::Iter<'a, usize>) -> Self {
+        Iter {
+            iter,
+            phantom: PhantomData,
+        }
+    }
 }
 
 impl<'a, T: ?Sized> Iterator for Iter<'a, T> {
@@ -301,6 +308,15 @@ impl<'a, T: ?Sized> Iterator for Iter<'a, T> {
 pub struct IterMut<'a, T: ?Sized> {
     iter:    std::slice::IterMut<'a, usize>,
     phantom: PhantomData<&'a mut T>,
+}
+
+impl<'a, T: ?Sized> IterMut<'a, T> {
+    pub unsafe fn new(iter: std::slice::IterMut<'a, usize>) -> Self {
+        IterMut {
+            iter,
+            phantom: PhantomData,
+        }
+    }
 }
 
 impl<'a, T: ?Sized> Iterator for IterMut<'a, T> {
@@ -371,6 +387,15 @@ impl<'a, T: ?Sized> DerefMut for Owned<'a, T> {
 pub struct Drain<'a, T: ?Sized> {
     iter:    IterMut<'a, T>,
     phantom: PhantomData<Box<T>>,
+}
+
+impl<'a, T: ?Sized> Drain<'a, T> {
+    pub unsafe fn new(iter: std::slice::IterMut<'a, usize>) -> Self {
+        Drain {
+            iter:    IterMut::new(iter),
+            phantom: PhantomData,
+        }
+    }
 }
 
 impl<'a, T: 'a + ?Sized> Iterator for Drain<'a, T> {

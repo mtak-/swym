@@ -1,5 +1,5 @@
 use crate::internal::{
-    alloc::{DynVec, FVec},
+    alloc::FVec,
     epoch::QuiesceEpoch,
     gc::{
         queued::{FnOnceish, Queued},
@@ -11,16 +11,18 @@ use std::mem::{self, ManuallyDrop};
 // TODO: measure to see what works best in practice.
 const UNUSED_BAG_COUNT: usize = 64;
 
+dyn_vec_decl! {struct DynVecFnOnceish: FnOnceish;}
+
 /// A contiguous container of trash.
 struct Bag {
-    queued: DynVec<dyn FnOnceish + 'static>,
+    queued: DynVecFnOnceish<'static>,
 }
 
 impl Bag {
     #[inline]
     fn new() -> Self {
         Bag {
-            queued: DynVec::new(),
+            queued: DynVecFnOnceish::new(),
         }
     }
 

@@ -1,9 +1,6 @@
 use crate::{
     internal::{
-        alloc::{
-            dyn_vec::{DynElemMut, TraitObject},
-            DynVec,
-        },
+        alloc::dyn_vec::{DynElemMut, TraitObject},
         epoch::QuiesceEpoch,
         pointer::PtrExt,
         tcell_erased::TCellErased,
@@ -156,6 +153,8 @@ impl<'tcell> dyn WriteEntry + 'tcell {
     }
 }
 
+dyn_vec_decl! {struct DynVecWriteEntry: WriteEntry;}
+
 #[derive(Copy, Clone, PartialEq, Eq)]
 pub enum Contained {
     No,
@@ -167,7 +166,7 @@ pub enum Contained {
 #[repr(C)]
 pub struct WriteLog<'tcell> {
     filter: usize,
-    data:   DynVec<dyn WriteEntry + 'tcell>,
+    data:   DynVecWriteEntry<'tcell>,
 }
 
 impl<'tcell> WriteLog<'tcell> {
@@ -175,7 +174,7 @@ impl<'tcell> WriteLog<'tcell> {
     pub fn new() -> Self {
         WriteLog {
             filter: 0,
-            data:   DynVec::new(),
+            data:   DynVecWriteEntry::new(),
         }
     }
 

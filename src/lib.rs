@@ -76,7 +76,6 @@
 #![feature(const_fn)]
 #![feature(optin_builtin_traits)]
 #![feature(thread_local)]
-#![feature(unsize)]
 #![cfg_attr(feature = "unstable", feature(core_intrinsics))]
 #![cfg_attr(all(test, feature = "unstable"), feature(raw))]
 // #![warn(missing_docs)]
