@@ -8,7 +8,7 @@ if sys.argv[1] == 'test':
     suffix = '--features debug-alloc,stats,unstable'
 elif sys.argv[1] == 'bench':
     prefix = 'RUSTFLAGS="$RUSTFLAGS -Ctarget-cpu=native -Ctarget-feature=+rtm"'
-    suffix = '--features rtm,unstable'
+    suffix = ''
 else:
     prefix = ''
     suffix = ''

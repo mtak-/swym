@@ -44,7 +44,7 @@ cargo run \
     --example dining_philosophers
 
 if [[ -z $RTM ]]; then
-    ./x.py bench
+    ./x.py bench --features unstable
 else
-    ./x.py bench --features rtm
+    ./x.py bench --features rtm,unstable
 fi
