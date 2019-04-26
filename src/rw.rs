@@ -9,10 +9,10 @@
 
 use crate::{
     internal::{
-        alloc::dyn_vec::DynElemMut,
+        alloc::dyn_vec::{self, DynElemMut},
         tcell_erased::TCellErased,
         thread::{PinMutRef, PinRw},
-        write_log::{bloom_hash, Contained, Entry, WriteEntryImpl},
+        write_log::{bloom_hash, Contained, Entry, WriteEntry, WriteEntryImpl},
     },
     stats,
     tcell::{Ref, TCell},
@@ -166,10 +166,9 @@ impl<'tx, 'tcell> RwTxImpl<'tx, 'tcell> {
                         entry.deactivate();
                         self.logs_mut().write_log.record(&tcell.erased, value, hash);
                     } else {
-                        DynElemMut::assign_unchecked(
-                            entry,
-                            WriteEntryImpl::new(&tcell.erased, value),
-                        )
+                        let new_entry = WriteEntryImpl::new(&tcell.erased, value);
+                        let new_vtable = dyn_vec::vtable(&new_entry as &(dyn WriteEntry + 'tcell));
+                        DynElemMut::assign_unchecked(entry, new_vtable, new_entry)
                     }
                     return Ok(());
                 }
@@ -243,7 +242,7 @@ impl<'tcell> tx::Read<'tcell> for RwTx<'tcell> {
         if mem::size_of::<T>() != 0 {
             match ordering {
                 Ordering::ReadWrite => self.as_impl().borrow_impl(tcell),
-                Ordering::Read => self.as_impl().borrow_unlogged_impl(tcell),
+                _ => self.as_impl().borrow_unlogged_impl(tcell),
             }
         } else {
             // If the type is zero sized, there's no need to any synchronization.

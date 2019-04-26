@@ -1,5 +1,6 @@
-use crate::internal::{frw_lock::FrwLock, gc::quiesce::synch_list::SynchList};
-use lock_api::RawRwLock;
+use crate::internal::gc::quiesce::synch_list::SynchList;
+use lock_api::RawMutex as _;
+use parking_lot::RawMutex;
 use std::{
     cell::UnsafeCell,
     mem::ManuallyDrop,
@@ -25,16 +26,16 @@ pub struct GlobalSynchList {
 
     /// This mutex is only grabbed before modifying to the GlobalSynchList, and still requires
     /// every threads `Synch::lock` to be acquired before any mutations.
-    mutex: FrwLock,
+    mutex: RawMutex,
 }
 
 // GlobalSynchList is synchronized by an internal sharded lock.
 unsafe impl Sync for GlobalSynchList {}
 
-fast_lazy_static! {
-    static SINGLETON: GlobalSynchList = GlobalSynchList {
+lazy_static::lazy_static! {
+    static ref SINGLETON: GlobalSynchList = GlobalSynchList {
         synch_list: UnsafeCell::new(SynchList::new()),
-        mutex:      RawRwLock::INIT,
+        mutex:      RawMutex::INIT,
     };
 }
 
@@ -42,14 +43,7 @@ impl GlobalSynchList {
     /// Returns a references to the global thread list.
     #[inline]
     pub fn instance() -> &'static Self {
-        SINGLETON.get()
-    }
-
-    /// Returns a references to the global thread list. If `instance` has been called, then
-    /// instance_unchecked is safe to call.
-    #[inline]
-    pub unsafe fn instance_unchecked() -> &'static Self {
-        SINGLETON.get_unchecked()
+        &SINGLETON
     }
 
     /// Unsafe without holding atleast one of the locks in the GlobalSynchList.
@@ -82,7 +76,7 @@ impl<'a> Write<'a> {
         // Atleast one mutex has to be held in order to call `raw` safely.
         // The outer mutex is used for this purpose, and so that, under contention, two writers will
         // never deadlock.
-        list.mutex.lock_exclusive();
+        list.mutex.lock();
         let list = ManuallyDrop::new(Write { list });
         // lock all the Synchs to prevent them from creating a FreezeList
         for synch in list.iter() {
@@ -98,7 +92,7 @@ impl<'a> Drop for Write<'a> {
         for synch in self.iter() {
             synch.unlock();
         }
-        self.list.mutex.unlock_exclusive();
+        self.list.mutex.unlock();
     }
 }
 

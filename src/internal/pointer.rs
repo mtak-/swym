@@ -79,21 +79,10 @@ pub trait PtrExt: Copy {
     /// Calculates a new pointer from an offset via subtraction c-style.
     unsafe fn sub(self, value: usize) -> Self;
 
-    /// Calculates a new pointer aligned to `Self::Pointee`. If the pointer is already aligned, it
-    /// is returned unchanged.
-    unsafe fn align_next(self) -> Self;
-
     #[inline]
     unsafe fn assume_aligned(self) -> Self {
         assume!(self.is_aligned(), "expected aligned pointer");
         self
-    }
-
-    /// Calculates the offset, in *bytes*, that needs to be applied to the pointer in order to make
-    /// it aligned to align.
-    #[inline]
-    unsafe fn align_offset_bytes(self, align: usize) -> usize {
-        (self.as_ptr() as *const u8).align_offset(align)
     }
 
     /// Checks the alignment of the pointer
@@ -153,19 +142,19 @@ pub trait PtrExt: Copy {
     /// Calculates an offset via pointer subtraction c-style.
     #[inline]
     unsafe fn offset_from<U: PtrExt<Pointee = Self::Pointee>>(self, origin: U) -> usize {
-        assume!(
+        assert!(
             self.as_ptr() >= origin.as_ptr(),
             "attempt to calculate a negative `offset_from`"
         );
-        assume!(
+        assert!(
             self.as_ptr().is_aligned(),
             "attempt to calculate offset from a misaligned pointer"
         );
-        assume!(
+        assert!(
             origin.as_ptr().is_aligned(),
             "attempt to calculate offset from a misaligned pointer"
         );
-        self.as_ptr().offset_from(origin.as_ptr()) as usize
+        self.as_ptr().sub(origin.as_ptr() as usize) as usize
     }
 
     /// Copies a value from one pointer to another without bounds checking (i.e. memcpy).
@@ -291,12 +280,6 @@ impl<T> PtrExt for *const T {
         );
         self.sub(value)
     }
-
-    #[inline]
-    unsafe fn align_next(self) -> Self {
-        let offset = self.align_offset_bytes(mem::align_of::<T>());
-        PtrExt::add(self as *const u8, offset) as _
-    }
 }
 
 impl<T> PtrExt for *mut T {
@@ -326,11 +309,6 @@ impl<T> PtrExt for *mut T {
         );
         self.sub(value)
     }
-
-    #[inline]
-    unsafe fn align_next(self) -> Self {
-        self.as_ptr().align_next() as _
-    }
 }
 
 impl<T> PtrMutExt for *mut T {}
@@ -351,11 +329,6 @@ impl<T> PtrExt for NonNull<T> {
     #[inline]
     unsafe fn sub(self, value: usize) -> Self {
         NonNull::new_unchecked(PtrExt::sub(self.as_ptr(), value))
-    }
-
-    #[inline]
-    unsafe fn align_next(self) -> Self {
-        NonNull::new_unchecked(self.as_ptr().align_next())
     }
 }
 

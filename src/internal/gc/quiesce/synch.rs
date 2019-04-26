@@ -1,9 +1,13 @@
-use crate::internal::{
-    epoch::{QuiesceEpoch, ThreadEpoch},
-    frw_lock::{self, FrwLock},
-    gc::quiesce::GlobalSynchList,
+use crate::{
+    internal::{
+        epoch::{QuiesceEpoch, ThreadEpoch},
+        gc::quiesce::GlobalSynchList,
+    },
+    stats,
 };
-use lock_api::RawRwLock;
+use crossbeam_utils::Backoff;
+use lock_api::RawRwLock as _;
+use parking_lot::RawRwLock;
 use std::{
     ptr,
     sync::atomic::Ordering::{self, Acquire},
@@ -24,12 +28,14 @@ pub struct Synch {
     current_epoch: ThreadEpoch,
 
     /// The sharded lock protecting the GlobalThreadList
-    lock: FrwLock,
+    lock: RawRwLock,
 }
 
 impl Synch {
     #[inline]
     fn new() -> Self {
+        let lock = RawRwLock::INIT;
+        lock.lock_shared();
         Synch {
             current_epoch: ThreadEpoch::inactive(),
             // Synchs are created in a locked state, since the GlobalThreadList is assumed to be
@@ -37,7 +43,7 @@ impl Synch {
             //
             // Immediately after creation the Synch is added to the GlobalThreadList where it will
             // be unlocked, when the list is unlocked.
-            lock: FrwLock::INIT_LOCKED,
+            lock,
         }
     }
 
@@ -57,21 +63,30 @@ impl Synch {
     #[inline(never)]
     #[cold]
     pub(super) fn local_quiesce(&self, quiesce_epoch: QuiesceEpoch) {
+        // TODO: should backoff be a parameter?
+        let backoff = Backoff::new();
+        let mut should_park_count = 0;
         loop {
-            frw_lock::backoff();
+            backoff.snooze();
             if self.is_quiesced(quiesce_epoch) {
                 break;
             }
+            if backoff.is_completed() {
+                should_park_count += 1
+            }
+        }
+        if backoff.is_completed() {
+            stats::should_park_gc(should_park_count)
         }
     }
 
     #[inline]
-    pub fn lock(&self) {
+    pub(super) fn lock(&self) {
         self.lock.lock_exclusive()
     }
 
     #[inline]
-    pub fn unlock(&self) {
+    pub(super) fn unlock(&self) {
         self.lock.unlock_exclusive()
     }
 }
@@ -124,7 +139,7 @@ impl OwnedSynch {
 
 /// A read only guard for the GlobalSynchList.
 pub struct FreezeList<'a> {
-    lock: &'a FrwLock,
+    lock: &'a RawRwLock,
 }
 
 impl<'a> FreezeList<'a> {
@@ -163,7 +178,7 @@ impl<'a> FreezeList<'a> {
     #[inline]
     pub fn quiesce(&self, epoch: QuiesceEpoch) -> QuiesceEpoch {
         // we hold one of the sharded locks, so read access is safe.
-        let synchs = unsafe { GlobalSynchList::instance_unchecked().raw().iter() };
+        let synchs = unsafe { GlobalSynchList::instance().raw().iter() };
         let result = synchs
             .flat_map(|synch| {
                 let td_epoch = synch.current_epoch.get(Acquire);
