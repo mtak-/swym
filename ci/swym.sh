@@ -17,7 +17,7 @@ fi
 # cheeck all combinations of features
 cargo check --no-default-features --benches --bins --examples --tests
 cargo check --benches --bins --examples --tests
-cargo check --features $RTM --benches --bins --examples --tests
+cargo check --features "$RTM" --benches --bins --examples --tests
 cargo check --features stats --benches --bins --examples --tests
 cargo check --features unstable --benches --bins --examples --tests
 cargo check --features stats,$RTM --benches --bins --examples --tests
