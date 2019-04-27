@@ -73,7 +73,6 @@
 //! [`try_read`]: thread_key/struct.ThreadKey.html#method.try_read
 
 #![feature(cfg_target_thread_local)]
-#![feature(const_fn)]
 #![feature(optin_builtin_traits)]
 #![feature(thread_local)]
 #![cfg_attr(feature = "unstable", feature(core_intrinsics))]
