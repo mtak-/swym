@@ -48,12 +48,10 @@ impl<T> FVec<T> {
 
     #[inline]
     pub unsafe fn push_unchecked(&mut self, t: T) {
-        debug_assert!(
-            !self.next_push_allocates(),
-            "`push_unchecked` called when an allocation is required"
-        );
-        if self.len() < self.capacity() {
+        if !self.next_push_allocates() {
             self.push(t)
+        } else if cfg!(debug_assertions) {
+            panic!("`push_unchecked` called when an allocation is required")
         } else {
             std::hint::unreachable_unchecked()
         }
@@ -61,12 +59,10 @@ impl<T> FVec<T> {
 
     #[inline]
     pub unsafe fn pop_unchecked(&mut self) -> T {
-        debug_assert!(
-            self.data.len() > 0,
-            "`FVec::pop_unchecked` called on an empty FVec"
-        );
-        if self.len() > 0 {
+        if !self.is_empty() {
             self.pop().unwrap()
+        } else if cfg!(debug_assertions) {
+            panic!("`FVec::pop_unchecked` called on an empty FVec")
         } else {
             std::hint::unreachable_unchecked()
         }
@@ -74,12 +70,10 @@ impl<T> FVec<T> {
 
     #[inline]
     pub unsafe fn swap_remove_unchecked(&mut self, index: usize) -> T {
-        debug_assert!(
-            index < self.len(),
-            "providing an index >= self.len() is undefined behavior in release"
-        );
         if index < self.len() {
             self.swap_remove(index)
+        } else if cfg!(debug_assertions) {
+            panic!("providing an index >= self.len() is undefined behavior in release")
         } else {
             std::hint::unreachable_unchecked()
         }

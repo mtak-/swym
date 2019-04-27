@@ -1,6 +1,5 @@
 //! An contiguous container of Dynamically Sized Types.
 
-use crate::internal::pointer::PtrExt;
 use core::{
     borrow::{Borrow, BorrowMut},
     marker::PhantomData,
@@ -26,7 +25,7 @@ impl TraitObject {
     #[inline]
     pub unsafe fn from_flat(flat: NonNull<usize>) -> Self {
         let vtable = (*flat.as_ref()) as *mut ();
-        let data = flat.add(1).cast().as_ptr();
+        let data = flat.as_ptr().add(1) as *mut ();
         TraitObject { data, vtable }
     }
 

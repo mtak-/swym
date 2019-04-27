@@ -1,8 +1,8 @@
-use crate::internal::{
-    pointer::{PtrExt, PtrMutExt},
-    usize_aligned::ForcedUsizeAligned,
+use crate::internal::usize_aligned::ForcedUsizeAligned;
+use std::{
+    mem::{self, ManuallyDrop},
+    ptr,
 };
-use std::mem::{self, ManuallyDrop};
 
 /// Trash that has been queued for dropping by the GC.
 pub struct Queued<T: 'static + Send> {
@@ -35,9 +35,11 @@ impl<T: 'static + Send> FnOnceish for Queued<T> {
         // if T's actual alignment is greater than the alignment of a usize,
         // then we have to read the value out first before dropping.
         if mem::align_of::<T>() > mem::align_of::<usize>() {
-            drop(PtrExt::read_as::<T>(&mut self.to_drop as *mut _))
+            drop(ptr::read_unaligned::<T>(
+                &mut self.to_drop as *mut _ as *mut T,
+            ))
         } else {
-            PtrMutExt::drop_in_place_aligned(&mut self.to_drop as *mut _ as *mut T)
+            ptr::drop_in_place::<T>(&mut self.to_drop as *mut _ as *mut T)
         }
     }
 }
