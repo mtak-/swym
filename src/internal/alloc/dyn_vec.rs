@@ -213,6 +213,7 @@ impl<U> Elem<U> {
     }
 }
 
+#[derive(Debug)]
 pub struct DynElemMut<'a, T: ?Sized> {
     value: &'a mut T,
 }
@@ -266,6 +267,7 @@ impl<'a, T: ?Sized> DynElemMut<'a, T> {
     }
 }
 
+#[derive(Debug)]
 pub struct Iter<'a, T: ?Sized> {
     iter:    std::slice::Iter<'a, usize>,
     phantom: PhantomData<&'a T>,
@@ -304,6 +306,7 @@ impl<'a, T: ?Sized> Iterator for Iter<'a, T> {
     }
 }
 
+#[derive(Debug)]
 pub struct IterMut<'a, T: ?Sized> {
     iter:    std::slice::IterMut<'a, usize>,
     phantom: PhantomData<&'a mut T>,

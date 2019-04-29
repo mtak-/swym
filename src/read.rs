@@ -4,6 +4,7 @@ use crate::{
     tx::{Borrow, Error, Ordering, Read},
 };
 use std::{
+    fmt::{self, Debug, Formatter},
     marker::PhantomData,
     mem::{self, ManuallyDrop},
 };
@@ -17,6 +18,15 @@ use std::{
 pub struct ReadTx<'tcell>(PhantomData<fn(&'tcell ())>);
 impl<'tcell> !Send for ReadTx<'tcell> {}
 impl<'tcell> !Sync for ReadTx<'tcell> {}
+
+impl<'tcell> Debug for ReadTx<'tcell> {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ReadTx")
+            .field("pin_epoch", &self.pin_epoch())
+            .finish()
+    }
+}
 
 impl<'tcell> ReadTx<'tcell> {
     #[inline]

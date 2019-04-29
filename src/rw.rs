@@ -19,6 +19,7 @@ use crate::{
     tx::{self, Error, Ordering, SetError, Write, _TValue},
 };
 use std::{
+    fmt::{self, Debug, Formatter},
     marker::PhantomData,
     mem::{self, ManuallyDrop},
     ptr,
@@ -219,6 +220,15 @@ impl<'tx, 'tcell> RwTxImpl<'tx, 'tcell> {
 pub struct RwTx<'tcell>(PhantomData<fn(&'tcell ())>);
 impl<'tcell> !Send for RwTx<'tcell> {}
 impl<'tcell> !Sync for RwTx<'tcell> {}
+
+impl<'tcell> Debug for RwTx<'tcell> {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ReadTx")
+            .field("pin_mut_ref", &self.as_impl().pin_ref)
+            .finish()
+    }
+}
 
 impl<'tcell> RwTx<'tcell> {
     #[inline]
