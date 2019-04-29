@@ -24,6 +24,7 @@ stats = []
 unstable = []
 
 [dependencies]
+cfg-if = "0.1.7"
 crossbeam-utils = "0.6.5"
 lazy_static = "1.3.0"
 lock_api = "0.1.5"
