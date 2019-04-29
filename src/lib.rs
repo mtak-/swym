@@ -81,6 +81,7 @@
 #![cfg_attr(all(test, feature = "unstable"), feature(raw))]
 
 // #![warn(missing_docs)]
+// #![deny(missing_debug_implementations)]
 #![deny(intra_doc_link_resolution_failure)]
 #![deny(rust_2018_idioms)]
 #![deny(unused_must_use)]
