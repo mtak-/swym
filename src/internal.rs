@@ -9,7 +9,6 @@ pub mod phoenix_tls;
 
 pub mod epoch;
 pub mod gc;
-pub mod pointer;
 pub mod read_log;
 pub mod tcell_erased;
 pub mod thread;

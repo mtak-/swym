@@ -43,9 +43,15 @@ pub struct Thread {
     synch: OwnedSynch,
 }
 
+impl Default for Thread {
+    #[inline]
+    fn default() -> Self {
+        Thread::new()
+    }
+}
+
 impl Thread {
-    #[inline(never)]
-    #[cold]
+    #[inline]
     pub fn new() -> Self {
         Thread {
             logs:  UnsafeCell::new(Logs::new()),

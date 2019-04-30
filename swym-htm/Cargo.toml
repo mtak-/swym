@@ -21,3 +21,4 @@ htm = []
 rtm = []
 
 [dependencies]
+cfg-if = "0.1.7"

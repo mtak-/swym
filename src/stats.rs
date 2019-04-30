@@ -234,19 +234,24 @@ impl Stats {
 /// to the global `Stats` object on thread exit or when manually requested.
 pub struct ThreadStats(RefCell<Stats>);
 
+impl Default for ThreadStats {
+    #[inline]
+    fn default() -> Self {
+        fn force(_: &Mutex<Stats>) {}
+        force(&GLOBAL); // initialize global now, else we may get panics on drop because
+                        // lazy_static uses thread_locals to initialize it.
+        ThreadStats(Default::default())
+    }
+}
+
 impl Drop for ThreadStats {
+    #[inline]
     fn drop(&mut self) {
         self.flush()
     }
 }
 
-impl PhoenixTarget for ThreadStats {
-    #[inline]
-    fn subscribe(&mut self) {}
-
-    #[inline]
-    fn unsubscribe(&mut self) {}
-}
+impl PhoenixTarget for ThreadStats {}
 
 impl ThreadStats {
     /// Returns the actual statistics object.
@@ -265,18 +270,12 @@ impl ThreadStats {
 }
 
 phoenix_tls! {
-    static THREAD_STAT: ThreadStats = {
-        fn force(_: &Mutex<Stats>) {}
-        force(&GLOBAL); // initialize global now, else we may get panics on drop because
-                        // lazy_static uses thread_locals to initialize it.
-        ThreadStats(Default::default())
-    };
+    static THREAD_STAT: ThreadStats
 }
 
 lazy_static::lazy_static! {
     static ref GLOBAL: Mutex<Stats> = Mutex::default();
 }
-
 
 /// Returns the global stats object, or None if the feature is disabled.
 pub fn stats() -> Option<impl Deref<Target = Stats>> {
@@ -295,7 +294,6 @@ pub fn thread_stats() -> Option<impl Deref<Target = ThreadStats>> {
         None
     }
 }
-
 
 /// Prints a summary of the global stats object.
 ///

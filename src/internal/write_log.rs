@@ -2,7 +2,6 @@ use crate::{
     internal::{
         alloc::dyn_vec::{DynElemMut, TraitObject},
         epoch::QuiesceEpoch,
-        pointer::PtrExt,
         tcell_erased::TCellErased,
         usize_aligned::ForcedUsizeAligned,
     },
@@ -63,7 +62,7 @@ impl<'tcell> dyn WriteEntry + 'tcell {
 
     #[inline]
     fn pending(&self) -> NonNull<usize> {
-        unsafe { self.data_ptr().add(1).cast() }
+        unsafe { NonNull::new_unchecked(self.data_ptr().as_ptr().add(1)) }
     }
 
     #[inline]
@@ -95,7 +94,11 @@ impl<'tcell> dyn WriteEntry + 'tcell {
         );
         let downcast = &(&*(self as *const _ as *const WriteEntryImpl<'tcell, T>)).pending
             as *const ForcedUsizeAligned<T>;
-        PtrExt::read_as::<_>(downcast)
+        if mem::align_of::<T>() > mem::align_of::<usize>() {
+            ptr::read_unaligned::<ManuallyDrop<T>>(downcast as _)
+        } else {
+            ptr::read::<ManuallyDrop<T>>(downcast as _)
+        }
     }
 
     #[inline]
@@ -137,8 +140,10 @@ impl<'tcell> dyn WriteEntry + 'tcell {
                     len > 0,
                     "`WriteEntry` performing a write of size 0 unexpectedly"
                 );
-                self.pending()
-                    .copy_to_n(NonNull::from(*tcell).cast().sub(len), len);
+                self.pending().as_ptr().copy_to_nonoverlapping(
+                    NonNull::from(*tcell).cast::<usize>().as_ptr().sub(len),
+                    len,
+                );
             }
             None => {}
         }

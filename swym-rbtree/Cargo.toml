@@ -9,6 +9,7 @@ publish = false
 default = []
 rtm = ["swym/rtm"]
 stats = ["swym/stats"]
+unstable = ["swym/unstable"]
 
 [dependencies]
 swym = { path = "../" }

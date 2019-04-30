@@ -18,7 +18,7 @@ use std::fmt::{self, Debug, Formatter};
 /// methods for running transactions.
 #[derive(Clone)]
 pub struct ThreadKey {
-    thread: Phoenix<Thread, tls::THREAD_KEY>,
+    thread: Phoenix<Thread>,
 }
 
 impl Debug for ThreadKey {
@@ -159,7 +159,7 @@ mod tls {
     use crate::internal::thread::Thread;
 
     phoenix_tls! {
-        pub static THREAD_KEY: Thread = Thread::new();
+        pub static THREAD_KEY: Thread
     }
 }
 

@@ -17,6 +17,12 @@ matrix:
   - rust: nightly
     name: "swym-htm"
     script: ./ci/htm.sh
+  - rust: nightly
+    name: "rustfmt"
+    script: |
+      if rustup component add rustfmt-preview ; then
+          cargo fmt --all -- --check
+      fi
 
   # macos 64bit (no rtm)
   - os: osx

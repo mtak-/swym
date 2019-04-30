@@ -24,25 +24,25 @@ cargo check --features stats,$RTM --benches --bins --examples --tests
 cargo check --features unstable,$RTM --benches --bins --examples --tests
 cargo check --features stats,unstable --benches --bins --examples --tests
 cargo check --features unstable,stats,$RTM --benches --bins --examples --tests
-
 # debug-alloc shouldn't change anything
 cargo check --features debug-alloc,unstable,stats,$RTM --benches --bins --examples --tests
 
+# run tests
 ./x.py test
+RUST_TEST_THREADS=1 cargo test --features stats,unstable,$RTM --lib --tests
 
-RUST_TEST_THREADS=1 \
-    cargo test --features stats,unstable,$RTM --lib --tests
-
+# examples
 RUSTFLAGS="${RUSTFLAGS} ${ASAN_FLAG}" \
-    cargo run \
+    time cargo run \
         --release \
         --features debug-alloc,stats,$RTM \
         --example stack
 
-cargo run \
+time cargo run \
     --features stats,$RTM \
     --example dining_philosophers
 
+# benchmarks
 if [[ -z $RTM ]]; then
     ./x.py bench --features unstable
 else
