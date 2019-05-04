@@ -168,7 +168,7 @@ impl<'tx, 'tcell> RwTxImpl<'tx, 'tcell> {
                         self.logs_mut().write_log.record(&tcell.erased, value, hash);
                     } else {
                         let new_entry = WriteEntryImpl::new(&tcell.erased, value);
-                        let new_vtable = dyn_vec::vtable(&new_entry as &(dyn WriteEntry + 'tcell));
+                        let new_vtable = dyn_vec::vtable::<dyn WriteEntry + 'tcell>(&new_entry);
                         DynElemMut::assign_unchecked(entry, new_vtable, new_entry)
                     }
                     return Ok(());

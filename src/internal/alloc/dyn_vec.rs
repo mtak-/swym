@@ -110,7 +110,7 @@ macro_rules! dyn_vec_decl {
                     mem::align_of::<U>() <= mem::align_of::<usize>(),
                     "overaligned types are currently unimplemented"
                 );
-                let elem = $crate::internal::alloc::dyn_vec::Elem::new($crate::internal::alloc::dyn_vec::vtable(&u as &dyn $trait), u);
+                let elem = $crate::internal::alloc::dyn_vec::Elem::new($crate::internal::alloc::dyn_vec::vtable::<dyn $trait>(&u), u);
                 self.data.extend(elem.as_slice());
                 mem::forget(elem)
             }
@@ -121,7 +121,7 @@ macro_rules! dyn_vec_decl {
                     mem::align_of::<U>() <= mem::align_of::<usize>(),
                     "overaligned types are currently unimplemented"
                 );
-                let elem = $crate::internal::alloc::dyn_vec::Elem::new($crate::internal::alloc::dyn_vec::vtable(&u as &dyn $trait), u);
+                let elem = $crate::internal::alloc::dyn_vec::Elem::new($crate::internal::alloc::dyn_vec::vtable::<dyn $trait>(&u), u);
                 self.data.extend_unchecked(elem.as_slice());
                 mem::forget(elem)
             }

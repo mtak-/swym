@@ -50,7 +50,7 @@ impl<T: 'static + PhoenixTarget> Clone for Phoenix<T> {
     fn clone(&self) -> Self {
         let count = self.as_ref().ref_count.get();
         debug_assert!(count > 0, "attempt to clone a deallocated `Phoenix`");
-        
+
         let new_count = count + 1;
         self.as_ref().ref_count.set(new_count);
 
@@ -88,7 +88,7 @@ impl<T: 'static + PhoenixTarget> Drop for Phoenix<T> {
                 // Must clear out any cached tls pointer before accessing T mutably; otherwise,
                 // there would be potential aliasing issues if the unsubscribe/drop attempts to read
                 // from the thread local.
-                this.clear_tls.map(|f| f());
+                let _: Option<()> = this.clear_tls.map(|f| f());
 
                 this.value.unsubscribe();
             }

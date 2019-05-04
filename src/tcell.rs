@@ -70,23 +70,13 @@ pub struct TCell<T> {
 unsafe impl<T: Send> Send for TCell<T> {}
 unsafe impl<T: Send + Sync> Sync for TCell<T> {}
 
-impl<T: Borrow + Debug> Debug for TCell<T> {
+impl<T> Debug for TCell<T> {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
-        crate::thread_key::get()
-            .try_read(|tx| {
-                Ok(formatter
-                    .debug_struct("TCell")
-                    .field("erased", &self.erased)
-                    .field("value", &*self.borrow(tx, Ordering::default())?)
-                    .finish())
-            })
-            .unwrap_or_else(|crate::thread_key::TryReadErr { .. }| {
-                formatter
-                    .debug_struct("TCell")
-                    .field("erased", &self.erased)
-                    .field("value", &"...")
-                    .finish()
-            })
+        formatter
+            .debug_struct("TCell")
+            .field("erased", &self.erased)
+            .field("value", &"...")
+            .finish()
     }
 }
 
@@ -394,6 +384,7 @@ impl<'tx, T> std::borrow::Borrow<T> for Ref<'tx, T> {
 }
 
 /// A view of a `TCell`'s memory.
+#[derive(Debug)]
 pub struct View<'tcell, T, Tx> {
     tx:    Tx,
     tcell: &'tcell TCell<T>,

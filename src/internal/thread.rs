@@ -91,7 +91,11 @@ impl PhoenixTarget for Thread {
 
         // fullfilling the promise we made in `Self::new`. we must unregister before
         // deallocation, or there will be UB
-        GlobalSynchList::instance().write().unregister(&self.synch);
+        let did_remove = GlobalSynchList::instance().write().unregister(&self.synch);
+        debug_assert!(
+            did_remove,
+            "failed to find thread in the global thread list"
+        );
     }
 }
 
