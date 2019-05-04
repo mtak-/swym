@@ -158,6 +158,13 @@ macro_rules! phoenix_tls {
         impl $name {
             #[inline]
             $vis fn get(self) -> $crate::internal::phoenix_tls::Phoenix<$t> {
+                self.with(|x| unsafe {
+                    $crate::internal::phoenix_tls::Phoenix::clone_raw(x.into())
+                })
+            }
+
+            #[inline]
+            $vis fn with<F: FnOnce(&$t) -> O, O>(self, f: F) -> O {
                 thread_local!{
                     $(#[$attr])* $vis static __SLOW: $crate::internal::phoenix_tls::Phoenix<$t> =
                         $crate::internal::phoenix_tls::Phoenix::new(Some(|| with(|x| x.set(None))));
@@ -165,12 +172,15 @@ macro_rules! phoenix_tls {
 
                 #[inline(never)]
                 #[cold]
-                fn init() -> $crate::internal::phoenix_tls::Phoenix<$t> {
-                    __SLOW.try_with(|x| {
-                        let result = x.clone();
-                        with(|x| x.set(Some((&*result).into())));
+                unsafe fn init<F: FnOnce(&$t) -> O, O>(f: F) -> O {
+                    match __SLOW.try_with(|x| {
+                        let result = (&**x).into();
+                        with(|x| x.set(Some(result)));
                         result
-                    }).unwrap_or_default()
+                    }).ok() {
+                        Some(nn) => f(nn.as_ref()),
+                        None => f(&*$crate::internal::phoenix_tls::Phoenix::<$t>::default())
+                    }
                 }
 
                 // TLS access through POD is faster. Access through #[thread_local] POD is even faster.
@@ -197,10 +207,10 @@ macro_rules! phoenix_tls {
                     }
                 }
 
-                with(|x| {
+                with(|x| unsafe {
                     match x.get() {
-                        Some(v) => unsafe { $crate::internal::phoenix_tls::Phoenix::clone_raw(v) },
-                        None => init(),
+                        Some(v) => f(v.as_ref()),
+                        None => init(f),
                     }
                 })
             }

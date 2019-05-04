@@ -101,7 +101,7 @@ macro_rules! stats_func {
         pub(crate) fn $name(size: usize) {
             if cfg!(feature = "stats") {
                 let size = size as u64;
-                THREAD_STAT.get().get().$name.record(size)
+                THREAD_STAT.with(move |x| x.get().$name.record(size))
             }
         }
     };
