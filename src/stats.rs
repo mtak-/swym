@@ -232,6 +232,7 @@ impl Stats {
 ///
 /// To reduce overhead of stats tracking, each thread has it's own `Stats` object which is flushed
 /// to the global `Stats` object on thread exit or when manually requested.
+#[derive(Debug)]
 pub struct ThreadStats(RefCell<Stats>);
 
 impl Default for ThreadStats {

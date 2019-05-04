@@ -32,7 +32,7 @@ parking_lot = "0.7.1"
 swym-htm = { path = "./swym-htm", version = "0.1.0" }
 
 [dev-dependencies]
-jemallocator = { version = "0.3.0" }
+jemallocator = "0.3.0"
 
 [profile.bench]
 opt-level = 3

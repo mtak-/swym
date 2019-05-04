@@ -35,6 +35,7 @@ use crate::{
 use std::{mem, ptr};
 
 #[repr(transparent)]
+#[derive(Debug)]
 struct Ptr<T>(*const T);
 
 // overly conservative?
@@ -82,6 +83,7 @@ impl<T> Into<*const T> for Ptr<T> {
 ///
 /// This should be used in places to where single threaded data structures would have
 /// `Option<NonNull<T>>/*mut T`, and is similarly low level.
+#[derive(Debug)]
 pub struct TPtr<T> {
     ptr: TCell<Ptr<T>>,
 }
@@ -220,6 +222,7 @@ impl<T: Send + Sync + 'static> TPtr<T> {
     }
 }
 
+#[derive(Debug)]
 pub struct Publisher<T, F: FnOnce(*mut T) + Copy + 'static> {
     ptr:        *mut T,
     destructor: F,

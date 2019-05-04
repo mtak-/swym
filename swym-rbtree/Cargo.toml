@@ -6,6 +6,7 @@ edition = "2018"
 publish = false
 
 [features]
+debug-alloc = ["jemallocator/debug"]
 default = []
 rtm = ["swym/rtm"]
 stats = ["swym/stats"]

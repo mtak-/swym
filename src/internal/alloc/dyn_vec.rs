@@ -110,7 +110,7 @@ macro_rules! dyn_vec_decl {
                     mem::align_of::<U>() <= mem::align_of::<usize>(),
                     "overaligned types are currently unimplemented"
                 );
-                let elem = $crate::internal::alloc::dyn_vec::Elem::new($crate::internal::alloc::dyn_vec::vtable(&u as &dyn $trait), u);
+                let elem = $crate::internal::alloc::dyn_vec::Elem::new($crate::internal::alloc::dyn_vec::vtable::<dyn $trait>(&u), u);
                 self.data.extend(elem.as_slice());
                 mem::forget(elem)
             }
@@ -121,7 +121,7 @@ macro_rules! dyn_vec_decl {
                     mem::align_of::<U>() <= mem::align_of::<usize>(),
                     "overaligned types are currently unimplemented"
                 );
-                let elem = $crate::internal::alloc::dyn_vec::Elem::new($crate::internal::alloc::dyn_vec::vtable(&u as &dyn $trait), u);
+                let elem = $crate::internal::alloc::dyn_vec::Elem::new($crate::internal::alloc::dyn_vec::vtable::<dyn $trait>(&u), u);
                 self.data.extend_unchecked(elem.as_slice());
                 mem::forget(elem)
             }
@@ -213,6 +213,7 @@ impl<U> Elem<U> {
     }
 }
 
+#[derive(Debug)]
 pub struct DynElemMut<'a, T: ?Sized> {
     value: &'a mut T,
 }
@@ -254,7 +255,7 @@ impl<'a, T: ?Sized> DynElemMut<'a, T> {
         let mut punned = ManuallyDrop::new(ptr::read(this.value as *const T as *const U));
         let vtable_storage;
         let old_raw = {
-            let mut raw = mem::transmute_copy::<&mut T, TraitObject>(&this.value);
+            let mut raw = TraitObject::from_pointer(this.value.into());
             vtable_storage =
                 (mem::replace(&mut raw.data, &mut punned as *mut _ as _) as *mut *const ()).sub(1);
             raw
@@ -266,6 +267,7 @@ impl<'a, T: ?Sized> DynElemMut<'a, T> {
     }
 }
 
+#[derive(Debug)]
 pub struct Iter<'a, T: ?Sized> {
     iter:    std::slice::Iter<'a, usize>,
     phantom: PhantomData<&'a T>,
@@ -304,6 +306,7 @@ impl<'a, T: ?Sized> Iterator for Iter<'a, T> {
     }
 }
 
+#[derive(Debug)]
 pub struct IterMut<'a, T: ?Sized> {
     iter:    std::slice::IterMut<'a, usize>,
     phantom: PhantomData<&'a mut T>,

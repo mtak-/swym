@@ -19,6 +19,7 @@ use crate::{
     tx::{self, Error, Ordering, SetError, Write, _TValue},
 };
 use std::{
+    fmt::{self, Debug, Formatter},
     marker::PhantomData,
     mem::{self, ManuallyDrop},
     ptr,
@@ -167,7 +168,7 @@ impl<'tx, 'tcell> RwTxImpl<'tx, 'tcell> {
                         self.logs_mut().write_log.record(&tcell.erased, value, hash);
                     } else {
                         let new_entry = WriteEntryImpl::new(&tcell.erased, value);
-                        let new_vtable = dyn_vec::vtable(&new_entry as &(dyn WriteEntry + 'tcell));
+                        let new_vtable = dyn_vec::vtable::<dyn WriteEntry + 'tcell>(&new_entry);
                         DynElemMut::assign_unchecked(entry, new_vtable, new_entry)
                     }
                     return Ok(());
@@ -219,6 +220,15 @@ impl<'tx, 'tcell> RwTxImpl<'tx, 'tcell> {
 pub struct RwTx<'tcell>(PhantomData<fn(&'tcell ())>);
 impl<'tcell> !Send for RwTx<'tcell> {}
 impl<'tcell> !Sync for RwTx<'tcell> {}
+
+impl<'tcell> Debug for RwTx<'tcell> {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ReadTx")
+            .field("pin_mut_ref", &self.as_impl().pin_ref)
+            .finish()
+    }
+}
 
 impl<'tcell> RwTx<'tcell> {
     #[inline]

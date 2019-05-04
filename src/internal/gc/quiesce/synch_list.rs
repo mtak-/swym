@@ -26,20 +26,16 @@ impl SynchList {
     }
 
     /// Unregisters a destructing synch.
+    ///
+    /// Returns true if the OwnedSynch was successfully unregistered, false otherwise.
     #[inline]
-    pub fn unregister(&mut self, to_remove: &OwnedSynch) {
+    pub fn unregister(&mut self, to_remove: &OwnedSynch) -> bool {
         let to_remove = &to_remove.inner;
-        let position = self
-            .synchs
+        self.synchs
             .iter()
-            .position(|&synch| synch == to_remove.into());
-
-        debug_assert!(
-            position.is_some(),
-            "failed to find thread in the global thread list"
-        );
-
-        position.map(|position| drop(self.synchs.swap_remove(position)));
+            .position(|&synch| synch == to_remove.into())
+            .map(|position| self.synchs.swap_remove(position))
+            .is_some()
     }
 
     #[inline]
