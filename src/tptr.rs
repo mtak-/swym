@@ -32,7 +32,7 @@ use crate::{
     tcell::TCell,
     tx::{Error, Ordering, Read, SetError, Write, _TValue},
 };
-use std::{mem, ptr};
+use core::{mem, ptr};
 
 #[repr(transparent)]
 #[derive(Debug)]

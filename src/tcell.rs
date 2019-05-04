@@ -46,7 +46,7 @@ use crate::{
     internal::{tcell_erased::TCellErased, usize_aligned::UsizeAligned},
     tx::{AssertBorrow, Borrow, Error, Ordering, Read, Rw, SetError, Write, _TValue},
 };
-use std::{
+use core::{
     cell::UnsafeCell,
     fmt::{self, Debug, Formatter},
     marker::PhantomData,

@@ -18,7 +18,7 @@ use crate::{
     tcell::{Ref, TCell},
     tx::{self, Error, Ordering, SetError, Write, _TValue},
 };
-use std::{
+use core::{
     fmt::{self, Debug, Formatter},
     marker::PhantomData,
     mem::{self, ManuallyDrop},

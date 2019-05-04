@@ -1,4 +1,4 @@
-use std::ops::{Deref, DerefMut};
+use core::ops::{Deref, DerefMut};
 
 #[cfg(target_pointer_width = "64")]
 #[repr(align(8))]

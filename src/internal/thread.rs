@@ -2,26 +2,25 @@ use crate::{
     internal::{
         epoch::{QuiesceEpoch, EPOCH_CLOCK},
         gc::{GlobalSynchList, OwnedSynch, ThreadGarbage},
+        phoenix_tls::PhoenixTarget,
         read_log::ReadLog,
         write_log::WriteLog,
     },
     read::ReadTx,
     rw::RwTx,
+    stats,
     tx::Error,
 };
-use crossbeam_utils::Backoff;
-
-// TODO: rustfmt bug causes other imports to be deleted.
-use crate::{internal::phoenix_tls::PhoenixTarget, stats};
-use std::{
+use core::{
     cell::UnsafeCell,
     fmt::{self, Debug, Formatter},
     marker::PhantomData,
     mem,
     ops::{Deref, DerefMut},
-    process, ptr,
+    ptr,
     sync::atomic::Ordering::Release,
 };
+use crossbeam_utils::Backoff;
 use swym_htm::HardwareTx;
 
 const MAX_HTX_RETRIES: usize = 3;
@@ -274,7 +273,7 @@ impl<'tcell> Pin<'tcell> {
                     },
                 })
             } else {
-                process::abort()
+                abort!()
             }
         } else {
             None
@@ -287,7 +286,7 @@ impl<'tcell> Pin<'tcell> {
         if let Some(now) = now {
             self.synch().repin(now, Release);
         } else {
-            process::abort()
+            abort!()
         }
     }
 

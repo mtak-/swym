@@ -1,7 +1,7 @@
 //! Functionality for working with transactions.
 
 use crate::tcell::{Ref, TCell};
-use std::{
+use core::{
     cell::UnsafeCell,
     fmt::{self, Debug, Formatter},
     ops::{Deref, DerefMut},

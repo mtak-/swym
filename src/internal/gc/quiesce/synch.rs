@@ -5,13 +5,13 @@ use crate::{
     },
     stats,
 };
-use crossbeam_utils::Backoff;
-use lock_api::RawRwLock as _;
-use parking_lot::RawRwLock;
-use std::{
+use core::{
     ptr,
     sync::atomic::Ordering::{self, Acquire},
 };
+use crossbeam_utils::Backoff;
+use lock_api::RawRwLock as _;
+use parking_lot::RawRwLock;
 
 /// A sharded lock protecting the GlobalThreadList, and the current epoch (or inactive) for the
 /// owning thread.

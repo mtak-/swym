@@ -1,21 +1,21 @@
 #[inline(always)]
 #[cfg(feature = "nightly")]
 pub unsafe fn _assume(b: bool) {
-    std::intrinsics::assume(b)
+    core::intrinsics::assume(b)
 }
 
 #[inline(always)]
 #[cfg(feature = "nightly")]
 pub fn _unlikely(b: bool) -> bool {
     // not actually unsafe to say a bool is probably false
-    unsafe { std::intrinsics::unlikely(b) }
+    unsafe { core::intrinsics::unlikely(b) }
 }
 
 #[inline(always)]
 #[cfg(feature = "nightly")]
 pub fn _likely(b: bool) -> bool {
     // not actually unsafe to say a bool is probably true
-    unsafe { std::intrinsics::likely(b) }
+    unsafe { core::intrinsics::likely(b) }
 }
 
 #[inline(always)]
@@ -32,6 +32,10 @@ pub fn _unlikely(b: bool) -> bool {
 #[cfg(not(feature = "nightly"))]
 pub fn _likely(b: bool) -> bool {
     b
+}
+
+pub fn _abort() -> ! {
+    std::process::abort();
 }
 
 macro_rules! assume {
@@ -54,4 +58,10 @@ macro_rules! likely {
     ($e:expr) => {{
         $crate::internal::optim::_likely($e)
     }};
+}
+
+macro_rules! abort {
+    () => {
+        $crate::internal::optim::_abort()
+    };
 }

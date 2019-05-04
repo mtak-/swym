@@ -1,12 +1,12 @@
 //! Statistics collection. Enabled with `--features stats`.
 
 use crate::internal::phoenix_tls::PhoenixTarget;
-use std::{
+use core::{
     cell::RefCell,
     fmt::{self, Debug, Formatter},
     ops::{Deref, DerefMut},
-    sync::Mutex,
 };
+use parking_lot::Mutex;
 
 #[derive(Copy, Clone, Default, Debug)]
 struct MinMaxTotal {
@@ -265,7 +265,7 @@ impl ThreadStats {
     /// After flushing, `self` is reset.
     pub fn flush(&mut self) {
         let mut borrow = self.get();
-        GLOBAL.lock().unwrap().merge(&*borrow);
+        GLOBAL.lock().merge(&*borrow);
         *borrow = Default::default()
     }
 }
@@ -281,7 +281,7 @@ lazy_static::lazy_static! {
 /// Returns the global stats object, or None if the feature is disabled.
 pub fn stats() -> Option<impl Deref<Target = Stats>> {
     if cfg!(feature = "stats") {
-        Some(GLOBAL.lock().unwrap())
+        Some(GLOBAL.lock())
     } else {
         None
     }

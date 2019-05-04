@@ -6,7 +6,7 @@ use crate::internal::{
         quiesce::OwnedSynch,
     },
 };
-use std::mem::{self, ManuallyDrop};
+use core::mem::{self, ManuallyDrop};
 
 // TODO: measure to see what works best in practice.
 const UNUSED_BAG_COUNT: usize = 64;
