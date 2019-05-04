@@ -96,8 +96,8 @@ macro_rules! dyn_vec_decl {
             #[inline]
             $vis fn next_push_allocates<U: $trait>(&self) -> bool {
                 assert!(
-                    mem::align_of::<U>() <= mem::align_of::<usize>(),
-                    "overaligned types are currently unimplemented"
+                    mem::align_of::<U>() == mem::align_of::<usize>(),
+                    "over/under aligned types are currently unimplemented"
                 );
                 debug_assert!(mem::size_of::<$crate::internal::alloc::dyn_vec::Elem<U>>() % mem::size_of::<usize>() == 0);
                 self.data
@@ -107,8 +107,8 @@ macro_rules! dyn_vec_decl {
             #[inline]
             $vis fn push<U: $trait>(&mut self, u: U) {
                 assert!(
-                    mem::align_of::<U>() <= mem::align_of::<usize>(),
-                    "overaligned types are currently unimplemented"
+                    mem::align_of::<U>() == mem::align_of::<usize>(),
+                    "over/under aligned types are currently unimplemented"
                 );
                 let elem = $crate::internal::alloc::dyn_vec::Elem::new($crate::internal::alloc::dyn_vec::vtable::<dyn $trait>(&u), u);
                 self.data.extend(elem.as_slice());
@@ -118,8 +118,8 @@ macro_rules! dyn_vec_decl {
             #[inline]
             $vis unsafe fn push_unchecked<U: $trait>(&mut self, u: U) {
                 assert!(
-                    mem::align_of::<U>() <= mem::align_of::<usize>(),
-                    "overaligned types are currently unimplemented"
+                    mem::align_of::<U>() == mem::align_of::<usize>(),
+                    "over/under aligned types are currently unimplemented"
                 );
                 let elem = $crate::internal::alloc::dyn_vec::Elem::new($crate::internal::alloc::dyn_vec::vtable::<dyn $trait>(&u), u);
                 self.data.extend_unchecked(elem.as_slice());
@@ -433,5 +433,79 @@ mod trait_object {
             assert_eq!(raw.vtable, std.vtable);
             assert_eq!(raw.data, std.data);
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn iter() {
+        use std::any::Any;
+        trait MyAny: Send {
+            fn as_any<'a>(&'a self) -> &'a (dyn Any + 'static);
+        }
+
+        impl<T: Any + Send> MyAny for T {
+            fn as_any<'a>(&'a self) -> &'a (dyn Any + 'static) {
+                &*self
+            }
+        }
+
+        dyn_vec_decl! {
+            struct AnyDynVec: MyAny;
+        }
+
+        let mut v = AnyDynVec::with_capacity(0);
+        assert!(v.iter().next().is_none());
+
+        let first: Vec<usize> = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+        v.push(first.clone());
+        let second = [42usize; 3];
+        v.push(second.clone());
+
+        let mut iter = v.iter();
+        let first_ref = iter.next().unwrap();
+        let first_ref = first_ref.as_any().downcast_ref::<Vec<usize>>().unwrap();
+        assert_eq!(&first, first_ref);
+        let second_ref = iter.next().unwrap();
+        let second_ref = second_ref.as_any().downcast_ref::<[usize; 3]>().unwrap();
+        assert_eq!(&second, second_ref);
+        assert!(iter.next().is_none());
+    }
+
+    #[test]
+    fn iter_mut() {
+        dyn_vec_decl! {
+            struct SliceDynVec: AsMut<[usize]>;
+        }
+        let mut v = SliceDynVec::with_capacity(0);
+
+        assert!(v.iter_mut().next().is_none());
+
+        let first: Vec<usize> = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+        v.push(first.clone());
+        let second = [42usize; 3];
+        v.push(second.clone());
+
+        let mut iter = v.iter_mut();
+        let mut first_mut_ref = iter.next().unwrap();
+        assert_eq!(first.as_slice(), first_mut_ref.as_mut());
+        let mut second_mut_ref = iter.next().unwrap();
+        assert_eq!(&second, second_mut_ref.as_mut());
+        assert!(iter.next().is_none());
+
+        let mut iter = v.iter_mut();
+        let first_mut_ref = iter.next().unwrap();
+        unsafe {
+            DynElemMut::assign_unchecked(
+                first_mut_ref,
+                vtable::<dyn AsMut<[usize]>>(&second),
+                second,
+            );
+        }
+        let mut iter = v.iter_mut();
+        assert_eq!(&second, iter.next().unwrap().as_mut());
     }
 }
