@@ -9,7 +9,7 @@
 //! Additionally the user type receives two callbacks `subscribe`/`unsubscribe`, which are invoked
 //! at creation/desctruction. The address is stable between those two calls.
 
-use std::{cell::Cell, marker::PhantomData, mem::ManuallyDrop, ops::Deref, ptr::NonNull};
+use std::{cell::Cell, marker::PhantomData, mem::ManuallyDrop, ops::Deref, process, ptr::NonNull};
 
 /// Types that can be stored in phoenix_tls's can implement this for optional callback hooks for
 /// when they are created/destroyed.
@@ -50,7 +50,16 @@ impl<T: 'static + PhoenixTarget> Clone for Phoenix<T> {
     fn clone(&self) -> Self {
         let count = self.as_ref().ref_count.get();
         debug_assert!(count > 0, "attempt to clone a deallocated `Phoenix`");
-        self.as_ref().ref_count.set(count + 1);
+        
+        let new_count = count + 1;
+        self.as_ref().ref_count.set(new_count);
+
+        // We must check for overflow because users can mem::forget(x.clone())
+        // repeatedly.
+        if unlikely!(new_count == usize::max_value()) {
+            process::abort()
+        }
+
         Phoenix {
             raw:     self.raw,
             phantom: PhantomData,
