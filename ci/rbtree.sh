@@ -35,9 +35,33 @@ RUST_TEST_THREADS=1 RUSTFLAGS="${RUSTFLAGS} ${ASAN_FLAG}" \
         --features debug-alloc,stats,$RTM
 
 # benchmarks
-./x.py bench --features unstable,$RTM --exclude rbtree::insert_0
+./x.py bench insert:: --features unstable,$RTM 
 
 # these benchmarks are run one at a time due to high memory usage
+./x.py bench --features unstable,$RTM rbtree::contains_key_01
+./x.py bench --features unstable,$RTM rbtree::contains_key_02
+./x.py bench --features unstable,$RTM rbtree::contains_key_03
+./x.py bench --features unstable,$RTM rbtree::contains_key_04
+./x.py bench --features unstable,$RTM rbtree::contains_key_05
+./x.py bench --features unstable,$RTM rbtree::contains_key_06
+./x.py bench --features unstable,$RTM rbtree::contains_key_07
+./x.py bench --features unstable,$RTM rbtree::contains_key_08
+./x.py bench --features unstable,$RTM rbtree::entry_01
+./x.py bench --features unstable,$RTM rbtree::entry_02
+./x.py bench --features unstable,$RTM rbtree::entry_03
+./x.py bench --features unstable,$RTM rbtree::entry_04
+./x.py bench --features unstable,$RTM rbtree::entry_05
+./x.py bench --features unstable,$RTM rbtree::entry_06
+./x.py bench --features unstable,$RTM rbtree::entry_07
+./x.py bench --features unstable,$RTM rbtree::entry_08
+./x.py bench --features unstable,$RTM rbtree::get_01
+./x.py bench --features unstable,$RTM rbtree::get_02
+./x.py bench --features unstable,$RTM rbtree::get_03
+./x.py bench --features unstable,$RTM rbtree::get_04
+./x.py bench --features unstable,$RTM rbtree::get_05
+./x.py bench --features unstable,$RTM rbtree::get_06
+./x.py bench --features unstable,$RTM rbtree::get_07
+./x.py bench --features unstable,$RTM rbtree::get_08
 ./x.py bench --features unstable,$RTM rbtree::insert_01
 ./x.py bench --features unstable,$RTM rbtree::insert_02
 ./x.py bench --features unstable,$RTM rbtree::insert_03
