@@ -439,24 +439,23 @@ mod trait_object {
 #[cfg(test)]
 mod test {
     use super::*;
+    use std::any::Any;
+
+    trait MyAny: Send {
+        fn as_any<'a>(&'a self) -> &'a (dyn Any + 'static);
+    }
+
+    impl<T: Any + Send> MyAny for T {
+        fn as_any<'a>(&'a self) -> &'a (dyn Any + 'static) {
+            &*self
+        }
+    }
+    dyn_vec_decl! {
+        struct AnyDynVec: MyAny;
+    }
 
     #[test]
     fn iter() {
-        use std::any::Any;
-        trait MyAny: Send {
-            fn as_any<'a>(&'a self) -> &'a (dyn Any + 'static);
-        }
-
-        impl<T: Any + Send> MyAny for T {
-            fn as_any<'a>(&'a self) -> &'a (dyn Any + 'static) {
-                &*self
-            }
-        }
-
-        dyn_vec_decl! {
-            struct AnyDynVec: MyAny;
-        }
-
         let mut v = AnyDynVec::with_capacity(0);
         assert!(v.iter().next().is_none());
 
@@ -507,5 +506,51 @@ mod test {
         }
         let mut iter = v.iter_mut();
         assert_eq!(&second, iter.next().unwrap().as_mut());
+    }
+
+    #[test]
+    fn drain() {
+        use std::cell::Cell;
+
+        thread_local! {
+            static DROP_COUNT: Cell<usize> = Cell::new(0);
+        }
+
+        struct Bar(usize);
+        impl Drop for Bar {
+            fn drop(&mut self) {
+                DROP_COUNT.with(|x| x.set(x.get() + self.0));
+            }
+        }
+
+        let mut v = AnyDynVec::with_capacity(0);
+        v.push(Bar(42));
+        v.push(Bar(43));
+
+        let mut iter = v.drain();
+
+        let first = iter.next().unwrap();
+        assert_eq!(DROP_COUNT.with(|x| x.get()), 0);
+        drop(first);
+        assert_eq!(DROP_COUNT.with(|x| x.get()), 42);
+
+        let second = iter.next().unwrap();
+        assert_eq!(DROP_COUNT.with(|x| x.get()), 42);
+        drop(second);
+        assert_eq!(DROP_COUNT.with(|x| x.get()), 85);
+
+        assert!(iter.next().is_none());
+        assert!(v.is_empty());
+
+        v.push(Bar(42));
+        v.push(Bar(43));
+
+        assert!(!v.is_empty());
+        std::mem::forget(v.drain());
+        assert!(v.is_empty());
+
+        drop(v);
+
+        assert_eq!(DROP_COUNT.with(|x| x.get()), 85);
     }
 }

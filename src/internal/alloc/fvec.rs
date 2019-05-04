@@ -43,6 +43,10 @@ impl<T> FVec<T> {
 
     #[inline]
     pub fn next_n_pushes_allocates(&self, n: usize) -> bool {
+        debug_assert!(
+            self.len().checked_add(n).is_some(),
+            "overflow in `next_n_pushes_allocates`"
+        );
         self.capacity() < self.len() + n
     }
 
