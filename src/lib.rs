@@ -73,10 +73,10 @@
 //! [`try_read`]: thread_key/struct.ThreadKey.html#method.try_read
 
 #![feature(optin_builtin_traits)]
-#![cfg_attr(feature = "unstable", feature(cfg_target_thread_local))]
-#![cfg_attr(feature = "unstable", feature(core_intrinsics))]
-#![cfg_attr(feature = "unstable", feature(thread_local))]
-#![cfg_attr(all(test, feature = "unstable"), feature(raw))]
+#![cfg_attr(feature = "nightly", feature(cfg_target_thread_local))]
+#![cfg_attr(feature = "nightly", feature(core_intrinsics))]
+#![cfg_attr(feature = "nightly", feature(thread_local))]
+#![cfg_attr(all(test, feature = "nightly"), feature(raw))]
 #![warn(macro_use_extern_crate)]
 #![warn(missing_debug_implementations)]
 // #![warn(missing_docs)]

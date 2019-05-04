@@ -175,7 +175,7 @@ macro_rules! phoenix_tls {
 
                 // TLS access through POD is faster. Access through #[thread_local] POD is even faster.
                 cfg_if::cfg_if!{
-                    if #[cfg(all(feature = "unstable", target_thread_local))] {
+                    if #[cfg(all(feature = "nightly", target_thread_local))] {
                         #[thread_local]
                         $(#[$attr])* $vis static $name: std::cell::Cell<Option<std::ptr::NonNull<$t>>> =
                             std::cell::Cell::new(None);

@@ -411,7 +411,7 @@ impl<'a, T: 'a + ?Sized> Iterator for Drain<'a, T> {
 
 #[cfg(test)]
 mod trait_object {
-    #[cfg(feature = "unstable")]
+    #[cfg(feature = "nightly")]
     #[test]
     fn layout() {
         use super::TraitObject;
