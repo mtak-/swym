@@ -18,6 +18,9 @@ matrix:
     name: "swym-htm"
     script: ./ci/htm.sh
   - rust: nightly
+    name: "rbtree"
+    script: ./ci/rbtree.sh
+  - rust: nightly
     name: "rustfmt"
     script: |
       if rustup component add rustfmt-preview ; then
@@ -30,3 +33,8 @@ matrix:
     rust: nightly
     name: "swym"
     script: ./ci/swym.sh
+  - os: osx
+    osx_image: xcode10.2
+    rust: nightly
+    name: "rbtree"
+    script: ./ci/rbtree.sh

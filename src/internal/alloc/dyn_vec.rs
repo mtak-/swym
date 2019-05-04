@@ -255,7 +255,7 @@ impl<'a, T: ?Sized> DynElemMut<'a, T> {
         let mut punned = ManuallyDrop::new(ptr::read(this.value as *const T as *const U));
         let vtable_storage;
         let old_raw = {
-            let mut raw = mem::transmute_copy::<&mut T, TraitObject>(&this.value);
+            let mut raw = TraitObject::from_pointer(this.value.into());
             vtable_storage =
                 (mem::replace(&mut raw.data, &mut punned as *mut _ as _) as *mut *const ()).sub(1);
             raw
