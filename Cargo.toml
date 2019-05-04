@@ -21,7 +21,11 @@ debug-alloc = ["jemallocator/debug"]
 default = []
 rtm = ["swym-htm/rtm"]
 stats = []
-unstable = []
+unstable = [
+    "crossbeam-utils/nightly",
+    "lock_api/nightly",
+    "parking_lot/nightly",
+]
 
 [dependencies]
 cfg-if = "0.1.7"
