@@ -51,7 +51,7 @@ macro_rules! dyn_vec_decl {
         #[derive(Debug)]
         $vis struct $name<'a> {
             data:    $crate::internal::alloc::FVec<usize>,
-            phantom: ::std::marker::PhantomData<dyn $trait + 'a>,
+            phantom: ::core::marker::PhantomData<dyn $trait + 'a>,
         }
 
         impl Drop for $name<'_> {
@@ -66,7 +66,7 @@ macro_rules! dyn_vec_decl {
             $vis fn new() -> Self {
                 $name {
                     data:    $crate::internal::alloc::FVec::new(),
-                    phantom: ::std::marker::PhantomData,
+                    phantom: ::core::marker::PhantomData,
                 }
             }
 
@@ -74,7 +74,7 @@ macro_rules! dyn_vec_decl {
             $vis fn with_capacity(capacity: usize) -> Self {
                 $name {
                     data:    $crate::internal::alloc::FVec::with_capacity(capacity),
-                    phantom: ::std::marker::PhantomData,
+                    phantom: ::core::marker::PhantomData,
                 }
             }
 
@@ -157,7 +157,7 @@ macro_rules! dyn_vec_decl {
             #[inline]
             $vis fn drain(&mut self) -> $crate::internal::alloc::dyn_vec::Drain<'_, dyn $trait> {
                 let slice: &mut [_] = &mut self.data;
-                let raw: ::std::ptr::NonNull<_> = slice.into();
+                let raw: ::core::ptr::NonNull<_> = slice.into();
                 self.data.clear();
 
                 unsafe {
@@ -205,7 +205,7 @@ impl<U> Elem<U> {
     #[inline]
     pub fn as_slice(&self) -> &[usize] {
         unsafe {
-            std::slice::from_raw_parts(
+            core::slice::from_raw_parts(
                 self as *const _ as _,
                 mem::size_of::<Self>() / mem::size_of::<usize>(),
             )
@@ -269,12 +269,12 @@ impl<'a, T: ?Sized> DynElemMut<'a, T> {
 
 #[derive(Debug)]
 pub struct Iter<'a, T: ?Sized> {
-    iter:    std::slice::Iter<'a, usize>,
+    iter:    core::slice::Iter<'a, usize>,
     phantom: PhantomData<&'a T>,
 }
 
 impl<'a, T: ?Sized> Iter<'a, T> {
-    pub unsafe fn new(iter: std::slice::Iter<'a, usize>) -> Self {
+    pub unsafe fn new(iter: core::slice::Iter<'a, usize>) -> Self {
         Iter {
             iter,
             phantom: PhantomData,
@@ -297,7 +297,7 @@ impl<'a, T: ?Sized> Iterator for Iter<'a, T> {
             );
             for _ in 0..size / mem::size_of::<usize>() {
                 match self.iter.next() {
-                    None => std::hint::unreachable_unchecked(),
+                    None => core::hint::unreachable_unchecked(),
                     _ => {}
                 }
             }
@@ -308,12 +308,12 @@ impl<'a, T: ?Sized> Iterator for Iter<'a, T> {
 
 #[derive(Debug)]
 pub struct IterMut<'a, T: ?Sized> {
-    iter:    std::slice::IterMut<'a, usize>,
+    iter:    core::slice::IterMut<'a, usize>,
     phantom: PhantomData<&'a mut T>,
 }
 
 impl<'a, T: ?Sized> IterMut<'a, T> {
-    pub unsafe fn new(iter: std::slice::IterMut<'a, usize>) -> Self {
+    pub unsafe fn new(iter: core::slice::IterMut<'a, usize>) -> Self {
         IterMut {
             iter,
             phantom: PhantomData,
@@ -336,7 +336,7 @@ impl<'a, T: ?Sized> Iterator for IterMut<'a, T> {
             );
             for _ in 0..size / mem::size_of::<usize>() {
                 match self.iter.next() {
-                    None => std::hint::unreachable_unchecked(),
+                    None => core::hint::unreachable_unchecked(),
                     _ => {}
                 }
             }
@@ -392,7 +392,7 @@ pub struct Drain<'a, T: ?Sized> {
 }
 
 impl<'a, T: ?Sized> Drain<'a, T> {
-    pub unsafe fn new(iter: std::slice::IterMut<'a, usize>) -> Self {
+    pub unsafe fn new(iter: core::slice::IterMut<'a, usize>) -> Self {
         Drain {
             iter:    IterMut::new(iter),
             phantom: PhantomData,
@@ -415,7 +415,7 @@ mod trait_object {
     #[test]
     fn layout() {
         use super::TraitObject;
-        use std::{mem, raw::TraitObject as StdTraitObject};
+        use core::{mem, raw::TraitObject as StdTraitObject};
 
         assert_eq!(
             mem::size_of::<TraitObject>(),
@@ -427,8 +427,8 @@ mod trait_object {
         );
         let x = String::from("hello there");
         unsafe {
-            let y: &dyn std::fmt::Debug = &x;
-            let std = mem::transmute::<&dyn std::fmt::Debug, StdTraitObject>(y);
+            let y: &dyn core::fmt::Debug = &x;
+            let std = mem::transmute::<&dyn core::fmt::Debug, StdTraitObject>(y);
             let raw = TraitObject::from_pointer(y.into());
             assert_eq!(raw.vtable, std.vtable);
             assert_eq!(raw.data, std.data);
@@ -439,7 +439,7 @@ mod trait_object {
 #[cfg(test)]
 mod test {
     use super::*;
-    use std::any::Any;
+    use core::any::Any;
 
     trait MyAny: Send {
         fn as_any<'a>(&'a self) -> &'a (dyn Any + 'static);
@@ -510,7 +510,7 @@ mod test {
 
     #[test]
     fn drain() {
-        use std::cell::Cell;
+        use core::cell::Cell;
 
         thread_local! {
             static DROP_COUNT: Cell<usize> = Cell::new(0);
@@ -546,7 +546,7 @@ mod test {
         v.push(Bar(43));
 
         assert!(!v.is_empty());
-        std::mem::forget(v.drain());
+        core::mem::forget(v.drain());
         assert!(v.is_empty());
 
         drop(v);

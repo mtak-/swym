@@ -376,7 +376,7 @@ impl<'tx, T> Deref for Ref<'tx, T> {
     }
 }
 
-impl<'tx, T> std::borrow::Borrow<T> for Ref<'tx, T> {
+impl<'tx, T> core::borrow::Borrow<T> for Ref<'tx, T> {
     #[inline]
     fn borrow(&self) -> &T {
         &*self.snapshot
@@ -457,7 +457,7 @@ mod test {
         tx::{Error, _TValue},
     };
     use crossbeam_utils::thread;
-    use std::{
+    use core::{
         mem::ManuallyDrop,
         ptr,
         sync::atomic::{AtomicBool, Ordering},

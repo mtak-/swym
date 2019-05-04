@@ -57,7 +57,7 @@ impl<T> FVec<T> {
         } else if cfg!(debug_assertions) {
             panic!("`push_unchecked` called when an allocation is required")
         } else {
-            std::hint::unreachable_unchecked()
+            core::hint::unreachable_unchecked()
         }
     }
 
@@ -68,7 +68,7 @@ impl<T> FVec<T> {
         } else if cfg!(debug_assertions) {
             panic!("`FVec::pop_unchecked` called on an empty FVec")
         } else {
-            std::hint::unreachable_unchecked()
+            core::hint::unreachable_unchecked()
         }
     }
 
@@ -79,7 +79,7 @@ impl<T> FVec<T> {
         } else if cfg!(debug_assertions) {
             panic!("providing an index >= self.len() is undefined behavior in release")
         } else {
-            std::hint::unreachable_unchecked()
+            core::hint::unreachable_unchecked()
         }
     }
 
@@ -119,7 +119,7 @@ impl<T> IntoIterator for FVec<T> {
 }
 
 impl<'a, T> IntoIterator for &'a FVec<T> {
-    type IntoIter = std::slice::Iter<'a, T>;
+    type IntoIter = core::slice::Iter<'a, T>;
     type Item = &'a T;
 
     #[inline]
@@ -129,7 +129,7 @@ impl<'a, T> IntoIterator for &'a FVec<T> {
 }
 
 impl<'a, T> IntoIterator for &'a mut FVec<T> {
-    type IntoIter = std::slice::IterMut<'a, T>;
+    type IntoIter = core::slice::IterMut<'a, T>;
     type Item = &'a mut T;
 
     #[inline]

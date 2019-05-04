@@ -30,7 +30,7 @@ struct RwTxImpl<'tx, 'tcell> {
     pin_ref: PinMutRef<'tx, 'tcell>,
 }
 
-impl<'tx, 'tcell> std::ops::Deref for RwTxImpl<'tx, 'tcell> {
+impl<'tx, 'tcell> core::ops::Deref for RwTxImpl<'tx, 'tcell> {
     type Target = PinMutRef<'tx, 'tcell>;
 
     #[inline]
@@ -39,7 +39,7 @@ impl<'tx, 'tcell> std::ops::Deref for RwTxImpl<'tx, 'tcell> {
     }
 }
 
-impl<'tx, 'tcell> std::ops::DerefMut for RwTxImpl<'tx, 'tcell> {
+impl<'tx, 'tcell> core::ops::DerefMut for RwTxImpl<'tx, 'tcell> {
     #[inline]
     fn deref_mut(&mut self) -> &mut PinMutRef<'tx, 'tcell> {
         &mut self.pin_ref

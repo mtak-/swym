@@ -177,21 +177,21 @@ macro_rules! phoenix_tls {
                 cfg_if::cfg_if!{
                     if #[cfg(all(feature = "nightly", target_thread_local))] {
                         #[thread_local]
-                        $(#[$attr])* $vis static $name: std::cell::Cell<Option<std::ptr::NonNull<$t>>> =
-                            std::cell::Cell::new(None);
+                        $(#[$attr])* $vis static $name: core::cell::Cell<Option<core::ptr::NonNull<$t>>> =
+                            core::cell::Cell::new(None);
 
                         #[inline]
-                        fn with<F: FnOnce(&std::cell::Cell<Option<std::ptr::NonNull<$t>>>) -> O, O>(f: F) -> O {
+                        fn with<F: FnOnce(&core::cell::Cell<Option<core::ptr::NonNull<$t>>>) -> O, O>(f: F) -> O {
                             f(&$name)
                         }
                     } else {
                         thread_local!{
-                            $(#[$attr])* $vis static $name: std::cell::Cell<Option<std::ptr::NonNull<$t>>> =
-                                std::cell::Cell::new(None);
+                            $(#[$attr])* $vis static $name: core::cell::Cell<Option<core::ptr::NonNull<$t>>> =
+                                core::cell::Cell::new(None);
                         }
 
                         #[inline]
-                        fn with<F: FnOnce(&std::cell::Cell<Option<std::ptr::NonNull<$t>>>) -> O, O>(f: F) -> O {
+                        fn with<F: FnOnce(&core::cell::Cell<Option<core::ptr::NonNull<$t>>>) -> O, O>(f: F) -> O {
                             $name.with(f)
                         }
                     }

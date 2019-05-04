@@ -56,7 +56,7 @@ impl<'tcell> ReadLog<'tcell> {
                         panic!("unreachable code reached")
                     } else {
                         // we want this fast since every RW transaction runs it
-                        std::hint::unreachable_unchecked()
+                        core::hint::unreachable_unchecked()
                     }
                 }
             };
@@ -105,7 +105,7 @@ impl<'tcell> ReadLog<'tcell> {
                         //
                         // the only way this code can be hit is if the rules for filter_in_place are
                         // not followed.
-                        std::hint::unreachable_unchecked()
+                        core::hint::unreachable_unchecked()
                     }
                 },
             };
