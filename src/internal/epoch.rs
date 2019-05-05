@@ -40,11 +40,17 @@ type HtmStorage = HtmUsize;
 /// other epochs.
 const INACTIVE_EPOCH: Storage = !0;
 
-/// The most significant bit is used to represent whether an EpochLock is locked or not.
+/// The most significant bit is used to represent whether an EpochLock is locked or not. A value of
+/// 1 at that bit indicates the lock is held.
 const LOCK_BIT: Storage = 1 << (mem::size_of::<Storage>() as Storage * 8 - 1);
 
 /// The beginning of time is the value 1.
 const FIRST: Storage = 1;
+
+/// The smallest difference between points on the EpochClock.
+///
+/// Two is used because the first bit of EpochLock is reserved as the PARK_BIT
+const TICK_SIZE: Storage = 1;
 
 #[inline]
 const fn lock_bit_set(e: Storage) -> bool {
@@ -230,6 +236,7 @@ impl EpochLock {
             })
     }
 
+    /// Attempts to acquire the lock, aborting the transaction on failure.
     #[inline]
     pub fn try_lock_htm(&self, htx: &HardwareTx, max_expected: QuiesceEpoch) {
         let actual = self.0.get(htx);
@@ -420,7 +427,7 @@ impl EpochClock {
         //
         // NOTE: actually on 64 bit platforms we just assume overflowing into the lock bit is
         // impossible.
-        let result = self.0.fetch_add(1, Release);
+        let result = self.0.fetch_add(TICK_SIZE, Release);
 
         // Technically, this can wrap to 0 making this UB.
         // - EpochClock is at `end_of_time` - 0x7FFF_FFFF_FFFF_FFFF
@@ -428,7 +435,8 @@ impl EpochClock {
         // - ...
         // - They all succeed and commit, causing epoch clock to overflow.
         //
-        // Memory would run out well before that many threads could be created.
+        // Memory would run out well before that many threads could be created. This is true of 32
+        // bit platforms as well.
         unsafe { QuiesceEpoch::new_unchecked(result) }
     }
 }
