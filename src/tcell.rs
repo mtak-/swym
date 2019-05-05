@@ -490,7 +490,7 @@ mod test {
     }
 
     #[test]
-    fn publish_retry() {
+    fn publish_conflict() {
         static TRIGGERED: AtomicBool = AtomicBool::new(false);
         let x = TCell::new(42);
 
@@ -508,7 +508,7 @@ mod test {
                                 TRIGGERED.store(true, Ordering::Relaxed);
                             }),
                         )?;
-                        Err(Error::RETRY)
+                        Err(Error::CONFLICT)
                     }
                 });
             });
