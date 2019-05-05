@@ -83,7 +83,7 @@ impl<'tx, 'tcell> RwTxImpl<'tx, 'tcell> {
                 }
             }
         }
-        Err(Error::RETRY)
+        Err(Error::CONFLICT)
     }
 
     #[inline]
@@ -126,7 +126,7 @@ impl<'tx, 'tcell> RwTxImpl<'tx, 'tcell> {
                 }
             }
         }
-        Err(Error::RETRY)
+        Err(Error::CONFLICT)
     }
 
     #[inline]
@@ -179,7 +179,7 @@ impl<'tx, 'tcell> RwTxImpl<'tx, 'tcell> {
             mem::forget(value);
             Err(SetError {
                 value: casted,
-                error: Error::RETRY,
+                error: Error::CONFLICT,
             })
         }
     }

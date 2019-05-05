@@ -101,6 +101,14 @@ impl<'tcell> dyn WriteEntry + 'tcell {
     }
 
     #[inline]
+    pub fn validate(&self, pin_epoch: QuiesceEpoch) -> bool {
+        match self.tcell() {
+            Some(tcell) => pin_epoch.read_write_valid_lockable(&tcell.current_epoch),
+            None => true,
+        }
+    }
+
+    #[inline]
     #[must_use]
     pub fn try_lock(&self, pin_epoch: QuiesceEpoch) -> bool {
         match self.tcell() {
@@ -329,6 +337,16 @@ impl<'tcell> WriteLog<'tcell> {
         self.filter |= hash.get();
         self.data
             .push_unchecked(WriteEntryImpl::new(dest_tcell, val));
+    }
+
+    #[inline]
+    pub fn validate_writes(&self, pin_epoch: QuiesceEpoch) -> bool {
+        for entry in &self.data {
+            if !entry.validate(pin_epoch) {
+                return false;
+            }
+        }
+        true
     }
 
     #[must_use]

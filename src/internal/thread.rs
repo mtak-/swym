@@ -195,6 +195,34 @@ impl<'tx, 'tcell> PinRef<'tx, 'tcell> {
         );
         pin_epoch
     }
+
+    #[inline]
+    pub fn park_token(&self) -> usize {
+        self.thread as *const Thread as usize
+    }
+
+    #[inline]
+    pub fn park_validate(&self) -> bool {
+        // false
+        // TODO: backup pin_epoch, and unpin, allowing GC to happen
+        let logs = self.logs();
+        let pin_epoch = self.pin_epoch();
+        logs.read_log.validate_reads(pin_epoch) && logs.write_log.validate_writes(pin_epoch)
+    }
+}
+
+impl PinRef<'_, '_> {
+    #[inline]
+    pub unsafe fn should_unpark(token: usize) -> bool {
+        let target = Self {
+            thread:  &*(token as *const Thread),
+            phantom: PhantomData,
+        };
+        let logs = target.logs();
+        // TODO: use backup pin_epoch
+        let pin_epoch = target.pin_epoch();
+        !logs.read_log.validate_reads(pin_epoch) || !logs.write_log.validate_writes(pin_epoch)
+    }
 }
 
 pub struct PinMutRef<'tx, 'tcell> {
@@ -309,6 +337,7 @@ impl<'tcell> Pin<'tcell> {
             let r = f(ReadTx::new(&mut self));
             match r {
                 Ok(o) => break o,
+                Err(Error::CONFLICT) => {}
                 Err(Error::RETRY) => {}
             }
             retries += 1;
@@ -341,11 +370,17 @@ impl<'tcell> Pin<'tcell> {
                     Ok(o) => {
                         if likely!(pin.commit()) {
                             self.logs().validate_start_state();
+                            crate::internal::parking::unpark();
                             break o;
                         }
                         commit_retries += 1;
                     }
-                    Err(Error::RETRY) => eager_retries += 1,
+                    Err(Error::CONFLICT) => {
+                        eager_retries += 1;
+                    }
+                    Err(Error::RETRY) => {
+                        crate::internal::parking::park(&pin);
+                    }
                 }
             }
             self.snooze_repin(&backoff);

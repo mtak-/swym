@@ -6,7 +6,8 @@ use swym::{
 };
 
 const NUM_PHILOSOPHERS: usize = 5;
-const FOOD_ITERATIONS: usize = 1_000_000;
+const FOOD_ITERATIONS: usize = 100_000;
+const EAT_TIME_MICROS: u64 = 1;
 
 struct Fork {
     in_use: TCell<bool>,
@@ -33,10 +34,10 @@ fn main() {
             let right_fork = &forks[(i + 1) % NUM_PHILOSOPHERS];
             scope.spawn(move |_| {
                 let thread_key = thread_key::get();
-                for _ in 0..FOOD_ITERATIONS {
+                for i in 0..FOOD_ITERATIONS {
                     thread_key.rw(|tx| {
-                        if left_fork.in_use.get(tx, Ordering::Read)?
-                            || right_fork.in_use.get(tx, Ordering::Read)?
+                        if left_fork.in_use.get(tx, Ordering::default())?
+                            || right_fork.in_use.get(tx, Ordering::default())?
                         {
                             Err(Error::RETRY)
                         } else {
@@ -46,7 +47,8 @@ fn main() {
                         }
                     });
 
-                    // om nom nom
+                    println!("om nom nom {}", i);
+                    std::thread::sleep(std::time::Duration::from_micros(EAT_TIME_MICROS));
 
                     thread_key.rw(|tx| {
                         left_fork.in_use.set(tx, false)?;

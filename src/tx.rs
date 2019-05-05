@@ -7,6 +7,12 @@ use core::{
     ops::{Deref, DerefMut},
 };
 
+#[derive(PartialEq, Eq)]
+enum ErrorKind {
+    Conflict,
+    Retry,
+}
+
 /// Error type indicating that the transaction has failed.
 ///
 /// It is typical to route this error back to [`ThreadKey::rw`] or [`ThreadKey::read`] where the
@@ -21,6 +27,7 @@ use core::{
 /// [`ThreadKey::rw`]: ../thread_key/struct.ThreadKey.html#method.rw
 #[derive(PartialEq, Eq)]
 pub struct Error {
+    kind:     ErrorKind,
     _private: (),
 }
 
@@ -33,8 +40,8 @@ impl Debug for Error {
 
 impl<T> From<SetError<T>> for Error {
     #[inline]
-    fn from(_: SetError<T>) -> Self {
-        Self::RETRY
+    fn from(set_error: SetError<T>) -> Self {
+        set_error.error
     }
 }
 
@@ -66,7 +73,15 @@ impl Error {
     ///
     /// [`ThreadKey::read`]: ../thread_key/struct.ThreadKey.html#method.read
     /// [`ThreadKey::rw`]: ../thread_key/struct.ThreadKey.html#method.rw
-    pub const RETRY: Self = Error { _private: () };
+    pub const RETRY: Self = Error {
+        kind:     ErrorKind::Retry,
+        _private: (),
+    };
+
+    pub(crate) const CONFLICT: Self = Error {
+        kind:     ErrorKind::Conflict,
+        _private: (),
+    };
 }
 
 /// Error type indicating that the transaction has failed to [`set`] a value.
