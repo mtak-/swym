@@ -49,3 +49,40 @@ impl<T> ForcedUsizeAligned<T> {
         ForcedUsizeAligned(UsizeAligned(Unaligned(value)))
     }
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use std::mem;
+
+    #[test]
+    fn alignment() {
+        let x = 0i8;
+        let x_usize_aligned = UsizeAligned::new(x);
+        assert_eq!(
+            mem::align_of_val(&x_usize_aligned),
+            mem::align_of::<usize>()
+        );
+
+        let x = ();
+        let x_usize_aligned = UsizeAligned::new(x);
+        assert_eq!(
+            mem::align_of_val(&x_usize_aligned),
+            mem::align_of::<usize>()
+        );
+
+        #[repr(align(1024))]
+        struct OverAligned;
+
+        let x = OverAligned;
+        let x_usize_aligned = UsizeAligned::new(x);
+        assert!(mem::align_of_val(&x_usize_aligned) > mem::align_of::<usize>());
+
+        let x = OverAligned;
+        let x_force_usize_aligned = ForcedUsizeAligned::new(x);
+        assert_eq!(
+            mem::align_of_val(&x_force_usize_aligned),
+            mem::align_of::<usize>()
+        );
+    }
+}
