@@ -380,6 +380,9 @@ impl<'tcell> Pin<'tcell> {
                     }
                     Err(Error::RETRY) => {
                         crate::internal::parking::park(&pin);
+                        backoff.reset();
+                        // no need to snooze
+                        continue;
                     }
                 }
             }
