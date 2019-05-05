@@ -208,6 +208,12 @@ impl<'tx, 'tcell> PinRef<'tx, 'tcell> {
         let pin_epoch = self.pin_epoch();
         logs.read_log.validate_reads(pin_epoch) && logs.write_log.validate_writes(pin_epoch)
     }
+
+    #[inline]
+    pub fn parkable(&self) -> bool {
+        let logs = self.logs();
+        !logs.read_log.is_empty() || !logs.write_log.is_empty()
+    }
 }
 
 impl PinRef<'_, '_> {
