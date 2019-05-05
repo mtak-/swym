@@ -24,7 +24,7 @@
 //! ThreadEpoch also plays a role in garbage collection. That is more thoroughly explained in
 //! `internal/gc.rs`
 
-use std::{
+use core::{
     fmt::{self, Debug, Formatter},
     mem,
     num::NonZeroUsize,

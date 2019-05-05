@@ -1,5 +1,5 @@
 use crate::internal::usize_aligned::ForcedUsizeAligned;
-use std::{
+use core::{
     mem::{self, ManuallyDrop},
     ptr,
 };

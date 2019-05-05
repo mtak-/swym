@@ -51,7 +51,7 @@ macro_rules! dyn_vec_decl {
         #[derive(Debug)]
         $vis struct $name<'a> {
             data:    $crate::internal::alloc::FVec<usize>,
-            phantom: ::std::marker::PhantomData<dyn $trait + 'a>,
+            phantom: ::core::marker::PhantomData<dyn $trait + 'a>,
         }
 
         impl Drop for $name<'_> {
@@ -66,7 +66,7 @@ macro_rules! dyn_vec_decl {
             $vis fn new() -> Self {
                 $name {
                     data:    $crate::internal::alloc::FVec::new(),
-                    phantom: ::std::marker::PhantomData,
+                    phantom: ::core::marker::PhantomData,
                 }
             }
 
@@ -74,7 +74,7 @@ macro_rules! dyn_vec_decl {
             $vis fn with_capacity(capacity: usize) -> Self {
                 $name {
                     data:    $crate::internal::alloc::FVec::with_capacity(capacity),
-                    phantom: ::std::marker::PhantomData,
+                    phantom: ::core::marker::PhantomData,
                 }
             }
 
@@ -96,8 +96,8 @@ macro_rules! dyn_vec_decl {
             #[inline]
             $vis fn next_push_allocates<U: $trait>(&self) -> bool {
                 assert!(
-                    mem::align_of::<U>() <= mem::align_of::<usize>(),
-                    "overaligned types are currently unimplemented"
+                    mem::align_of::<U>() == mem::align_of::<usize>(),
+                    "over/under aligned types are currently unimplemented"
                 );
                 debug_assert!(mem::size_of::<$crate::internal::alloc::dyn_vec::Elem<U>>() % mem::size_of::<usize>() == 0);
                 self.data
@@ -107,8 +107,8 @@ macro_rules! dyn_vec_decl {
             #[inline]
             $vis fn push<U: $trait>(&mut self, u: U) {
                 assert!(
-                    mem::align_of::<U>() <= mem::align_of::<usize>(),
-                    "overaligned types are currently unimplemented"
+                    mem::align_of::<U>() == mem::align_of::<usize>(),
+                    "over/under aligned types are currently unimplemented"
                 );
                 let elem = $crate::internal::alloc::dyn_vec::Elem::new($crate::internal::alloc::dyn_vec::vtable::<dyn $trait>(&u), u);
                 self.data.extend(elem.as_slice());
@@ -118,8 +118,8 @@ macro_rules! dyn_vec_decl {
             #[inline]
             $vis unsafe fn push_unchecked<U: $trait>(&mut self, u: U) {
                 assert!(
-                    mem::align_of::<U>() <= mem::align_of::<usize>(),
-                    "overaligned types are currently unimplemented"
+                    mem::align_of::<U>() == mem::align_of::<usize>(),
+                    "over/under aligned types are currently unimplemented"
                 );
                 let elem = $crate::internal::alloc::dyn_vec::Elem::new($crate::internal::alloc::dyn_vec::vtable::<dyn $trait>(&u), u);
                 self.data.extend_unchecked(elem.as_slice());
@@ -157,7 +157,7 @@ macro_rules! dyn_vec_decl {
             #[inline]
             $vis fn drain(&mut self) -> $crate::internal::alloc::dyn_vec::Drain<'_, dyn $trait> {
                 let slice: &mut [_] = &mut self.data;
-                let raw: ::std::ptr::NonNull<_> = slice.into();
+                let raw: ::core::ptr::NonNull<_> = slice.into();
                 self.data.clear();
 
                 unsafe {
@@ -205,7 +205,7 @@ impl<U> Elem<U> {
     #[inline]
     pub fn as_slice(&self) -> &[usize] {
         unsafe {
-            std::slice::from_raw_parts(
+            core::slice::from_raw_parts(
                 self as *const _ as _,
                 mem::size_of::<Self>() / mem::size_of::<usize>(),
             )
@@ -269,12 +269,12 @@ impl<'a, T: ?Sized> DynElemMut<'a, T> {
 
 #[derive(Debug)]
 pub struct Iter<'a, T: ?Sized> {
-    iter:    std::slice::Iter<'a, usize>,
+    iter:    core::slice::Iter<'a, usize>,
     phantom: PhantomData<&'a T>,
 }
 
 impl<'a, T: ?Sized> Iter<'a, T> {
-    pub unsafe fn new(iter: std::slice::Iter<'a, usize>) -> Self {
+    pub unsafe fn new(iter: core::slice::Iter<'a, usize>) -> Self {
         Iter {
             iter,
             phantom: PhantomData,
@@ -297,7 +297,7 @@ impl<'a, T: ?Sized> Iterator for Iter<'a, T> {
             );
             for _ in 0..size / mem::size_of::<usize>() {
                 match self.iter.next() {
-                    None => std::hint::unreachable_unchecked(),
+                    None => core::hint::unreachable_unchecked(),
                     _ => {}
                 }
             }
@@ -308,12 +308,12 @@ impl<'a, T: ?Sized> Iterator for Iter<'a, T> {
 
 #[derive(Debug)]
 pub struct IterMut<'a, T: ?Sized> {
-    iter:    std::slice::IterMut<'a, usize>,
+    iter:    core::slice::IterMut<'a, usize>,
     phantom: PhantomData<&'a mut T>,
 }
 
 impl<'a, T: ?Sized> IterMut<'a, T> {
-    pub unsafe fn new(iter: std::slice::IterMut<'a, usize>) -> Self {
+    pub unsafe fn new(iter: core::slice::IterMut<'a, usize>) -> Self {
         IterMut {
             iter,
             phantom: PhantomData,
@@ -336,7 +336,7 @@ impl<'a, T: ?Sized> Iterator for IterMut<'a, T> {
             );
             for _ in 0..size / mem::size_of::<usize>() {
                 match self.iter.next() {
-                    None => std::hint::unreachable_unchecked(),
+                    None => core::hint::unreachable_unchecked(),
                     _ => {}
                 }
             }
@@ -392,7 +392,7 @@ pub struct Drain<'a, T: ?Sized> {
 }
 
 impl<'a, T: ?Sized> Drain<'a, T> {
-    pub unsafe fn new(iter: std::slice::IterMut<'a, usize>) -> Self {
+    pub unsafe fn new(iter: core::slice::IterMut<'a, usize>) -> Self {
         Drain {
             iter:    IterMut::new(iter),
             phantom: PhantomData,
@@ -411,11 +411,11 @@ impl<'a, T: 'a + ?Sized> Iterator for Drain<'a, T> {
 
 #[cfg(test)]
 mod trait_object {
-    #[cfg(feature = "unstable")]
+    #[cfg(feature = "nightly")]
     #[test]
     fn layout() {
         use super::TraitObject;
-        use std::{mem, raw::TraitObject as StdTraitObject};
+        use core::{mem, raw::TraitObject as StdTraitObject};
 
         assert_eq!(
             mem::size_of::<TraitObject>(),
@@ -427,11 +427,130 @@ mod trait_object {
         );
         let x = String::from("hello there");
         unsafe {
-            let y: &dyn std::fmt::Debug = &x;
-            let std = mem::transmute::<&dyn std::fmt::Debug, StdTraitObject>(y);
+            let y: &dyn core::fmt::Debug = &x;
+            let std = mem::transmute::<&dyn core::fmt::Debug, StdTraitObject>(y);
             let raw = TraitObject::from_pointer(y.into());
             assert_eq!(raw.vtable, std.vtable);
             assert_eq!(raw.data, std.data);
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use core::any::Any;
+
+    trait MyAny: Send {
+        fn as_any<'a>(&'a self) -> &'a (dyn Any + 'static);
+    }
+
+    impl<T: Any + Send> MyAny for T {
+        fn as_any<'a>(&'a self) -> &'a (dyn Any + 'static) {
+            &*self
+        }
+    }
+    dyn_vec_decl! {
+        struct AnyDynVec: MyAny;
+    }
+
+    #[test]
+    fn iter() {
+        let mut v = AnyDynVec::with_capacity(0);
+        assert!(v.iter().next().is_none());
+
+        let first: Vec<usize> = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+        v.push(first.clone());
+        let second = [42usize; 3];
+        v.push(second.clone());
+
+        let mut iter = v.iter();
+        let first_ref = iter.next().unwrap();
+        let first_ref = first_ref.as_any().downcast_ref::<Vec<usize>>().unwrap();
+        assert_eq!(&first, first_ref);
+        let second_ref = iter.next().unwrap();
+        let second_ref = second_ref.as_any().downcast_ref::<[usize; 3]>().unwrap();
+        assert_eq!(&second, second_ref);
+        assert!(iter.next().is_none());
+    }
+
+    #[test]
+    fn iter_mut() {
+        dyn_vec_decl! {
+            struct SliceDynVec: AsMut<[usize]>;
+        }
+        let mut v = SliceDynVec::with_capacity(0);
+
+        assert!(v.iter_mut().next().is_none());
+
+        let first: Vec<usize> = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+        v.push(first.clone());
+        let second = [42usize; 3];
+        v.push(second.clone());
+
+        let mut iter = v.iter_mut();
+        let mut first_mut_ref = iter.next().unwrap();
+        assert_eq!(first.as_slice(), first_mut_ref.as_mut());
+        let mut second_mut_ref = iter.next().unwrap();
+        assert_eq!(&second, second_mut_ref.as_mut());
+        assert!(iter.next().is_none());
+
+        let mut iter = v.iter_mut();
+        let first_mut_ref = iter.next().unwrap();
+        unsafe {
+            DynElemMut::assign_unchecked(
+                first_mut_ref,
+                vtable::<dyn AsMut<[usize]>>(&second),
+                second,
+            );
+        }
+        let mut iter = v.iter_mut();
+        assert_eq!(&second, iter.next().unwrap().as_mut());
+    }
+
+    #[test]
+    fn drain() {
+        use core::cell::Cell;
+
+        thread_local! {
+            static DROP_COUNT: Cell<usize> = Cell::new(0);
+        }
+
+        struct Bar(usize);
+        impl Drop for Bar {
+            fn drop(&mut self) {
+                DROP_COUNT.with(|x| x.set(x.get() + self.0));
+            }
+        }
+
+        let mut v = AnyDynVec::with_capacity(0);
+        v.push(Bar(42));
+        v.push(Bar(43));
+
+        let mut iter = v.drain();
+
+        let first = iter.next().unwrap();
+        assert_eq!(DROP_COUNT.with(|x| x.get()), 0);
+        drop(first);
+        assert_eq!(DROP_COUNT.with(|x| x.get()), 42);
+
+        let second = iter.next().unwrap();
+        assert_eq!(DROP_COUNT.with(|x| x.get()), 42);
+        drop(second);
+        assert_eq!(DROP_COUNT.with(|x| x.get()), 85);
+
+        assert!(iter.next().is_none());
+        assert!(v.is_empty());
+
+        v.push(Bar(42));
+        v.push(Bar(43));
+
+        assert!(!v.is_empty());
+        core::mem::forget(v.drain());
+        assert!(v.is_empty());
+
+        drop(v);
+
+        assert_eq!(DROP_COUNT.with(|x| x.get()), 85);
     }
 }

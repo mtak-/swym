@@ -9,7 +9,7 @@
 //! Additionally the user type receives two callbacks `subscribe`/`unsubscribe`, which are invoked
 //! at creation/desctruction. The address is stable between those two calls.
 
-use std::{cell::Cell, marker::PhantomData, mem::ManuallyDrop, ops::Deref, process, ptr::NonNull};
+use core::{cell::Cell, marker::PhantomData, mem::ManuallyDrop, ops::Deref, ptr::NonNull};
 
 /// Types that can be stored in phoenix_tls's can implement this for optional callback hooks for
 /// when they are created/destroyed.
@@ -57,7 +57,7 @@ impl<T: 'static + PhoenixTarget> Clone for Phoenix<T> {
         // We must check for overflow because users can mem::forget(x.clone())
         // repeatedly.
         if unlikely!(new_count == usize::max_value()) {
-            process::abort()
+            abort!()
         }
 
         Phoenix {
@@ -158,6 +158,13 @@ macro_rules! phoenix_tls {
         impl $name {
             #[inline]
             $vis fn get(self) -> $crate::internal::phoenix_tls::Phoenix<$t> {
+                self.with(|x| unsafe {
+                    $crate::internal::phoenix_tls::Phoenix::clone_raw(x.into())
+                })
+            }
+
+            #[inline]
+            $vis fn with<F: FnOnce(&$t) -> O, O>(self, f: F) -> O {
                 thread_local!{
                     $(#[$attr])* $vis static __SLOW: $crate::internal::phoenix_tls::Phoenix<$t> =
                         $crate::internal::phoenix_tls::Phoenix::new(Some(|| with(|x| x.set(None))));
@@ -165,42 +172,45 @@ macro_rules! phoenix_tls {
 
                 #[inline(never)]
                 #[cold]
-                fn init() -> $crate::internal::phoenix_tls::Phoenix<$t> {
-                    __SLOW.try_with(|x| {
-                        let result = x.clone();
-                        with(|x| x.set(Some((&*result).into())));
+                unsafe fn init<F: FnOnce(&$t) -> O, O>(f: F) -> O {
+                    match __SLOW.try_with(|x| {
+                        let result = (&**x).into();
+                        with(|x| x.set(Some(result)));
                         result
-                    }).unwrap_or_default()
+                    }).ok() {
+                        Some(nn) => f(nn.as_ref()),
+                        None => f(&*$crate::internal::phoenix_tls::Phoenix::<$t>::default())
+                    }
                 }
 
                 // TLS access through POD is faster. Access through #[thread_local] POD is even faster.
                 cfg_if::cfg_if!{
-                    if #[cfg(all(feature = "unstable", target_thread_local))] {
+                    if #[cfg(all(feature = "nightly", target_thread_local))] {
                         #[thread_local]
-                        $(#[$attr])* $vis static $name: std::cell::Cell<Option<std::ptr::NonNull<$t>>> =
-                            std::cell::Cell::new(None);
+                        $(#[$attr])* $vis static $name: core::cell::Cell<Option<core::ptr::NonNull<$t>>> =
+                            core::cell::Cell::new(None);
 
                         #[inline]
-                        fn with<F: FnOnce(&std::cell::Cell<Option<std::ptr::NonNull<$t>>>) -> O, O>(f: F) -> O {
+                        fn with<F: FnOnce(&core::cell::Cell<Option<core::ptr::NonNull<$t>>>) -> O, O>(f: F) -> O {
                             f(&$name)
                         }
                     } else {
                         thread_local!{
-                            $(#[$attr])* $vis static $name: std::cell::Cell<Option<std::ptr::NonNull<$t>>> =
-                                std::cell::Cell::new(None);
+                            $(#[$attr])* $vis static $name: core::cell::Cell<Option<core::ptr::NonNull<$t>>> =
+                                core::cell::Cell::new(None);
                         }
 
                         #[inline]
-                        fn with<F: FnOnce(&std::cell::Cell<Option<std::ptr::NonNull<$t>>>) -> O, O>(f: F) -> O {
+                        fn with<F: FnOnce(&core::cell::Cell<Option<core::ptr::NonNull<$t>>>) -> O, O>(f: F) -> O {
                             $name.with(f)
                         }
                     }
                 }
 
-                with(|x| {
+                with(|x| unsafe {
                     match x.get() {
-                        Some(v) => unsafe { $crate::internal::phoenix_tls::Phoenix::clone_raw(v) },
-                        None => init(),
+                        Some(v) => f(v.as_ref()),
+                        None => init(f),
                     }
                 })
             }

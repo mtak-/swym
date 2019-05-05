@@ -1,11 +1,11 @@
 use crate::internal::gc::quiesce::synch_list::SynchList;
-use lock_api::RawMutex as _;
-use parking_lot::RawMutex;
-use std::{
+use core::{
     cell::UnsafeCell,
     mem::ManuallyDrop,
     ops::{Deref, DerefMut},
 };
+use lock_api::RawMutex as _;
+use parking_lot::RawMutex;
 
 /// A synchronized SynchList.
 ///

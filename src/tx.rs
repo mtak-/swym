@@ -1,7 +1,7 @@
 //! Functionality for working with transactions.
 
 use crate::tcell::{Ref, TCell};
-use std::{
+use core::{
     cell::UnsafeCell,
     fmt::{self, Debug, Formatter},
     ops::{Deref, DerefMut},
@@ -237,14 +237,14 @@ pub(crate) struct AssertBorrow<T> {
 
 unsafe impl<T> Borrow for AssertBorrow<T> {}
 
-impl<T> std::borrow::Borrow<T> for AssertBorrow<T> {
+impl<T> core::borrow::Borrow<T> for AssertBorrow<T> {
     #[inline]
     fn borrow(&self) -> &T {
         &self.value
     }
 }
 
-impl<T> std::borrow::BorrowMut<T> for AssertBorrow<T> {
+impl<T> core::borrow::BorrowMut<T> for AssertBorrow<T> {
     #[inline]
     fn borrow_mut(&mut self) -> &mut T {
         &mut self.value

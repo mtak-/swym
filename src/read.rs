@@ -3,7 +3,7 @@ use crate::{
     tcell::{Ref, TCell},
     tx::{Borrow, Error, Ordering, Read},
 };
-use std::{
+use core::{
     fmt::{self, Debug, Formatter},
     marker::PhantomData,
     mem::{self, ManuallyDrop},

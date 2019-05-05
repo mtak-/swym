@@ -8,7 +8,7 @@ use crate::{
     rw::RwTx,
     tx::Error,
 };
-use std::fmt::{self, Debug, Formatter};
+use core::fmt::{self, Debug, Formatter};
 
 /// A handle to `swym`'s thread local state.
 ///

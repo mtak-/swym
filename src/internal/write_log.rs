@@ -7,8 +7,7 @@ use crate::{
     },
     stats,
 };
-
-use std::{
+use core::{
     mem::{self, ManuallyDrop},
     num::NonZeroUsize,
     ptr::{self, NonNull},

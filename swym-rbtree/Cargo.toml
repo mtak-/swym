@@ -8,9 +8,9 @@ publish = false
 [features]
 debug-alloc = ["jemallocator/debug"]
 default = []
+nightly = ["swym/nightly"]
 rtm = ["swym/rtm"]
 stats = ["swym/stats"]
-unstable = ["swym/unstable"]
 
 [dependencies]
 swym = { path = "../" }

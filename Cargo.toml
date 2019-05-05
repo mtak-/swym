@@ -19,9 +19,13 @@ rustc-args = ["-Ctarget-feature=+rtm"]
 [features]
 debug-alloc = ["jemallocator/debug"]
 default = []
+nightly = [
+    "crossbeam-utils/nightly",
+    "lock_api/nightly",
+    "parking_lot/nightly",
+]
 rtm = ["swym-htm/rtm"]
 stats = []
-unstable = []
 
 [dependencies]
 cfg-if = "0.1.7"

@@ -2,7 +2,7 @@ use crate::internal::{
     alloc::FVec,
     gc::quiesce::synch::{OwnedSynch, Synch},
 };
-use std::ptr::NonNull;
+use core::ptr::NonNull;
 
 /// A list of pointers to each threads Synch (sharded lock and current epoch)
 pub struct SynchList {

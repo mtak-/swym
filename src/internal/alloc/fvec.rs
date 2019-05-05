@@ -43,6 +43,10 @@ impl<T> FVec<T> {
 
     #[inline]
     pub fn next_n_pushes_allocates(&self, n: usize) -> bool {
+        debug_assert!(
+            self.len().checked_add(n).is_some(),
+            "overflow in `next_n_pushes_allocates`"
+        );
         self.capacity() < self.len() + n
     }
 
@@ -53,7 +57,7 @@ impl<T> FVec<T> {
         } else if cfg!(debug_assertions) {
             panic!("`push_unchecked` called when an allocation is required")
         } else {
-            std::hint::unreachable_unchecked()
+            core::hint::unreachable_unchecked()
         }
     }
 
@@ -64,7 +68,7 @@ impl<T> FVec<T> {
         } else if cfg!(debug_assertions) {
             panic!("`FVec::pop_unchecked` called on an empty FVec")
         } else {
-            std::hint::unreachable_unchecked()
+            core::hint::unreachable_unchecked()
         }
     }
 
@@ -75,7 +79,7 @@ impl<T> FVec<T> {
         } else if cfg!(debug_assertions) {
             panic!("providing an index >= self.len() is undefined behavior in release")
         } else {
-            std::hint::unreachable_unchecked()
+            core::hint::unreachable_unchecked()
         }
     }
 
@@ -115,7 +119,7 @@ impl<T> IntoIterator for FVec<T> {
 }
 
 impl<'a, T> IntoIterator for &'a FVec<T> {
-    type IntoIter = std::slice::Iter<'a, T>;
+    type IntoIter = core::slice::Iter<'a, T>;
     type Item = &'a T;
 
     #[inline]
@@ -125,7 +129,7 @@ impl<'a, T> IntoIterator for &'a FVec<T> {
 }
 
 impl<'a, T> IntoIterator for &'a mut FVec<T> {
-    type IntoIter = std::slice::IterMut<'a, T>;
+    type IntoIter = core::slice::IterMut<'a, T>;
     type Item = &'a mut T;
 
     #[inline]
@@ -144,4 +148,112 @@ macro_rules! fvec {
             v
         }
     };
+}
+
+#[cfg(test)]
+mod test {
+    use super::FVec;
+
+    #[test]
+    fn next_push_allocates() {
+        let v = FVec::<usize>::with_capacity(0);
+        assert!(v.next_push_allocates());
+        assert!(!v.next_n_pushes_allocates(0));
+        assert!(v.next_n_pushes_allocates(1));
+        assert!(v.next_n_pushes_allocates(100));
+
+        let mut v = FVec::<usize>::with_capacity(1);
+        assert!(!v.next_push_allocates());
+        assert!(!v.next_n_pushes_allocates(1));
+        assert!(v.next_n_pushes_allocates(2));
+        assert!(v.next_n_pushes_allocates(100));
+
+        v.push(0);
+        assert!(v.next_push_allocates());
+        assert!(!v.next_n_pushes_allocates(0));
+        assert!(v.next_n_pushes_allocates(1));
+        assert!(v.next_n_pushes_allocates(100));
+    }
+
+    #[test]
+    fn push_unchecked() {
+        let mut v = FVec::<usize>::with_capacity(1);
+        assert_eq!(v.len(), 0);
+        unsafe { v.push_unchecked(0) };
+        assert_eq!(v.len(), 1);
+    }
+
+    #[test]
+    fn pop_unchecked() {
+        let mut v = FVec::<usize>::with_capacity(1);
+        v.push(42);
+        assert_eq!(v.len(), 1);
+        let fourty_two = unsafe { v.pop_unchecked() };
+        assert_eq!(fourty_two, 42);
+        assert_eq!(v.len(), 0);
+    }
+
+    #[test]
+    fn swap_remove_unchecked() {
+        let mut v = FVec::<usize>::with_capacity(0);
+        v.push(42);
+        v.push(43);
+        v.push(44);
+        v.push(45);
+        unsafe {
+            let removed = v.swap_remove_unchecked(1);
+            assert_eq!(removed, 43);
+            assert_eq!(v[0], 42);
+            assert_eq!(v[1], 45);
+            assert_eq!(v[2], 44);
+
+            let removed = v.swap_remove_unchecked(2);
+            assert_eq!(removed, 44);
+            assert_eq!(v[0], 42);
+            assert_eq!(v[1], 45);
+        }
+    }
+
+    #[test]
+    fn back_unchecked() {
+        let mut v = FVec::<usize>::with_capacity(0);
+        v.push(42);
+        v.push(43);
+        v.push(44);
+        v.push(45);
+        unsafe {
+            assert_eq!(*v.back_unchecked(), 45);
+            v.pop();
+            assert_eq!(*v.back_unchecked(), 44);
+            v.pop();
+            assert_eq!(*v.back_unchecked(), 43);
+            v.pop();
+            assert_eq!(*v.back_unchecked(), 42);
+        }
+    }
+
+    #[test]
+    fn extend_unchecked() {
+        let mut v = FVec::<usize>::with_capacity(32);
+        unsafe {
+            v.extend_unchecked(&[42; 32]);
+            assert_eq!(v.len(), 32);
+            assert_eq!(v.capacity(), 32);
+            for x in &v {
+                assert_eq!(*x, 42);
+            }
+
+            v.extend_unchecked(&[42; 0]);
+            assert_eq!(v.len(), 32);
+            assert_eq!(v.capacity(), 32);
+            for x in &v {
+                assert_eq!(*x, 42);
+            }
+
+            v.clear();
+            v.extend_unchecked(&[42; 0]);
+            assert_eq!(v.len(), 0);
+            assert_eq!(v.capacity(), 32);
+        }
+    }
 }

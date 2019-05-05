@@ -19,17 +19,17 @@ cargo check --no-default-features --benches --bins --examples --tests
 cargo check --benches --bins --examples --tests
 cargo check --features "$RTM" --benches --bins --examples --tests
 cargo check --features stats --benches --bins --examples --tests
-cargo check --features unstable --benches --bins --examples --tests
+cargo check --features nightly --benches --bins --examples --tests
 cargo check --features stats,$RTM --benches --bins --examples --tests
-cargo check --features unstable,$RTM --benches --bins --examples --tests
-cargo check --features stats,unstable --benches --bins --examples --tests
-cargo check --features unstable,stats,$RTM --benches --bins --examples --tests
+cargo check --features nightly,$RTM --benches --bins --examples --tests
+cargo check --features stats,nightly --benches --bins --examples --tests
+cargo check --features nightly,stats,$RTM --benches --bins --examples --tests
 # debug-alloc shouldn't change anything
-cargo check --features debug-alloc,unstable,stats,$RTM --benches --bins --examples --tests
+cargo check --features debug-alloc,nightly,stats,$RTM --benches --bins --examples --tests
 
 # run tests
 ./x.py test
-RUST_TEST_THREADS=1 cargo test --features stats,unstable,$RTM --lib --tests
+RUST_TEST_THREADS=1 cargo test --features stats,nightly,$RTM --lib --tests
 
 # examples
 RUSTFLAGS="${RUSTFLAGS} ${ASAN_FLAG}" \
@@ -44,7 +44,7 @@ time cargo run \
 
 # benchmarks
 if [[ -z $RTM ]]; then
-    ./x.py bench --features unstable
+    ./x.py bench --features nightly
 else
-    ./x.py bench --features rtm,unstable
+    ./x.py bench --features rtm,nightly
 fi
