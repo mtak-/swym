@@ -554,7 +554,7 @@ mod test {
                             }),
                         )?;
                         x.set(tx, 3)?;
-                        Err(Error::RETRY)
+                        Err(Error::CONFLICT)
                     }
                 });
             });

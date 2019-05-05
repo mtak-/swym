@@ -203,7 +203,6 @@ impl<'tx, 'tcell> PinRef<'tx, 'tcell> {
 
     #[inline]
     pub fn park_validate(&self) -> bool {
-        // false
         // TODO: backup pin_epoch, and unpin, allowing GC to happen
         let logs = self.logs();
         let pin_epoch = self.pin_epoch();
