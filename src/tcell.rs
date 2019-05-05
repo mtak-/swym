@@ -456,12 +456,12 @@ mod test {
         thread_key,
         tx::{Error, _TValue},
     };
-    use crossbeam_utils::thread;
     use core::{
         mem::ManuallyDrop,
         ptr,
         sync::atomic::{AtomicBool, Ordering},
     };
+    use crossbeam_utils::thread;
 
     struct CustomUndo<T, F: FnOnce(T)> {
         value: ManuallyDrop<T>,
