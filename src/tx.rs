@@ -10,7 +10,6 @@ use core::{
 #[derive(PartialEq, Eq)]
 enum ErrorKind {
     Conflict,
-    Retry,
 }
 
 /// Error type indicating that the transaction has failed.
@@ -27,8 +26,7 @@ enum ErrorKind {
 /// [`ThreadKey::rw`]: ../thread_key/struct.ThreadKey.html#method.rw
 #[derive(PartialEq, Eq)]
 pub struct Error {
-    kind:     ErrorKind,
-    _private: (),
+    kind: ErrorKind,
 }
 
 impl Debug for Error {
@@ -46,41 +44,8 @@ impl<T> From<SetError<T>> for Error {
 }
 
 impl Error {
-    /// Error value requesting a retry of the current transaction.
-    ///
-    /// # Notes
-    ///
-    /// Returning `RETRY` to [`ThreadKey::read`] or [`ThreadKey::rw`] will immediately restart the
-    /// transaction. This can cause the thread to spin, hurting the performance of other
-    /// threads. In the future, the behavior of `RETRY` may change.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use swym::{tcell::TCell, thread_key, tx::Error};
-    ///
-    /// let thread_key = thread_key::get();
-    /// let locked = TCell::new(false);
-    ///
-    /// thread_key.rw(|tx| {
-    ///     if locked.get(tx, Default::default())? {
-    ///         Err(Error::RETRY)
-    ///     } else {
-    ///         Ok(locked.set(tx, true)?)
-    ///     }
-    /// })
-    /// ```
-    ///
-    /// [`ThreadKey::read`]: ../thread_key/struct.ThreadKey.html#method.read
-    /// [`ThreadKey::rw`]: ../thread_key/struct.ThreadKey.html#method.rw
-    pub const RETRY: Self = Error {
-        kind:     ErrorKind::Retry,
-        _private: (),
-    };
-
     pub(crate) const CONFLICT: Self = Error {
-        kind:     ErrorKind::Conflict,
-        _private: (),
+        kind: ErrorKind::Conflict,
     };
 }
 
@@ -114,6 +79,65 @@ impl<T> SetError<T> {
             error: self.error,
         }
     }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum InternalStatus {
+    Error(Error),
+    Retry,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct Status {
+    pub(crate) kind: InternalStatus,
+}
+
+impl From<Error> for Status {
+    #[inline]
+    fn from(rhs: Error) -> Self {
+        Status {
+            kind: InternalStatus::Error(rhs),
+        }
+    }
+}
+
+impl<T> From<SetError<T>> for Status {
+    #[inline]
+    fn from(set_error: SetError<T>) -> Self {
+        set_error.error.into()
+    }
+}
+
+impl Status {
+    /// `Status` value requesting a retry of the current transaction.
+    ///
+    /// # Notes
+    ///
+    /// Returning `RETRY` to [`ThreadKey::read`] or [`ThreadKey::rw`] will block the thread, until
+    /// another transaction successfully modifies a `TCell` in this transactions read set.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use swym::{tcell::TCell, thread_key, tx::Status};
+    ///
+    /// let thread_key = thread_key::get();
+    /// let locked = TCell::new(false);
+    ///
+    /// thread_key.rw(|tx| {
+    ///     if locked.get(tx, Default::default())? {
+    ///         Err(Status::RETRY)
+    ///     } else {
+    ///         Ok(locked.set(tx, true)?)
+    ///     }
+    /// })
+    /// ```
+    ///
+    /// [`ThreadKey::read`]: ../thread_key/struct.ThreadKey.html#method.read
+    /// [`ThreadKey::rw`]: ../thread_key/struct.ThreadKey.html#method.rw
+    pub const RETRY: Self = Status {
+        kind: InternalStatus::Retry,
+    };
 }
 
 /// Transactional memory orderings.

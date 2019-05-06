@@ -508,7 +508,7 @@ mod test {
                                 TRIGGERED.store(true, Ordering::Relaxed);
                             }),
                         )?;
-                        Err(Error::CONFLICT)
+                        Err(Error::CONFLICT.into())
                     }
                 });
             });
@@ -554,7 +554,7 @@ mod test {
                             }),
                         )?;
                         x.set(tx, 3)?;
-                        Err(Error::CONFLICT)
+                        Err(Error::CONFLICT.into())
                     }
                 });
             });

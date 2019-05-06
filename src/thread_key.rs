@@ -6,7 +6,7 @@ use crate::{
     internal::{phoenix_tls::Phoenix, thread::Thread},
     read::ReadTx,
     rw::RwTx,
-    tx::Error,
+    tx::Status,
 };
 use core::fmt::{self, Debug, Formatter};
 
@@ -49,7 +49,7 @@ impl ThreadKey {
     #[inline]
     pub fn read<'tcell, F, O>(&'tcell self, f: F) -> O
     where
-        F: FnMut(&ReadTx<'tcell>) -> Result<O, Error>,
+        F: FnMut(&ReadTx<'tcell>) -> Result<O, Status>,
     {
         self.try_read(f)
             .expect("nested transactions are not yet supported")
@@ -80,7 +80,7 @@ impl ThreadKey {
     #[inline]
     pub fn rw<'tcell, F, O>(&'tcell self, f: F) -> O
     where
-        F: FnMut(&mut RwTx<'tcell>) -> Result<O, Error>,
+        F: FnMut(&mut RwTx<'tcell>) -> Result<O, Status>,
     {
         self.try_rw(f)
             .expect("nested transactions are not yet supported")
@@ -109,7 +109,7 @@ impl ThreadKey {
     #[inline]
     pub fn try_read<'tcell, F, O>(&'tcell self, f: F) -> Result<O, TryReadErr>
     where
-        F: FnMut(&ReadTx<'tcell>) -> Result<O, Error>,
+        F: FnMut(&ReadTx<'tcell>) -> Result<O, Status>,
     {
         Ok(self
             .thread
@@ -145,7 +145,7 @@ impl ThreadKey {
     #[inline]
     pub fn try_rw<'tcell, F, O>(&'tcell self, f: F) -> Result<O, TryRwErr>
     where
-        F: FnMut(&mut RwTx<'tcell>) -> Result<O, Error>,
+        F: FnMut(&mut RwTx<'tcell>) -> Result<O, Status>,
     {
         Ok(self
             .thread

@@ -33,7 +33,7 @@
 //!     Ok(())
 //! });
 //! assert_eq!(b.into_inner(), 0);
-//! assert_eq!(thread_key.read(|tx| A.get(tx, Default::default())), 42);
+//! assert_eq!(thread_key.read(|tx| Ok(A.get(tx, Default::default())?)), 42);
 //! ```
 //!
 //! # Features

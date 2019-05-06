@@ -164,9 +164,10 @@ fn main() {
     t0.join().unwrap();
     t1.join().unwrap();
     let elems = thread_key::get().read(|tx| {
-        LIST.iter(tx)?
+        Ok(LIST
+            .iter(tx)?
             .map(|ok| ok.map(|ok| ok.0))
-            .collect::<Result<Vec<_>, _>>()
+            .collect::<Result<Vec<_>, _>>()?)
     });
     assert!(elems.is_empty());
     drop(elems);

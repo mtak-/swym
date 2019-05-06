@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 use swym::{
     tcell::TCell,
     thread_key,
-    tx::{Error, Ordering},
+    tx::{Ordering, Status},
 };
 
 const NUM_PHILOSOPHERS: usize = 5;
@@ -45,7 +45,7 @@ fn main() {
                             || right_fork.in_use.get(tx, Ordering::default())?
                         {
                             retry_count += 1;
-                            Err(Error::RETRY)
+                            Err(Status::RETRY)
                         } else {
                             left_fork.in_use.set(tx, true)?;
                             right_fork.in_use.set(tx, true)?;

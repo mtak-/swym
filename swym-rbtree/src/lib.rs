@@ -7,7 +7,7 @@ use crate::base::{Location, RBNode, RBRoot, VacantLocation};
 use swym::{
     tcell::{Ref, TCell, View},
     thread_key,
-    tx::{Borrow, Error, Ordering, Read, SetError},
+    tx::{Borrow, Error, Ordering, Read, SetError, Status},
     RwTx,
 };
 
@@ -171,7 +171,7 @@ impl<K: Send + Sync + Ord + 'static, V: Borrow + Send + Sync + 'static> RBTreeMa
 
     pub fn atomic<F, R>(&self, mut f: F) -> R
     where
-        F: for<'tx, 'tcell> FnMut(RBTreeWith<'tx, 'tcell, K, V>) -> Result<R, Error>,
+        F: for<'tx, 'tcell> FnMut(RBTreeWith<'tx, 'tcell, K, V>) -> Result<R, Status>,
     {
         thread_key::get().rw(move |tx| f(self.with(tx)))
     }
@@ -181,7 +181,7 @@ impl<K: Send + Sync + Ord + 'static, V: Borrow + Send + Sync + 'static> RBTreeMa
         K: std::borrow::Borrow<Q>,
         Q: Ord + ?Sized,
     {
-        thread_key::get().read(move |tx| self.raw.contains_key(tx, key))
+        thread_key::get().read(move |tx| Ok(self.raw.contains_key(tx, key)?))
     }
 
     pub fn get<Q>(&self, key: &Q) -> Option<V>
@@ -202,7 +202,7 @@ impl<K: Send + Sync + Ord + 'static, V: Borrow + Send + Sync + 'static> RBTreeMa
         V: Clone,
     {
         // todo: remove these clones
-        self.atomic(move |mut tree| tree.insert(key.clone(), value.clone()))
+        self.atomic(move |mut tree| Ok(tree.insert(key.clone(), value.clone())?))
     }
 
     pub fn remove<Q>(&self, key: &Q) -> Option<V>

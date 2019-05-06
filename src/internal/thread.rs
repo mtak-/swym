@@ -9,7 +9,7 @@ use crate::{
     read::ReadTx,
     rw::RwTx,
     stats,
-    tx::Error,
+    tx::{Error, InternalStatus, Status},
 };
 use core::{
     cell::UnsafeCell,
@@ -333,7 +333,7 @@ impl<'tcell> Pin<'tcell> {
     #[inline]
     pub fn run_read<F, O>(mut self, mut f: F) -> O
     where
-        F: FnMut(&ReadTx<'tcell>) -> Result<O, Error>,
+        F: FnMut(&ReadTx<'tcell>) -> Result<O, Status>,
     {
         let mut retries = 0;
         let mut exceeded_backoff = 0;
@@ -342,8 +342,10 @@ impl<'tcell> Pin<'tcell> {
             let r = f(ReadTx::new(&mut self));
             match r {
                 Ok(o) => break o,
-                Err(Error::CONFLICT) => {}
-                Err(Error::RETRY) => {}
+                Err(Status {
+                    kind: InternalStatus::Error(Error::CONFLICT),
+                }) => {}
+                Err(Status::RETRY) => {}
             }
             retries += 1;
             self.snooze_repin(&backoff);
@@ -360,7 +362,7 @@ impl<'tcell> Pin<'tcell> {
     #[inline]
     pub fn run_rw<F, O>(mut self, mut f: F) -> O
     where
-        F: FnMut(&mut RwTx<'tcell>) -> Result<O, Error>,
+        F: FnMut(&mut RwTx<'tcell>) -> Result<O, Status>,
     {
         let mut eager_retries = 0;
         let mut commit_retries = 0;
@@ -380,10 +382,12 @@ impl<'tcell> Pin<'tcell> {
                         }
                         commit_retries += 1;
                     }
-                    Err(Error::CONFLICT) => {
+                    Err(Status {
+                        kind: InternalStatus::Error(Error::CONFLICT),
+                    }) => {
                         eager_retries += 1;
                     }
-                    Err(Error::RETRY) => {
+                    Err(Status::RETRY) => {
                         crate::internal::parking::park(&pin);
                         backoff.reset();
                         // no need to snooze
