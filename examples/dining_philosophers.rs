@@ -53,7 +53,7 @@ fn main() {
                         }
                     });
 
-                    println!("om nom nom {}", i);
+                    // println!("om nom nom {}", i);
                     std::thread::sleep(std::time::Duration::from_micros(EAT_TIME_MICROS));
 
                     thread_key.rw(|tx| {
