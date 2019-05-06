@@ -39,7 +39,7 @@ fn main() {
             scope.spawn(move |_| {
                 let mut retry_count = 0;
                 let thread_key = thread_key::get();
-                for i in 0..FOOD_ITERATIONS {
+                for _i in 0..FOOD_ITERATIONS {
                     thread_key.rw(|tx| {
                         if left_fork.in_use.get(tx, Ordering::default())?
                             || right_fork.in_use.get(tx, Ordering::default())?
@@ -53,7 +53,7 @@ fn main() {
                         }
                     });
 
-                    // println!("om nom nom {}", i);
+                    // println!("om nom nom {}", _i);
                     std::thread::sleep(std::time::Duration::from_micros(EAT_TIME_MICROS));
 
                     thread_key.rw(|tx| {
