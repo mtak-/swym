@@ -244,40 +244,13 @@ impl<'tx, 'tcell> PinMutRef<'tx, 'tcell> {
     }
 
     #[inline]
-    pub fn park_validate(&self) -> bool {
-        // TODO: backup pin_epoch, and unpin, allowing GC to happen
-        let logs = self.logs();
-        let pin_epoch = self.pin_epoch();
-        if logs.read_log.park_reads(pin_epoch) {
-            if logs.write_log.park_writes(pin_epoch) {
-                true
-            } else {
-                logs.read_log.unpark_reads();
-                false
-            }
-        } else {
-            false
-        }
-    }
-
-    #[inline]
-    pub fn parkable(&self) -> bool {
-        let logs = self.logs();
-        !logs.read_log.is_empty() || !logs.write_log.is_empty()
-    }
-
-    #[inline]
-    pub unsafe fn should_unpark(token: usize) -> bool {
-        let target = Self {
+    pub unsafe fn from_park_token(token: usize) -> Self {
+        PinMutRef {
             pin_ref: PinRef {
                 thread:  &*(token as *const Thread),
                 phantom: PhantomData,
             },
-        };
-        let logs = target.logs();
-        // TODO: use backup pin_epoch
-        let pin_epoch = target.pin_epoch();
-        !logs.read_log.validate_reads(pin_epoch) || !logs.write_log.validate_writes(pin_epoch)
+        }
     }
 }
 
@@ -380,11 +353,11 @@ impl<'tcell> Pin<'tcell> {
         let result = loop {
             self.logs().validate_start_state();
             {
-                let mut pin = unsafe { PinRw::new(&mut self) };
-                let r = f(RwTx::new(&mut pin));
+                let mut pin_rw = unsafe { PinRw::new(&mut self) };
+                let r = f(RwTx::new(&mut pin_rw));
                 match r {
                     Ok(o) => {
-                        if likely!(pin.commit()) {
+                        if likely!(pin_rw.commit()) {
                             self.logs().validate_start_state();
                             break o;
                         }
@@ -396,9 +369,9 @@ impl<'tcell> Pin<'tcell> {
                         eager_retries += 1;
                     }
                     Err(Status::RETRY) => {
-                        crate::internal::parking::park(&pin);
-                        backoff.reset();
-                        // no need to snooze
+                        crate::internal::parking::park(pin_rw.reborrow(), &backoff);
+                        drop(pin_rw);
+                        self.repin();
                         continue;
                     }
                 }
