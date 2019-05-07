@@ -327,7 +327,7 @@ impl EpochLock {
 
     /// Attempts to clear the unpark bit.
     #[inline]
-    pub fn tag_parked(&self, max_expected: QuiesceEpoch) -> bool {
+    pub fn try_clear_unpark_bit(&self, max_expected: QuiesceEpoch) -> bool {
         debug_assert!(
             max_expected.is_active(),
             "invalid max_expected epoch sent to `EpochLock::try_lock`"
@@ -352,7 +352,7 @@ impl EpochLock {
 
     /// Set the unpark bit.
     #[inline]
-    pub fn untag_parked(&self) {
+    pub fn set_unpark_bit(&self) {
         drop(self.0.fetch_or(UNPARK_BIT, Relaxed));
     }
 }

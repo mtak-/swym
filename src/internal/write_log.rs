@@ -385,7 +385,7 @@ impl<'tcell> WriteLog<'tcell> {
     #[inline]
     pub fn park_writes(&self, pin_epoch: QuiesceEpoch) -> bool {
         for epoch_lock in self.epoch_locks() {
-            if !epoch_lock.tag_parked(pin_epoch) {
+            if !epoch_lock.try_clear_unpark_bit(pin_epoch) {
                 self.unpark_until(epoch_lock);
                 return false;
             }
@@ -396,7 +396,7 @@ impl<'tcell> WriteLog<'tcell> {
     #[inline]
     pub fn unpark_until(&self, end: &EpochLock) {
         for epoch_lock in self.epoch_locks().take_while(move |&e| !ptr::eq(e, end)) {
-            epoch_lock.untag_parked();
+            epoch_lock.set_unpark_bit();
         }
     }
 }

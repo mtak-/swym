@@ -119,7 +119,7 @@ impl<'tcell> ReadLog<'tcell> {
     #[inline]
     pub fn park_reads(&self, pin_epoch: QuiesceEpoch) -> bool {
         for logged_read in self.iter() {
-            if !logged_read.current_epoch.tag_parked(pin_epoch) {
+            if !logged_read.current_epoch.try_clear_unpark_bit(pin_epoch) {
                 self.unpark_reads_until(logged_read);
                 return false;
             }
@@ -129,13 +129,13 @@ impl<'tcell> ReadLog<'tcell> {
 
     fn unpark_reads_until(&self, end: &TCellErased) {
         for logged_read in self.iter().take_while(|read| !ptr::eq(*read, end)) {
-            logged_read.current_epoch.untag_parked()
+            logged_read.current_epoch.set_unpark_bit()
         }
     }
 
     pub fn unpark_reads(&self) {
         for logged_read in self.iter() {
-            logged_read.current_epoch.untag_parked()
+            logged_read.current_epoch.set_unpark_bit()
         }
     }
 }
