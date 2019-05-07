@@ -571,7 +571,7 @@ impl<'tx, 'tcell> PinRw<'tx, 'tcell> {
             //
             // TODO: would commit algorithm be faster with a single global lock, or lock striping?
             // per object locking causes a cmpxchg per entry
-            if let Some(park_status) = self.logs().write_log.try_lock_entries(self.pin_epoch()) {
+            if let Some(park_status) = self.logs().write_log.try_lock(self.pin_epoch()) {
                 self.write_log_lock_success(park_status)
             } else {
                 self.write_log_lock_failure()
@@ -627,7 +627,7 @@ impl<'tx, 'tcell> PinRw<'tx, 'tcell> {
     #[cold]
     unsafe fn validation_failure(self) -> bool {
         // on fail unlock the write set
-        self.logs().write_log.unlock_entries();
+        self.logs().write_log.unlock();
         false
     }
 }
