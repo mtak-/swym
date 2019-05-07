@@ -336,7 +336,6 @@ impl<'tcell> WriteLog<'tcell> {
                     }
                     return None;
                 }
-
             }
         }
         Some(status)
