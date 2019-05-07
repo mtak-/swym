@@ -42,6 +42,10 @@ time cargo run \
     --features stats,$RTM \
     --example dining_philosophers
 
+time cargo run \
+    --features stats,$RTM \
+    --example tlock
+
 # benchmarks
 if [[ -z $RTM ]]; then
     ./x.py bench --features nightly
