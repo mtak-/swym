@@ -1,7 +1,4 @@
-use crate::internal::{
-    epoch::EPOCH_CLOCK,
-    thread::{PinMutRef, PinRef},
-};
+use crate::internal::{epoch::EPOCH_CLOCK, thread::PinMutRef};
 use parking_lot_core::{FilterOp, ParkResult, ParkToken, DEFAULT_UNPARK_TOKEN};
 
 #[inline]
@@ -20,6 +17,7 @@ pub fn park<'tx, 'tcell>(pin: &PinMutRef<'tx, 'tcell>) {
          in release"
     );
     // TODO: stats
+    // TODO: Attempt htm tag_parked
     unsafe {
         let key = key();
         let park_token = ParkToken(pin.park_token());
@@ -44,7 +42,7 @@ pub fn unpark() {
     let key = key();
     unsafe {
         let filter = move |ParkToken(token)| {
-            if PinRef::should_unpark(token) {
+            if PinMutRef::should_unpark(token) {
                 FilterOp::Unpark
             } else {
                 FilterOp::Skip

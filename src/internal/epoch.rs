@@ -44,13 +44,17 @@ const INACTIVE_EPOCH: Storage = !0;
 /// 1 at that bit indicates the lock is held.
 const LOCK_BIT: Storage = 1 << (mem::size_of::<Storage>() as Storage * 8 - 1);
 
-/// The beginning of time is the value 1.
-const FIRST: Storage = 1;
+/// The beginning of time.
+const FIRST: Storage = TICK_SIZE + UNPARK_BIT;
 
 /// The smallest difference between points on the EpochClock.
 ///
-/// Two is used because the first bit of EpochLock is reserved as the PARK_BIT
-const TICK_SIZE: Storage = 1;
+/// Two is used because the first bit of EpochLock is reserved as the UNPARK_BIT
+const TICK_SIZE: Storage = 1 << 1;
+
+/// The least significant bit is set when _no_ threads are parked waiting for modifications to an
+/// EpochLock.
+const UNPARK_BIT: Storage = 1 << 0;
 
 #[inline]
 const fn lock_bit_set(e: Storage) -> bool {
@@ -65,6 +69,16 @@ const fn as_unlocked(e: Storage) -> Storage {
 #[inline]
 const fn toggle_lock_bit(e: Storage) -> Storage {
     e ^ LOCK_BIT
+}
+
+#[inline]
+const fn unpark_bit_set(e: Storage) -> bool {
+    e & UNPARK_BIT != 0
+}
+
+#[inline]
+const fn clear_unpark_bit(e: Storage) -> Storage {
+    e & !UNPARK_BIT
 }
 
 /// NonZero representation of epochs. This is assumed to never have the lock bit set unless it
@@ -162,7 +176,24 @@ impl QuiesceEpoch {
     /// So this should only be called on epochs returned from `fetch_and_tick`.
     #[inline]
     pub unsafe fn next(self) -> Self {
-        QuiesceEpoch::new_unchecked(self.0.get() + 1)
+        QuiesceEpoch::new_unchecked(self.0.get() + TICK_SIZE)
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum ParkStatus {
+    NoParked,
+    HasParked,
+}
+
+impl ParkStatus {
+    #[inline]
+    pub fn merge(self, rhs: ParkStatus) -> ParkStatus {
+        match (self, rhs) {
+            (ParkStatus::HasParked, _) => ParkStatus::HasParked,
+            (_, ParkStatus::HasParked) => ParkStatus::HasParked,
+            _ => ParkStatus::NoParked,
+        }
     }
 }
 
@@ -213,13 +244,13 @@ impl EpochLock {
     /// This is allowed to fail spuriously.
     #[inline]
     #[must_use]
-    pub fn try_lock(&self, max_expected: QuiesceEpoch) -> bool {
+    pub fn try_lock(&self, max_expected: QuiesceEpoch) -> Option<ParkStatus> {
         debug_assert!(
             max_expected.is_active(),
             "invalid max_expected epoch sent to `EpochLock::try_lock`"
         );
         let actual = self.load_raw(Relaxed); // could be a torn read, if MM permitted it
-        likely!(max_expected.read_write_valid(actual))
+        let success = likely!(max_expected.read_write_valid(actual))
             && likely!({
                 debug_assert!(
                     !lock_bit_set(actual.get()),
@@ -233,15 +264,29 @@ impl EpochLock {
                         Relaxed,
                     )
                     .is_ok()
+            });
+        if success {
+            Some(if unpark_bit_set(actual.get()) {
+                ParkStatus::NoParked
+            } else {
+                ParkStatus::HasParked
             })
+        } else {
+            None
+        }
     }
 
     /// Attempts to acquire the lock, aborting the transaction on failure.
     #[inline]
-    pub fn try_lock_htm(&self, htx: &HardwareTx, max_expected: QuiesceEpoch) {
+    pub fn try_lock_htm(&self, htx: &HardwareTx, max_expected: QuiesceEpoch) -> ParkStatus {
         let actual = self.0.get(htx);
         if likely!(max_expected.read_write_valid_(actual)) {
             self.0.set(htx, toggle_lock_bit(actual));
+            if unpark_bit_set(actual) {
+                ParkStatus::NoParked
+            } else {
+                ParkStatus::HasParked
+            }
         } else {
             htx.abort()
         }
@@ -278,6 +323,37 @@ impl EpochLock {
             "lock bit unexpectedly not set on `EpochLock`"
         );
         self.0.store(toggle_lock_bit(prev.get()), Relaxed);
+    }
+
+    /// Attempts to clear the unpark bit.
+    #[inline]
+    pub fn tag_parked(&self, max_expected: QuiesceEpoch) -> bool {
+        debug_assert!(
+            max_expected.is_active(),
+            "invalid max_expected epoch sent to `EpochLock::try_lock`"
+        );
+        let actual = self.load_raw(Relaxed);
+        likely!(max_expected.read_write_valid(actual))
+            && likely!({
+                debug_assert!(
+                    !lock_bit_set(actual.get()),
+                    "lock bit unexpectedly set on `EpochLock`"
+                );
+                self.0
+                    .compare_exchange(
+                        actual.get(),
+                        clear_unpark_bit(actual.get()),
+                        Relaxed,
+                        Relaxed,
+                    )
+                    .is_ok()
+            })
+    }
+
+    /// Set the unpark bit.
+    #[inline]
+    pub fn untag_parked(&self) {
+        drop(self.0.fetch_or(UNPARK_BIT, Relaxed));
     }
 }
 
@@ -414,9 +490,10 @@ impl EpochClock {
     pub fn fetch_and_tick(&self) -> QuiesceEpoch {
         // To calculate how long overflow will take:
         // - MSB is reserved for the lock bit
-        // - so on 64 bit platforms we have 2^63 * fetch_add_time(ns) / 1000000000(ns/s) /
+        // - LSB is reserved for the unpark bit
+        // - so on 64 bit platforms we have 2^62 * fetch_add_time(ns) / 1000000000(ns/s) /
         //   60(sec/min) / 60(min/hr) / 24(hr/day) / 365(day/yr)
-        //  for a fetch_add time of 1ns (actually benched at around 5ns), we get 292.46yrs
+        //  for a fetch_add time of 1ns (actually benched at around 5ns), we get 146.23yrs
         //  on 32 bit platforms we get just over 1sec until overflow (fetch_add=1ns)
         //
         // When this overflow happens, the lock bit becomes set for additional epochs causing
@@ -431,7 +508,7 @@ impl EpochClock {
 
         // Technically, this can wrap to 0 making this UB.
         // - EpochClock is at `end_of_time` - 0x7FFF_FFFF_FFFF_FFFF
-        // - Now 2^63 + 1 (0x1000_0000_0000_0001) or more threads start read write transactions.
+        // - Now 2^63 + 2^62 + 1 or more threads start read write transactions.
         // - ...
         // - They all succeed and commit, causing epoch clock to overflow.
         //

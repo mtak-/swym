@@ -1,6 +1,6 @@
 use crate::{
     internal::{
-        epoch::{QuiesceEpoch, EPOCH_CLOCK},
+        epoch::{ParkStatus, QuiesceEpoch, EPOCH_CLOCK},
         gc::{GlobalSynchList, OwnedSynch, ThreadGarbage},
         phoenix_tls::PhoenixTarget,
         read_log::ReadLog,
@@ -195,39 +195,6 @@ impl<'tx, 'tcell> PinRef<'tx, 'tcell> {
         );
         pin_epoch
     }
-
-    #[inline]
-    pub fn park_token(&self) -> usize {
-        self.thread as *const Thread as usize
-    }
-
-    #[inline]
-    pub fn park_validate(&self) -> bool {
-        // TODO: backup pin_epoch, and unpin, allowing GC to happen
-        let logs = self.logs();
-        let pin_epoch = self.pin_epoch();
-        logs.read_log.validate_reads(pin_epoch) && logs.write_log.validate_writes(pin_epoch)
-    }
-
-    #[inline]
-    pub fn parkable(&self) -> bool {
-        let logs = self.logs();
-        !logs.read_log.is_empty() || !logs.write_log.is_empty()
-    }
-}
-
-impl PinRef<'_, '_> {
-    #[inline]
-    pub unsafe fn should_unpark(token: usize) -> bool {
-        let target = Self {
-            thread:  &*(token as *const Thread),
-            phantom: PhantomData,
-        };
-        let logs = target.logs();
-        // TODO: use backup pin_epoch
-        let pin_epoch = target.pin_epoch();
-        !logs.read_log.validate_reads(pin_epoch) || !logs.write_log.validate_writes(pin_epoch)
-    }
 }
 
 pub struct PinMutRef<'tx, 'tcell> {
@@ -269,6 +236,48 @@ impl<'tx, 'tcell> PinMutRef<'tx, 'tcell> {
         let synch = &self.pin_ref.thread.synch;
         let logs = &mut *(self.pin_ref.thread.logs.get() as *const _ as *mut _);
         (synch, logs)
+    }
+
+    #[inline]
+    pub fn park_token(&self) -> usize {
+        self.thread as *const Thread as usize
+    }
+
+    #[inline]
+    pub fn park_validate(&self) -> bool {
+        // TODO: backup pin_epoch, and unpin, allowing GC to happen
+        let logs = self.logs();
+        let pin_epoch = self.pin_epoch();
+        if logs.read_log.park_reads(pin_epoch) {
+            if logs.write_log.park_writes(pin_epoch) {
+                true
+            } else {
+                logs.read_log.unpark_reads();
+                false
+            }
+        } else {
+            false
+        }
+    }
+
+    #[inline]
+    pub fn parkable(&self) -> bool {
+        let logs = self.logs();
+        !logs.read_log.is_empty() || !logs.write_log.is_empty()
+    }
+
+    #[inline]
+    pub unsafe fn should_unpark(token: usize) -> bool {
+        let target = Self {
+            pin_ref: PinRef {
+                thread:  &*(token as *const Thread),
+                phantom: PhantomData,
+            },
+        };
+        let logs = target.logs();
+        // TODO: use backup pin_epoch
+        let pin_epoch = target.pin_epoch();
+        !logs.read_log.validate_reads(pin_epoch) || !logs.write_log.validate_writes(pin_epoch)
     }
 }
 
@@ -377,7 +386,6 @@ impl<'tcell> Pin<'tcell> {
                     Ok(o) => {
                         if likely!(pin.commit()) {
                             self.logs().validate_start_state();
-                            crate::internal::parking::unpark();
                             break o;
                         }
                         commit_retries += 1;
@@ -531,7 +539,7 @@ impl<'tx, 'tcell> PinRw<'tx, 'tcell> {
             let (synch, logs) = self.into_inner();
             let current = synch.current_epoch();
             logs.read_log.validate_reads_htm(current, &htx);
-            logs.write_log.write_and_lock_htm(&htx, current);
+            let park_status = logs.write_log.write_and_lock_htm(&htx, current);
 
             drop(htx);
 
@@ -540,6 +548,9 @@ impl<'tx, 'tcell> PinRw<'tx, 'tcell> {
 
             logs.read_log.clear();
             logs.write_log.clear_no_drop();
+            if unlikely!(park_status == ParkStatus::HasParked) {
+                crate::internal::parking::unpark();
+            }
             logs.garbage.seal_with_epoch(synch, sync_epoch);
 
             true
@@ -560,8 +571,8 @@ impl<'tx, 'tcell> PinRw<'tx, 'tcell> {
             //
             // TODO: would commit algorithm be faster with a single global lock, or lock striping?
             // per object locking causes a cmpxchg per entry
-            if likely!(self.logs().write_log.try_lock_entries(self.pin_epoch())) {
-                self.write_log_lock_success()
+            if let Some(park_status) = self.logs().write_log.try_lock_entries(self.pin_epoch()) {
+                self.write_log_lock_success(park_status)
             } else {
                 self.write_log_lock_failure()
             }
@@ -575,19 +586,19 @@ impl<'tx, 'tcell> PinRw<'tx, 'tcell> {
     }
 
     #[inline]
-    unsafe fn write_log_lock_success(self) -> bool {
+    unsafe fn write_log_lock_success(self, park_status: ParkStatus) -> bool {
         // after locking the write set, ensure nothing in the read set has been modified.
         if likely!(self.logs().read_log.validate_reads(self.pin_epoch())) {
             // The transaction can no longer fail, so proceed to modify and publish the TCells in
             // the write set.
-            self.validation_success()
+            self.validation_success(park_status)
         } else {
             self.validation_failure()
         }
     }
 
     #[inline]
-    unsafe fn validation_success(self) -> bool {
+    unsafe fn validation_success(self, park_status: ParkStatus) -> bool {
         let (synch, logs) = self.into_inner();
 
         // The writes must be performed before the EPOCH_CLOCK is tick'ed.
@@ -604,6 +615,9 @@ impl<'tx, 'tcell> PinRw<'tx, 'tcell> {
         logs.write_log.publish(sync_epoch.next());
         logs.read_log.clear();
         logs.write_log.clear_no_drop();
+        if unlikely!(park_status == ParkStatus::HasParked) {
+            crate::internal::parking::unpark();
+        }
         logs.garbage.seal_with_epoch(synch, sync_epoch);
 
         true

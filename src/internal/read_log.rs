@@ -7,6 +7,7 @@ use crate::{
     internal::{alloc::FVec, epoch::QuiesceEpoch, tcell_erased::TCellErased},
     stats,
 };
+use core::ptr;
 use swym_htm::HardwareTx;
 
 const READ_CAPACITY: usize = 1024;
@@ -112,6 +113,29 @@ impl<'tcell> ReadLog<'tcell> {
             if unlikely!(!pin_epoch.read_write_valid_lockable(&logged_read.current_epoch)) {
                 htm.abort()
             }
+        }
+    }
+
+    #[inline]
+    pub fn park_reads(&self, pin_epoch: QuiesceEpoch) -> bool {
+        for logged_read in self.iter() {
+            if !logged_read.current_epoch.tag_parked(pin_epoch) {
+                self.unpark_reads_until(logged_read);
+                return false;
+            }
+        }
+        true
+    }
+
+    fn unpark_reads_until(&self, end: &TCellErased) {
+        for logged_read in self.iter().take_while(|read| !ptr::eq(*read, end)) {
+            logged_read.current_epoch.untag_parked()
+        }
+    }
+
+    pub fn unpark_reads(&self) {
+        for logged_read in self.iter() {
+            logged_read.current_epoch.untag_parked()
         }
     }
 }

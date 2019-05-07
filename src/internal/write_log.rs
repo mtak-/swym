@@ -1,7 +1,7 @@
 use crate::{
     internal::{
         alloc::dyn_vec::{DynElemMut, TraitObject},
-        epoch::QuiesceEpoch,
+        epoch::{ParkStatus, QuiesceEpoch},
         tcell_erased::TCellErased,
         usize_aligned::ForcedUsizeAligned,
     },
@@ -110,18 +110,18 @@ impl<'tcell> dyn WriteEntry + 'tcell {
 
     #[inline]
     #[must_use]
-    pub fn try_lock(&self, pin_epoch: QuiesceEpoch) -> bool {
+    pub fn try_lock(&self, pin_epoch: QuiesceEpoch) -> Option<ParkStatus> {
         match self.tcell() {
             Some(tcell) => tcell.current_epoch.try_lock(pin_epoch),
-            None => true,
+            None => Some(ParkStatus::NoParked),
         }
     }
 
     #[inline]
-    pub fn try_lock_htm(&self, htx: &HardwareTx, pin_epoch: QuiesceEpoch) {
+    pub fn try_lock_htm(&self, htx: &HardwareTx, pin_epoch: QuiesceEpoch) -> ParkStatus {
         match self.tcell() {
             Some(tcell) => tcell.current_epoch.try_lock_htm(htx, pin_epoch),
-            None => {}
+            None => ParkStatus::NoParked,
         }
     }
 
@@ -160,6 +160,22 @@ impl<'tcell> dyn WriteEntry + 'tcell {
     pub unsafe fn publish(&self, publish_epoch: QuiesceEpoch) {
         match self.tcell() {
             Some(tcell) => tcell.current_epoch.unlock_publish(publish_epoch),
+            None => {}
+        }
+    }
+
+    #[inline]
+    pub fn park_write(&self, pin_epoch: QuiesceEpoch) -> bool {
+        match self.tcell() {
+            Some(tcell) => tcell.current_epoch.tag_parked(pin_epoch),
+            None => true,
+        }
+    }
+
+    #[inline]
+    pub fn unpark_write(&self) {
+        match self.tcell() {
+            Some(tcell) => tcell.current_epoch.untag_parked(),
             None => {}
         }
     }
@@ -351,26 +367,33 @@ impl<'tcell> WriteLog<'tcell> {
 
     #[must_use]
     #[inline]
-    pub fn try_lock_entries(&self, pin_epoch: QuiesceEpoch) -> bool {
+    pub fn try_lock_entries(&self, pin_epoch: QuiesceEpoch) -> Option<ParkStatus> {
         debug_assert!(!self.is_empty(), "attempt to lock empty write set");
 
+        let mut status = ParkStatus::NoParked;
         for entry in &self.data {
-            if unlikely!(!entry.try_lock(pin_epoch)) {
-                unsafe {
-                    self.unlock_entries_until(entry);
+            match entry.try_lock(pin_epoch) {
+                Some(cur_status) => status = status.merge(cur_status),
+                None => {
+                    unsafe {
+                        self.unlock_entries_until(entry);
+                    }
+                    return None;
                 }
-                return false;
+
             }
         }
-        true
+        Some(status)
     }
 
     #[inline]
-    pub fn write_and_lock_htm(&self, htx: &HardwareTx, pin_epoch: QuiesceEpoch) {
+    pub fn write_and_lock_htm(&self, htx: &HardwareTx, pin_epoch: QuiesceEpoch) -> ParkStatus {
+        let mut status = ParkStatus::NoParked;
         for entry in &self.data {
             unsafe { entry.perform_write() };
-            entry.try_lock_htm(htx, pin_epoch);
+            status = status.merge(entry.try_lock_htm(htx, pin_epoch));
         }
+        status
     }
 
     #[inline(never)]
@@ -401,6 +424,24 @@ impl<'tcell> WriteLog<'tcell> {
     pub unsafe fn publish(&self, publish_epoch: QuiesceEpoch) {
         for entry in &self.data {
             entry.publish(publish_epoch);
+        }
+    }
+
+    #[inline]
+    pub fn park_writes(&self, pin_epoch: QuiesceEpoch) -> bool {
+        for entry in &self.data {
+            if !entry.park_write(pin_epoch) {
+                self.unpark_entries_until(entry);
+                return false;
+            }
+        }
+        true
+    }
+
+    #[inline]
+    pub fn unpark_entries_until(&self, end: &dyn WriteEntry) {
+        for entry in self.data.iter().take_while(move |&e| !ptr::eq(e, end)) {
+            entry.unpark_write();
         }
     }
 }
