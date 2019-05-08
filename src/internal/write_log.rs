@@ -188,6 +188,13 @@ impl<'tcell> WriteLog<'tcell> {
     }
 
     #[inline]
+    pub unsafe fn drop_writes(&mut self) {
+        for mut elem in self.data.iter_mut() {
+            ptr::drop_in_place::<dyn WriteEntry>(&mut *elem)
+        }
+    }
+
+    #[inline]
     pub fn is_empty(&self) -> bool {
         let empty = self.filter == 0;
         debug_assert_eq!(

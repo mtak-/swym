@@ -18,7 +18,7 @@ use core::{
     mem,
     ops::{Deref, DerefMut},
     ptr,
-    sync::atomic::Ordering::Release,
+    sync::atomic::Ordering::{Relaxed, Release},
 };
 use crossbeam_utils::Backoff;
 use swym_htm::HardwareTx;
@@ -237,21 +237,6 @@ impl<'tx, 'tcell> PinMutRef<'tx, 'tcell> {
         let logs = &mut *(self.pin_ref.thread.logs.get() as *const _ as *mut _);
         (synch, logs)
     }
-
-    #[inline]
-    pub fn park_token(&self) -> usize {
-        self.thread as *const Thread as usize
-    }
-
-    #[inline]
-    pub unsafe fn from_park_token(token: usize) -> Self {
-        PinMutRef {
-            pin_ref: PinRef {
-                thread:  &*(token as *const Thread),
-                phantom: PhantomData,
-            },
-        }
-    }
 }
 
 pub struct Pin<'tcell> {
@@ -369,8 +354,7 @@ impl<'tcell> Pin<'tcell> {
                         eager_retries += 1;
                     }
                     Err(Status::RETRY) => {
-                        crate::internal::parking::park(pin_rw.reborrow(), &backoff);
-                        drop(pin_rw);
+                        crate::internal::parking::park(pin_rw, &backoff);
                         self.repin();
                         continue;
                     }
@@ -602,5 +586,66 @@ impl<'tx, 'tcell> PinRw<'tx, 'tcell> {
         // on fail unlock the write set
         self.logs().write_log.unlock();
         false
+    }
+
+    pub fn parked(self) -> ParkPinMutRef<'tx, 'tcell> {
+        ParkPinMutRef::new(self)
+    }
+}
+
+pub struct ParkPinMutRef<'tx, 'tcell> {
+    logs:          &'tx mut Logs<'tcell>,
+    pub pin_epoch: QuiesceEpoch,
+    synch:         &'tx OwnedSynch,
+}
+
+impl<'tx, 'tcell> Drop for ParkPinMutRef<'tx, 'tcell> {
+    fn drop(&mut self) {
+        self.logs.read_log.clear();
+        self.logs.write_log.clear_no_drop();
+        let now = EPOCH_CLOCK.now();
+        if let Some(now) = now {
+            self.synch.pin(now, Release);
+        } else {
+            abort!()
+        }
+    }
+}
+
+impl<'tx, 'tcell> Deref for ParkPinMutRef<'tx, 'tcell> {
+    type Target = Logs<'tcell>;
+
+    #[inline]
+    fn deref(&self) -> &Logs<'tcell> {
+        self.logs
+    }
+}
+
+impl<'tx, 'tcell> ParkPinMutRef<'tx, 'tcell> {
+    fn new(pin_rw: PinRw<'tx, 'tcell>) -> Self {
+        let (synch, logs) = unsafe { pin_rw.into_inner() };
+        let pin_epoch = synch.current_epoch();
+
+        // Before doing anything that can panic, create our `Drop` type that will cleanup our logs.
+        let result = ParkPinMutRef {
+            logs,
+            pin_epoch,
+            synch,
+        };
+
+        result.logs.garbage.abort_speculative_garbage();
+
+        // this can panic
+        unsafe { result.logs.write_log.drop_writes() };
+        synch.unpin(Relaxed);
+        result
+    }
+
+    pub fn park_token(&self) -> usize {
+        self as *const _ as usize
+    }
+
+    pub unsafe fn from_park_token(token: usize) -> &'static Self {
+        &*(token as *const _)
     }
 }

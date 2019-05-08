@@ -1,4 +1,7 @@
-use crate::internal::{epoch::EPOCH_CLOCK, thread::PinMutRef};
+use crate::internal::{
+    epoch::{QuiesceEpoch, EPOCH_CLOCK},
+    thread::{Logs, ParkPinMutRef, PinMutRef, PinRw},
+};
 use crossbeam_utils::Backoff;
 use parking_lot_core::{FilterOp, ParkResult, ParkToken, DEFAULT_UNPARK_TOKEN};
 
@@ -9,18 +12,13 @@ fn key() -> usize {
     &EPOCH_CLOCK as *const _ as usize
 }
 
-#[inline]
 fn parkable<'tx, 'tcell>(pin: PinMutRef<'tx, 'tcell>) -> bool {
     let logs = pin.logs();
     !logs.read_log.is_empty() || !logs.write_log.is_empty()
 }
 
 #[inline]
-fn park_validate<'tx, 'tcell>(pin: PinMutRef<'tx, 'tcell>) -> bool {
-    // TODO: backup pin_epoch, and unpin, allowing GC to happen
-
-    let logs = pin.logs();
-    let pin_epoch = pin.pin_epoch();
+fn park_validate<'tcell>(logs: &Logs<'tcell>, pin_epoch: QuiesceEpoch) -> bool {
     if logs.read_log.try_clear_unpark_bits(pin_epoch) {
         if logs.write_log.try_clear_unpark_bits(pin_epoch) {
             true
@@ -35,28 +33,30 @@ fn park_validate<'tx, 'tcell>(pin: PinMutRef<'tx, 'tcell>) -> bool {
 
 #[inline]
 unsafe fn should_unpark(ParkToken(token): ParkToken) -> bool {
-    let target = PinMutRef::from_park_token(token);
-
-    let logs = target.logs();
-    // TODO: use backup pin_epoch
-    let pin_epoch = target.pin_epoch();
-    !logs.read_log.validate_reads(pin_epoch) || !logs.write_log.validate_writes(pin_epoch)
+    let parked_pin = ParkPinMutRef::from_park_token(token);
+    let pin_epoch = parked_pin.pin_epoch;
+    !parked_pin.read_log.validate_reads(pin_epoch)
+        || !parked_pin.write_log.validate_writes(pin_epoch)
 }
 
 #[inline(never)]
 #[cold]
-pub fn park<'tx, 'tcell>(mut pin: PinMutRef<'tx, 'tcell>, backoff: &Backoff) {
+pub fn park<'tx, 'tcell>(mut pin: PinRw<'tx, 'tcell>, backoff: &Backoff) {
     debug_assert!(
         parkable(pin.reborrow()),
         "`RETRY` on a transaction that has an empty read set causes the thread to sleep forever \
          in release"
     );
 
+    let parked_pin = pin.parked();
+
     // TODO: stats
     // TODO: Attempt htm tag_parked
     let key = key();
-    let park_token = ParkToken(pin.park_token());
-    let validate = move || park_validate(pin);
+    let park_token = ParkToken(parked_pin.park_token());
+    let logs = &*parked_pin;
+    let pin_epoch = parked_pin.pin_epoch;
+    let validate = move || park_validate(logs, pin_epoch);
     let before_sleep = || {};
     let timed_out = |_, _| {};
 
