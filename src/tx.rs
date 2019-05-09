@@ -113,8 +113,8 @@ impl Status {
     ///
     /// # Notes
     ///
-    /// Returning `AWAIT_RETRY` to [`ThreadKey::read`] or [`ThreadKey::rw`] will block the thread, until
-    /// another transaction successfully modifies a `TCell` in this transactions read set.
+    /// Returning `AWAIT_RETRY` to [`ThreadKey::read`] or [`ThreadKey::rw`] will block the thread,
+    /// until another transaction successfully modifies a `TCell` in this transactions read set.
     ///
     /// # Examples
     ///
