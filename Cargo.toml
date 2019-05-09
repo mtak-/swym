@@ -30,10 +30,9 @@ stats = []
 [dependencies]
 cfg-if = "0.1.7"
 crossbeam-utils = "0.6.5"
-fxhash = "0.2.*"
-lazy_static = "1.3.*"
-lock_api = "0.1.5"
-parking_lot = "0.7.1"
+lazy_static = "1.3.0"
+lock_api = "0.2.0"
+parking_lot = "0.8.0"
 parking_lot_core = "0.5.0"
 swym-htm = { path = "./swym-htm", version = "0.1.0" }
 
