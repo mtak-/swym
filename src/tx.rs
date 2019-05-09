@@ -113,7 +113,7 @@ impl Status {
     ///
     /// # Notes
     ///
-    /// Returning `RETRY` to [`ThreadKey::read`] or [`ThreadKey::rw`] will block the thread, until
+    /// Returning `AWAIT_RETRY` to [`ThreadKey::read`] or [`ThreadKey::rw`] will block the thread, until
     /// another transaction successfully modifies a `TCell` in this transactions read set.
     ///
     /// # Examples
@@ -126,7 +126,7 @@ impl Status {
     ///
     /// thread_key.rw(|tx| {
     ///     if locked.get(tx, Default::default())? {
-    ///         Err(Status::RETRY)
+    ///         Err(Status::AWAIT_RETRY)
     ///     } else {
     ///         Ok(locked.set(tx, true)?)
     ///     }
@@ -135,7 +135,7 @@ impl Status {
     ///
     /// [`ThreadKey::read`]: ../thread_key/struct.ThreadKey.html#method.read
     /// [`ThreadKey::rw`]: ../thread_key/struct.ThreadKey.html#method.rw
-    pub const RETRY: Self = Status {
+    pub const AWAIT_RETRY: Self = Status {
         kind: InternalStatus::Retry,
     };
 }

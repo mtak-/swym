@@ -6,7 +6,7 @@ use crate::{
     internal::{phoenix_tls::Phoenix, thread::Thread},
     read::ReadTx,
     rw::RwTx,
-    tx::Status,
+    tx::{Error, Status},
 };
 use core::fmt::{self, Debug, Formatter};
 
@@ -49,7 +49,7 @@ impl ThreadKey {
     #[inline]
     pub fn read<'tcell, F, O>(&'tcell self, f: F) -> O
     where
-        F: FnMut(&ReadTx<'tcell>) -> Result<O, Status>,
+        F: FnMut(&ReadTx<'tcell>) -> Result<O, Error>,
     {
         self.try_read(f)
             .expect("nested transactions are not yet supported")
@@ -109,7 +109,7 @@ impl ThreadKey {
     #[inline]
     pub fn try_read<'tcell, F, O>(&'tcell self, f: F) -> Result<O, TryReadErr>
     where
-        F: FnMut(&ReadTx<'tcell>) -> Result<O, Status>,
+        F: FnMut(&ReadTx<'tcell>) -> Result<O, Error>,
     {
         Ok(self
             .thread

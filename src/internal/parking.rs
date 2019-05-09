@@ -44,8 +44,8 @@ unsafe fn should_unpark(ParkToken(token): ParkToken) -> bool {
 pub fn park<'tx, 'tcell>(mut pin: PinRw<'tx, 'tcell>, backoff: &Backoff) {
     debug_assert!(
         parkable(pin.reborrow()),
-        "`RETRY` on a transaction that has an empty read set causes the thread to sleep forever \
-         in release"
+        "`AWAIT_RETRY` on a transaction that has an empty read set causes the thread to sleep \
+         forever in release"
     );
 
     let parked_pin = pin.parked();
@@ -74,6 +74,7 @@ pub fn park<'tx, 'tcell>(mut pin: PinRw<'tx, 'tcell>, backoff: &Backoff) {
             }
         }
     }
+    drop(parked_pin);
 }
 
 #[inline(never)]

@@ -300,7 +300,7 @@ impl<'tcell> Pin<'tcell> {
     #[inline]
     pub fn run_read<F, O>(mut self, mut f: F) -> O
     where
-        F: FnMut(&ReadTx<'tcell>) -> Result<O, Status>,
+        F: FnMut(&ReadTx<'tcell>) -> Result<O, Error>,
     {
         let mut retries = 0;
         let mut exceeded_backoff = 0;
@@ -309,10 +309,7 @@ impl<'tcell> Pin<'tcell> {
             let r = f(ReadTx::new(&mut self));
             match r {
                 Ok(o) => break o,
-                Err(Status {
-                    kind: InternalStatus::Error(Error::CONFLICT),
-                }) => {}
-                Err(Status::RETRY) => {}
+                Err(Error::CONFLICT) => {}
             }
             retries += 1;
             self.snooze_repin(&backoff);
@@ -353,7 +350,7 @@ impl<'tcell> Pin<'tcell> {
                     }) => {
                         eager_retries += 1;
                     }
-                    Err(Status::RETRY) => {
+                    Err(Status::AWAIT_RETRY) => {
                         crate::internal::parking::park(pin_rw, &backoff);
                         self.repin();
                         continue;
