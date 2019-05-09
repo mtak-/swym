@@ -85,21 +85,27 @@ impl Event {
     }
 }
 
+macro_rules! env_var_set {
+    ($env_var:ident) => {
+        option_env!(concat!("SWYM_", stringify!($env_var))) == Some("1")
+    };
+}
+
 macro_rules! stats_func {
-    ($(#[$attr:meta])* $name:ident: Event) => {
+    ($(#[$attr:meta])* $name:ident: Event @ $env_var:ident) => {
         #[inline]
         $(#[$attr])*
         pub(crate) fn $name() {
-            if cfg!(feature = "stats") {
+            if cfg!(feature = "stats") || env_var_set!($env_var) {
                 THREAD_STAT.get().get().$name.happened()
             }
         }
     };
-    ($(#[$attr:meta])* $name:ident: Size) => {
+    ($(#[$attr:meta])* $name:ident: Size @ $env_var:ident) => {
         #[inline]
         $(#[$attr])*
         pub(crate) fn $name(size: usize) {
-            if cfg!(feature = "stats") {
+            if cfg!(feature = "stats") || env_var_set!($env_var) {
                 let size = size as u64;
                 THREAD_STAT.with(move |x| x.get().$name.record(size))
             }
@@ -108,7 +114,7 @@ macro_rules! stats_func {
 }
 
 macro_rules! stats {
-    ($($(#[$attr:meta])* $names:ident: $kinds:tt),* $(,)*) => {
+    ($($(#[$attr:meta])* $names:ident: $kinds:tt @ $env_var:ident),* $(,)*) => {
         /// A collection of swym statistics.
         #[derive(Default, Debug)]
         pub struct Stats {
@@ -123,61 +129,65 @@ macro_rules! stats {
             }
         }
 
-        $(stats_func!{$(#[$attr])* $names: $kinds})*
+        fn any_stats_active() -> bool {
+            cfg!(feature = "stats") $(|| env_var_set!($env_var))*
+        }
+
+        $(stats_func!{$(#[$attr])* $names: $kinds @ $env_var})*
     };
 }
 
 stats! {
-    /// Number of retries per successful read transaction.
-    read_transaction_retries:         Size,
+    /// Number of conflicts per successful read transaction.
+    read_transaction_conflicts:         Size @ READ_TRANSACTION_CONFLICTS,
 
-    /// Number of eager (before commit) retries per successful write transaction.
-    write_transaction_eager_retries:  Size,
+    /// Number of eager (before commit) conflicts per successful write transaction.
+    write_transaction_eager_conflicts:  Size @ WRITE_TRANSACTION_EAGER_CONFLICTS,
 
-    /// Number of commit retries per successful write transaction.
-    write_transaction_commit_retries: Size,
+    /// Number of commit conflicts per successful write transaction.
+    write_transaction_commit_conflicts: Size @ WRITE_TRANSACTION_COMMIT_CONFLICTS,
 
-    /// Number of hardware retries per successful hardware transaction or software fallback.
+    /// Number of hardware conflicts per successful hardware transaction or software fallback.
     ///
-    /// This is a less obvious metric. If a transaction completely fails and retries from the start
+    /// This is a less obvious metric. If a transaction completely fails and conflicts from the start
     /// 10 times, each one attempting a hardware commit, then this will be recorded 10 times with
     /// 10 different values.
-    htm_retries:                      Size,
+    htm_conflicts:                      Size @ HTM_CONFLICTS,
 
     /// Number of `TCell`s in the read log at commit time.
-    read_size:                        Size,
+    read_size:                        Size @ READ_SIZE,
 
     /// Number of cpu words in the write log at commit time. Each write is a minimum of 3 words.
-    write_word_size:                  Size,
+    write_word_size:                  Size @ WRITE_WORD_SIZE,
 
     /// A bloom filter check.
-    bloom_check:                      Event,
+    bloom_check:                      Event @ BLOOM_CHECK,
 
     /// A bloom filter collision.
-    bloom_collision:                  Event,
+    bloom_collision:                  Event @ BLOOM_CHECK,
 
     /// A bloom filter hit that required a full lookup to verify.
-    bloom_success_slow:               Event,
+    bloom_success_slow:               Event @ BLOOM_SUCCESS_SLOW,
 
     /// A transactional read of data that exists in the write log. Considered slow.
-    read_after_write:                 Event,
+    read_after_write:                 Event @ READ_AFTER_WRITE,
 
     /// A transactional overwrite of data that exists in the write log. Considered slow.
-    write_after_write:                Event,
+    write_after_write:                Event @ WRITE_AFTER_WRITE,
 
     /// Number of transactional writes to data that has been logged as read from first. Considered slowish.
     ///
     /// Writes after logged reads currently causes the commit algorithm to do more work.
-    write_after_logged_read:          Size,
+    write_after_logged_read:          Size @ WRITE_AFTER_LOGGED_READ,
 
     /// Number of times a read transaction hit the maximum Backoff.
-    should_park_read:                 Size,
+    should_park_read:                 Size @ SHOULD_PARK_READ,
 
     /// Number of times a read/write transaction hit the maximum Backoff.
-    should_park_write:                Size,
+    should_park_write:                Size @ SHOULD_PARK_WRITE,
 
     /// Number of times a garbage collection cycle hit the maximum Backoff during quiescing.
-    should_park_gc:                   Size,
+    should_park_gc:                   Size @ SHOULD_PARK_GC,
 }
 
 impl Stats {
@@ -185,23 +195,23 @@ impl Stats {
     pub fn print_summary(&self) {
         println!("{:#?}", self);
 
-        // Retries are recorded once after the transaction has completed. Eager retries and commit
-        // retries are recorded in equal amounts, so just picking one of them is correct here.
+        // Retries are recorded once after the transaction has completed. Eager conflicts and commit
+        // conflicts are recorded in equal amounts, so just picking one of them is correct here.
         let successful_transactions =
-            self.read_transaction_retries.count + self.write_transaction_eager_retries.count;
+            self.read_transaction_conflicts.count + self.write_transaction_eager_conflicts.count;
 
-        let retries = self
-            .read_transaction_retries
+        let conflicts = self
+            .read_transaction_conflicts
             .min_max_total
             .unwrap_or_default()
             .total
             + self
-                .write_transaction_eager_retries
+                .write_transaction_eager_conflicts
                 .min_max_total
                 .unwrap_or_default()
                 .total
             + self
-                .write_transaction_commit_retries
+                .write_transaction_commit_conflicts
                 .min_max_total
                 .unwrap_or_default()
                 .total;
@@ -209,10 +219,10 @@ impl Stats {
             "{:>12}: {:>12} {:>9}: {:.4} {:>13}: {:.4}",
             "transactions",
             successful_transactions,
-            "retry avg",
-            retries as f64 / successful_transactions as f64,
-            "htm retry avg",
-            self.htm_retries.min_max_total.unwrap_or_default().total as f64
+            "conflict avg",
+            conflicts as f64 / successful_transactions as f64,
+            "htm conflict avg",
+            self.htm_conflicts.min_max_total.unwrap_or_default().total as f64
                 / successful_transactions as f64
         );
         println!(
@@ -280,7 +290,7 @@ lazy_static::lazy_static! {
 
 /// Returns the global stats object, or None if the feature is disabled.
 pub fn stats() -> Option<impl Deref<Target = Stats>> {
-    if cfg!(feature = "stats") {
+    if any_stats_active() {
         Some(GLOBAL.lock())
     } else {
         None
@@ -289,7 +299,7 @@ pub fn stats() -> Option<impl Deref<Target = Stats>> {
 
 /// Returns the thread local stats object, or None if the feature is disabled.
 pub fn thread_stats() -> Option<impl Deref<Target = ThreadStats>> {
-    if cfg!(feature = "stats") {
+    if any_stats_active() {
         Some(THREAD_STAT.get())
     } else {
         None

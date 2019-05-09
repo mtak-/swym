@@ -302,7 +302,7 @@ impl<'tcell> Pin<'tcell> {
     where
         F: FnMut(&ReadTx<'tcell>) -> Result<O, Error>,
     {
-        let mut retries = 0;
+        let mut conflicts = 0;
         let mut exceeded_backoff = 0;
         let backoff = Backoff::new();
         let result = loop {
@@ -311,13 +311,13 @@ impl<'tcell> Pin<'tcell> {
                 Ok(o) => break o,
                 Err(Error::CONFLICT) => {}
             }
-            retries += 1;
+            conflicts += 1;
             self.snooze_repin(&backoff);
             if backoff.is_completed() {
                 exceeded_backoff += 1;
             }
         };
-        stats::read_transaction_retries(retries);
+        stats::read_transaction_conflicts(conflicts);
         stats::should_park_read(exceeded_backoff);
         result
     }
@@ -328,8 +328,8 @@ impl<'tcell> Pin<'tcell> {
     where
         F: FnMut(&mut RwTx<'tcell>) -> Result<O, Status>,
     {
-        let mut eager_retries = 0;
-        let mut commit_retries = 0;
+        let mut eager_conflicts = 0;
+        let mut commit_conflicts = 0;
         let mut exceeded_backoff = 0;
         let backoff = Backoff::new();
         let result = loop {
@@ -343,12 +343,12 @@ impl<'tcell> Pin<'tcell> {
                             self.logs().validate_start_state();
                             break o;
                         }
-                        commit_retries += 1;
+                        commit_conflicts += 1;
                     }
                     Err(Status {
                         kind: InternalStatus::Error(Error::CONFLICT),
                     }) => {
-                        eager_retries += 1;
+                        eager_conflicts += 1;
                     }
                     Err(Status::AWAIT_RETRY) => {
                         crate::internal::parking::park(pin_rw, &backoff);
@@ -362,8 +362,8 @@ impl<'tcell> Pin<'tcell> {
                 exceeded_backoff += 1;
             }
         };
-        stats::write_transaction_eager_retries(eager_retries);
-        stats::write_transaction_commit_retries(commit_retries);
+        stats::write_transaction_eager_conflicts(eager_conflicts);
+        stats::write_transaction_commit_conflicts(commit_conflicts);
         stats::should_park_write(exceeded_backoff);
         result
     }
@@ -472,14 +472,14 @@ impl<'tx, 'tcell> PinRw<'tx, 'tcell> {
             match htx {
                 Ok(htx) => {
                     let success = self.commit_hard(htx);
-                    stats::htm_retries(retry_count);
+                    stats::htm_conflicts(retry_count);
                     return success;
                 }
                 Err(HtxRetry::SoftwareFallback) => {
-                    stats::htm_retries(retry_count);
+                    stats::htm_conflicts(retry_count);
                 }
                 Err(HtxRetry::FullRetry) => {
-                    stats::htm_retries(retry_count);
+                    stats::htm_conflicts(retry_count);
                     return false;
                 }
             }
