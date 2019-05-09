@@ -45,7 +45,7 @@ fn main() {
                             || right_fork.in_use.get(tx, Ordering::default())?
                         {
                             retry_count += 1;
-                            Err(Status::RETRY)
+                            Err(Status::AWAIT_RETRY)
                         } else {
                             left_fork.in_use.set(tx, true)?;
                             right_fork.in_use.set(tx, true)?;

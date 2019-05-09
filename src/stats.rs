@@ -188,6 +188,12 @@ stats! {
 
     /// Number of times a garbage collection cycle hit the maximum Backoff during quiescing.
     should_park_gc:                   Size @ SHOULD_PARK_GC,
+
+    /// Number of threads awaiting retry ([`AWAIT_RETRY`]) woken up per call to unpark.
+    unparked_size:                    Size @ UNPARKED_SIZE,
+
+    /// Number of threads awaiting retry ([`AWAIT_RETRY`]) that were _not_ woken up per call to unpark.
+    not_unparked_size:                Size @ NOT_UNPARKED_SIZE,
 }
 
 impl Stats {

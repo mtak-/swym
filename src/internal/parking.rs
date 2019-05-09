@@ -1,6 +1,9 @@
-use crate::internal::{
-    epoch::{QuiesceEpoch, EPOCH_CLOCK},
-    thread::{Logs, ParkPinMutRef, PinMutRef, PinRw},
+use crate::{
+    internal::{
+        epoch::{QuiesceEpoch, EPOCH_CLOCK},
+        thread::{Logs, ParkPinMutRef, PinMutRef, PinRw},
+    },
+    stats,
 };
 use crossbeam_utils::Backoff;
 use parking_lot_core::{FilterOp, ParkResult, ParkToken, DEFAULT_UNPARK_TOKEN};
@@ -82,15 +85,19 @@ pub fn park<'tx, 'tcell>(mut pin: PinRw<'tx, 'tcell>, backoff: &Backoff) {
 pub fn unpark() {
     let key = key();
     let callback = |_| DEFAULT_UNPARK_TOKEN;
-    let _unpark_result = unsafe {
+    let mut not_unparked_count = 0;
+    let unpark_result = unsafe {
+        let not_unparked_count = &mut not_unparked_count;
         let filter = move |token| {
             if should_unpark(token) {
                 FilterOp::Unpark
             } else {
+                *not_unparked_count += 1;
                 FilterOp::Skip
             }
         };
         parking_lot_core::unpark_filter(key, filter, callback)
     };
-    // TODO: stats logging
+    stats::unparked_size(unpark_result.unparked_threads);
+    stats::not_unparked_size(not_unparked_count);
 }
