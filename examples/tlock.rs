@@ -23,7 +23,7 @@ unsafe impl RawMutex for RawTLock {
                 // The `Ordering` - `Default::default` - used above puts `held` in our read set.
                 // `swym` will watch for modifications to `held`, and wake this thread up when it is
                 // next modified.
-                return Err(Status::RETRY);
+                return Err(Status::AWAIT_RETRY);
             } else {
                 // The lock is not held, so grab it!
                 self.held.set(tx, true)?;
