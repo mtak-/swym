@@ -328,8 +328,12 @@ impl EpochLock {
     }
 
     /// Attempts to clear the unpark bit.
+    ///
+    /// # Warning
+    ///
+    /// Never call this without holding the parking_lot queue lock.
     #[inline]
-    pub fn try_clear_unpark_bit(&self, max_expected: QuiesceEpoch) -> bool {
+    pub fn try_clear_unpark_bit(&self, max_expected: QuiesceEpoch) -> Option<ParkStatus> {
         debug_assert!(
             max_expected.is_active(),
             "invalid max_expected epoch sent to `EpochLock::try_lock`"
@@ -340,22 +344,33 @@ impl EpochLock {
                 !lock_bit_set(actual.get()),
                 "lock bit unexpectedly set on `EpochLock`"
             );
-            !unpark_bit_set(actual.get())
-                || likely!(self
-                    .0
-                    .compare_exchange(
-                        actual.get(),
-                        clear_unpark_bit(actual.get()),
-                        Relaxed,
-                        Relaxed,
-                    )
-                    .is_ok())
+            if !unpark_bit_set(actual.get()) {
+                // if already set, say so
+                Some(ParkStatus::HasParked)
+            } else if likely!(self
+                .0
+                .compare_exchange(
+                    actual.get(),
+                    clear_unpark_bit(actual.get()),
+                    Relaxed,
+                    Relaxed,
+                )
+                .is_ok())
+            {
+                Some(ParkStatus::NoParked)
+            } else {
+                None
+            }
         } else {
-            false
+            None
         }
     }
 
     /// Set the unpark bit.
+    ///
+    /// # Warning
+    ///
+    /// Never call this without holding the parking_lot queue lock. Deadlocks can result.
     #[inline]
     pub fn set_unpark_bit(&self) {
         drop(self.0.fetch_or(UNPARK_BIT, Relaxed));

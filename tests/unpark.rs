@@ -13,7 +13,7 @@ mod unpark {
 
         // if we haven't completed in a reasonable amount of time, abort, failing the test
         std::thread::spawn(|| {
-            std::thread::sleep(std::time::Duration::from_secs(10));
+            std::thread::sleep(std::time::Duration::from_secs(30));
             std::process::abort();
         });
 

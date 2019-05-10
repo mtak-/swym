@@ -22,16 +22,17 @@ fn parkable<'tx, 'tcell>(pin: PinMutRef<'tx, 'tcell>) -> bool {
 
 #[inline]
 fn try_clear_unpark_bits<'tcell>(logs: &Logs<'tcell>, pin_epoch: QuiesceEpoch) -> bool {
-    if logs.read_log.try_clear_unpark_bits(pin_epoch) {
-        if logs.write_log.try_clear_unpark_bits(pin_epoch) {
-            true
-        } else {
-            // TODO: is this correct?
-            logs.read_log.set_unpark_bits();
-            false
+    let park_statuses = logs.read_log.try_clear_unpark_bits(pin_epoch);
+    match park_statuses {
+        Some(statuses) => {
+            if logs.write_log.try_clear_unpark_bits(pin_epoch) {
+                true
+            } else {
+                logs.read_log.set_unpark_bits(statuses);
+                false
+            }
         }
-    } else {
-        false
+        None => false,
     }
 }
 

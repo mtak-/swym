@@ -391,19 +391,30 @@ impl<'tcell> WriteLog<'tcell> {
 
     #[inline]
     pub fn try_clear_unpark_bits(&self, pin_epoch: QuiesceEpoch) -> bool {
+        let mut park_statuses = Vec::new();
         for epoch_lock in self.epoch_locks() {
-            if !epoch_lock.try_clear_unpark_bit(pin_epoch) {
-                self.set_unpark_bits_until(epoch_lock);
-                return false;
+            let park_status = epoch_lock.try_clear_unpark_bit(pin_epoch);
+            match park_status {
+                Some(status) => park_statuses.push(status),
+                None => {
+                    self.set_unpark_bits_until(epoch_lock, park_statuses);
+                    return false;
+                }
             }
         }
         true
     }
 
     #[inline]
-    pub fn set_unpark_bits_until(&self, end: &EpochLock) {
-        for epoch_lock in self.epoch_locks().take_while(move |&e| !ptr::eq(e, end)) {
-            epoch_lock.set_unpark_bit();
+    fn set_unpark_bits_until(&self, end: &EpochLock, park_statuses: Vec<ParkStatus>) {
+        for (epoch_lock, park_status) in self
+            .epoch_locks()
+            .take_while(move |&e| !ptr::eq(e, end))
+            .zip(park_statuses)
+        {
+            if park_status != ParkStatus::HasParked {
+                epoch_lock.set_unpark_bit();
+            }
         }
     }
 }

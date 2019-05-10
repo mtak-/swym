@@ -4,7 +4,11 @@
 //! checking that the reads are still valid (validate_reads).
 
 use crate::{
-    internal::{alloc::FVec, epoch::QuiesceEpoch, tcell_erased::TCellErased},
+    internal::{
+        alloc::FVec,
+        epoch::{ParkStatus, QuiesceEpoch},
+        tcell_erased::TCellErased,
+    },
     stats,
 };
 use core::ptr;
@@ -117,28 +121,40 @@ impl<'tcell> ReadLog<'tcell> {
     }
 
     #[inline]
-    pub fn try_clear_unpark_bits(&self, pin_epoch: QuiesceEpoch) -> bool {
+    pub fn try_clear_unpark_bits(&self, pin_epoch: QuiesceEpoch) -> Option<Vec<ParkStatus>> {
+        let mut park_statuses = Vec::with_capacity(self.data.capacity());
         for logged_read in self.iter() {
-            if !logged_read.current_epoch.try_clear_unpark_bit(pin_epoch) {
-                // TODO: don't think this is correct
-                self.set_unpark_bits_until(logged_read);
-                return false;
+            let park_status = logged_read.current_epoch.try_clear_unpark_bit(pin_epoch);
+            match park_status {
+                Some(status) => park_statuses.push(status),
+                None => {
+                    self.set_unpark_bits_until(logged_read, park_statuses);
+                    return None;
+                }
             }
         }
-        true
+        Some(park_statuses)
     }
 
     #[inline]
-    fn set_unpark_bits_until(&self, end: &TCellErased) {
-        for logged_read in self.iter().take_while(|read| !ptr::eq(*read, end)) {
-            logged_read.current_epoch.set_unpark_bit()
+    fn set_unpark_bits_until(&self, end: &TCellErased, park_statuses: Vec<ParkStatus>) {
+        for (logged_read, park_status) in self
+            .iter()
+            .take_while(|read| !ptr::eq(*read, end))
+            .zip(park_statuses)
+        {
+            if park_status != ParkStatus::HasParked {
+                logged_read.current_epoch.set_unpark_bit()
+            }
         }
     }
 
     #[inline]
-    pub fn set_unpark_bits(&self) {
-        for logged_read in self.iter() {
-            logged_read.current_epoch.set_unpark_bit()
+    pub fn set_unpark_bits(&self, park_statuses: Vec<ParkStatus>) {
+        for (logged_read, park_status) in self.iter().zip(park_statuses) {
+            if park_status != ParkStatus::HasParked {
+                logged_read.current_epoch.set_unpark_bit()
+            }
         }
     }
 }
