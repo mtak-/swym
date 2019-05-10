@@ -126,11 +126,7 @@ impl<'tcell> Logs<'tcell> {
             if write_log.find(src).is_none() {
                 true
             } else {
-                // don't capture count in release
-                #[cfg(feature = "stats")]
-                {
-                    count += 1;
-                }
+                count += 1;
                 false
             }
         });

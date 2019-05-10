@@ -36,6 +36,8 @@ type Storage = usize;
 type NonZeroStorage = NonZeroUsize;
 type HtmStorage = HtmUsize;
 
+/// These values are carefully chosen to allow for simpler comparisons.
+
 /// ThreadEpoch will hold this value when not pinned. It is conveniently greater than all
 /// other epochs.
 const INACTIVE_EPOCH: Storage = !0;
@@ -333,21 +335,24 @@ impl EpochLock {
             "invalid max_expected epoch sent to `EpochLock::try_lock`"
         );
         let actual = self.load_raw(Relaxed);
-        likely!(max_expected.read_write_valid(actual))
-            && likely!({
-                debug_assert!(
-                    !lock_bit_set(actual.get()),
-                    "lock bit unexpectedly set on `EpochLock`"
-                );
-                self.0
+        if likely!(max_expected.read_write_valid(actual)) {
+            debug_assert!(
+                !lock_bit_set(actual.get()),
+                "lock bit unexpectedly set on `EpochLock`"
+            );
+            !unpark_bit_set(actual.get())
+                || likely!(self
+                    .0
                     .compare_exchange(
                         actual.get(),
                         clear_unpark_bit(actual.get()),
                         Relaxed,
                         Relaxed,
                     )
-                    .is_ok()
-            })
+                    .is_ok())
+        } else {
+            false
+        }
     }
 
     /// Set the unpark bit.

@@ -206,7 +206,7 @@ impl<'tcell> WriteLog<'tcell> {
     }
 
     #[inline]
-    fn epoch_locks(&self) -> impl Iterator<Item = &EpochLock> {
+    pub fn epoch_locks(&self) -> impl Iterator<Item = &EpochLock> {
         self.data
             .iter()
             .flat_map(|entry| entry.tcell().map(|erased| &erased.current_epoch))

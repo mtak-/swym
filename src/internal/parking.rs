@@ -21,11 +21,12 @@ fn parkable<'tx, 'tcell>(pin: PinMutRef<'tx, 'tcell>) -> bool {
 }
 
 #[inline]
-fn park_validate<'tcell>(logs: &Logs<'tcell>, pin_epoch: QuiesceEpoch) -> bool {
+fn try_clear_unpark_bits<'tcell>(logs: &Logs<'tcell>, pin_epoch: QuiesceEpoch) -> bool {
     if logs.read_log.try_clear_unpark_bits(pin_epoch) {
         if logs.write_log.try_clear_unpark_bits(pin_epoch) {
             true
         } else {
+            // TODO: is this correct?
             logs.read_log.set_unpark_bits();
             false
         }
@@ -36,6 +37,7 @@ fn park_validate<'tcell>(logs: &Logs<'tcell>, pin_epoch: QuiesceEpoch) -> bool {
 
 #[inline]
 unsafe fn should_unpark(ParkToken(token): ParkToken) -> bool {
+    // TODO: parkpinmutref should be Send somehow
     let parked_pin = ParkPinMutRef::from_park_token(token);
     let pin_epoch = parked_pin.pin_epoch;
     !parked_pin.read_log.validate_reads(pin_epoch)
@@ -53,13 +55,12 @@ pub fn park<'tx, 'tcell>(mut pin: PinRw<'tx, 'tcell>, backoff: &Backoff) {
 
     let parked_pin = pin.parked();
 
-    // TODO: stats
-    // TODO: Attempt htm tag_parked
+    // TODO: htm tag_parked
     let key = key();
     let park_token = ParkToken(parked_pin.park_token());
     let logs = &*parked_pin;
     let pin_epoch = parked_pin.pin_epoch;
-    let validate = move || park_validate(logs, pin_epoch);
+    let validate = move || try_clear_unpark_bits(logs, pin_epoch);
     let before_sleep = || {};
     let timed_out = |_, _| {};
 
@@ -68,9 +69,15 @@ pub fn park<'tx, 'tcell>(mut pin: PinRw<'tx, 'tcell>, backoff: &Backoff) {
     } {
         ParkResult::Unparked(token) => {
             debug_assert_eq!(token, DEFAULT_UNPARK_TOKEN);
+            let parked_size = logs.read_log.len() + logs.write_log.epoch_locks().count();
+            stats::parked_size(parked_size);
             backoff.reset()
         }
-        ParkResult::Invalid => backoff.snooze(),
+        ParkResult::Invalid => {
+            let parked_size = logs.read_log.len() + logs.write_log.epoch_locks().count();
+            stats::park_failure_size(parked_size);
+            backoff.snooze()
+        }
         ParkResult::TimedOut => {
             if cfg!(debug_assertions) {
                 panic!("unexpected timeout on parked thread")

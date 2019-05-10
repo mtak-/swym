@@ -120,6 +120,7 @@ impl<'tcell> ReadLog<'tcell> {
     pub fn try_clear_unpark_bits(&self, pin_epoch: QuiesceEpoch) -> bool {
         for logged_read in self.iter() {
             if !logged_read.current_epoch.try_clear_unpark_bit(pin_epoch) {
+                // TODO: don't think this is correct
                 self.set_unpark_bits_until(logged_read);
                 return false;
             }
