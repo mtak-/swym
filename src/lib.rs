@@ -43,6 +43,7 @@
 //! * Highly optimized for read mostly data structures and modern caches. `TCell` stores all of its
 //!   data inline. Read only transactions don't modify any global state, and read write transactions
 //!   only modify global state on commit.
+//! * Parking retry is supported via [`AWAIT_RETRY`](crate::tx::Status::AWAIT_RETRY).
 //! * The number of allocations imposed by swym per transaction should average 0 through reuse of
 //!   read logs/write logs/garbage bags.
 //! * Support for building recursive data structures using `TPtr` is still experimental but looks

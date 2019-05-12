@@ -2,6 +2,12 @@ mod unpark {
     use crossbeam_utils::thread;
     use swym::{tcell::TCell, thread_key, tx::Status};
 
+    #[test]
+    fn empty_tx() {
+        let key = thread_key::get();
+        let () = key.rw(|_| Err(Status::AWAIT_RETRY));
+    }
+
     // This test attempts to create a situation where a thread can fail to park on `a` & `b`.
     // Specifically, parking validation fails on `b`. This causes the thread to try to clear the
     // unpark bit it might have just set on `a`. This is incorrect if there is another thread parked
@@ -73,5 +79,6 @@ mod unpark {
             })
             .unwrap()
         }
+        swym::stats::print_stats()
     }
 }

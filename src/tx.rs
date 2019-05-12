@@ -12,7 +12,7 @@ enum ErrorKind {
     Conflict,
 }
 
-/// Error type indicating that the transaction has failed.
+/// An error type indicating that the transaction has failed.
 ///
 /// It is typical to route this error back to [`ThreadKey::rw`] or [`ThreadKey::read`] where the
 /// transaction will be retried, however, this is not required.
@@ -49,7 +49,7 @@ impl Error {
     };
 }
 
-/// Error type indicating that the transaction has failed to [`set`] a value.
+/// An error type indicating that the transaction has failed to [`set`] a value.
 ///
 /// It is typical to convert this error [`into`] a [`Error`] and route it back to [`ThreadKey::rw`]
 /// where the transaction will be retried, however, this is not required.
@@ -87,6 +87,15 @@ pub(crate) enum InternalStatus {
     Retry,
 }
 
+/// A type representing that the transaction does not wish to continue.
+///
+/// `Status` may represent a transaction error, or that the transaction wishes to
+/// [`AWAIT_RETRY`](Status::AWAIT_RETRY).
+///
+/// It is typical to route this back to [`ThreadKey::rw`] where the transaction will be retried,
+/// however, this is not required.
+///
+/// [`ThreadKey::rw`]: ../thread_key/struct.ThreadKey.html#method.rw
 #[derive(Debug, PartialEq, Eq)]
 pub struct Status {
     pub(crate) kind: InternalStatus,
@@ -109,12 +118,10 @@ impl<T> From<SetError<T>> for Status {
 }
 
 impl Status {
-    /// `Status` value requesting a retry of the current transaction.
+    /// `Status` value requesting a retry of the current transaction after a change to the read set.
     ///
-    /// # Notes
-    ///
-    /// Returning `AWAIT_RETRY` to [`ThreadKey::read`] or [`ThreadKey::rw`] will block the thread,
-    /// until another transaction successfully modifies a `TCell` in this transactions read set.
+    /// Returning `AWAIT_RETRY` to [`ThreadKey::rw`] will block the thread, until another
+    /// transaction successfully modifies a `TCell` in this transactions read set.
     ///
     /// # Examples
     ///
@@ -133,7 +140,15 @@ impl Status {
     /// })
     /// ```
     ///
-    /// [`ThreadKey::read`]: ../thread_key/struct.ThreadKey.html#method.read
+    /// # Warning
+    ///
+    /// `AWAIT_RETRY` introduces the possibility of true deadlocks into `swym`. A program which does
+    /// not use `AWAIT_RETRY` will never deadlock - atleast due to `swym`. This is considered
+    /// "worth it" because many powerful abstractions can be built upon `AWAIT_RETRY`.
+    ///
+    /// A transaction which returns `AWAIT_RETRY` with an empty read set is considered a logic
+    /// error. In debug builds it will panic, and in release builds it will park the thread forever.
+    ///
     /// [`ThreadKey::rw`]: ../thread_key/struct.ThreadKey.html#method.rw
     pub const AWAIT_RETRY: Self = Status {
         kind: InternalStatus::Retry,
@@ -158,12 +173,15 @@ pub enum Ordering {
     /// serializability. This can significantly reduce the number of failed transactions
     /// resulting in noticeable performance improvement under heavy contention.
     ///
-    /// # Note
+    /// # Warning
     ///
     /// Profile before even considering this memory ordering. Use of `Ordering::Read` when combined
     /// with only safe code, will always be safe, but it can still cause extremely subtle bugs, as
     /// transactions will no longer behave as though a single global lock were acquired for the
     /// duration of the transaction.
+    ///
+    /// Additionally, reads using `Ordering::Read` will _not_ be waited on when using
+    /// [`AWAIT_RETRY`](crate::tx::Status::AWAIT_RETRY).
     ///
     /// # Examples
     ///
