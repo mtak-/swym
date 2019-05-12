@@ -208,6 +208,7 @@ impl HardwareTx {
     ///
     /// Even though this never returns, it does **not** panic.
     #[inline(always)]
+    #[cold]
     pub fn abort(&self) -> ! {
         unsafe { abort() }
     }

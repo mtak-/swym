@@ -327,6 +327,19 @@ impl EpochLock {
         self.0.store(toggle_lock_bit(prev.get()), Relaxed);
     }
 
+    /// Clears the unpark bit. May abort the transaction
+    #[inline]
+    pub fn clear_unpark_bit_htm(&self, max_expected: QuiesceEpoch, htx: &HardwareTx) {
+        let actual = self.load_raw(Relaxed);
+        if likely!(max_expected.read_write_valid(actual)) {
+            if unpark_bit_set(actual.get()) {
+                self.0.set(htx, clear_unpark_bit(actual.get()))
+            }
+        } else {
+            htx.abort()
+        }
+    }
+
     /// Attempts to clear the unpark bit.
     ///
     /// # Warning

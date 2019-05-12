@@ -197,6 +197,10 @@ stats! {
     /// unpark.
     not_unparked_size:                  Size @ NOT_UNPARKED_SIZE,
 
+    /// When a thread attempts to [`AWAIT_RETRY`], this is the number of times it attempted a HTM
+    /// park, and failed.
+    htm_park_conflicts:                 Size @ HTM_PARK_CONFLICTS,
+
     /// When a thread attempts to [`AWAIT_RETRY`], but one of the waited on `EpochLock`'s gets
     /// modified before being parked.
     park_failure_size:                  Size @ PARK_FAILURE_SIZE,

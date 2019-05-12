@@ -7,6 +7,7 @@ use crate::{
 };
 use crossbeam_utils::Backoff;
 use parking_lot_core::{FilterOp, ParkResult, ParkToken, DEFAULT_UNPARK_TOKEN};
+use swym_htm::HardwareTx;
 
 #[inline]
 fn key() -> usize {
@@ -17,23 +18,57 @@ fn key() -> usize {
 
 fn parkable<'tx, 'tcell>(pin: PinMutRef<'tx, 'tcell>) -> bool {
     let logs = pin.logs();
+    // parking a thread without any logs, will sleep the thread forever!
     !logs.read_log.is_empty() || !logs.write_log.is_empty()
 }
 
-#[inline]
-fn try_clear_unpark_bits<'tcell>(logs: &Logs<'tcell>, pin_epoch: QuiesceEpoch) -> bool {
-    let park_statuses = logs.read_log.try_clear_unpark_bits(pin_epoch);
-    match park_statuses {
-        Some(statuses) => {
-            if logs.write_log.try_clear_unpark_bits(pin_epoch) {
-                true
+unsafe fn try_clear_unpark_bits<'tcell>(logs: &Logs<'tcell>, pin_epoch: QuiesceEpoch) -> bool {
+    const MAX_HTM_RETRIES: usize = 10;
+
+    let mut retry_count = 0;
+    let htx = if swym_htm::htm_supported() && logs.read_log.len() >= 3 {
+        let retry_count = &mut retry_count;
+        HardwareTx::new(|code| {
+            if code.is_explicit_abort() || code.is_conflict() && !code.is_retry() {
+                Err(false)
+            } else if *retry_count < MAX_HTM_RETRIES {
+                *retry_count += 1;
+                Ok(())
             } else {
-                logs.read_log.set_unpark_bits(statuses);
-                false
+                Err(true)
+            }
+        })
+    } else {
+        Err(true)
+    };
+    let result = match htx {
+        Ok(htx) => {
+            // Try hardware transactional parking first. This could potentially eliminate many
+            // cmpxchg's, and on park failure, all we have to do is abort the transaction.
+            logs.read_log.clear_unpark_bits_htm(pin_epoch, &htx);
+            logs.write_log.clear_unpark_bits_htm(pin_epoch, &htx);
+            drop(htx);
+            true
+        }
+        Err(true) => {
+            // Software parking (e.g. cmpxchg).
+            let park_statuses = logs.read_log.try_clear_unpark_bits(pin_epoch);
+            match park_statuses {
+                Some(statuses) => {
+                    if logs.write_log.try_clear_unpark_bits(pin_epoch) {
+                        true
+                    } else {
+                        logs.read_log.set_unpark_bits(statuses);
+                        false
+                    }
+                }
+                None => false,
             }
         }
-        None => false,
-    }
+        Err(false) => false,
+    };
+    stats::htm_park_conflicts(retry_count);
+    result
 }
 
 #[inline]
@@ -61,7 +96,7 @@ pub fn park<'tx, 'tcell>(mut pin: PinRw<'tx, 'tcell>, backoff: &Backoff) {
     let park_token = ParkToken(parked_pin.park_token());
     let logs = &*parked_pin;
     let pin_epoch = parked_pin.pin_epoch;
-    let validate = move || try_clear_unpark_bits(logs, pin_epoch);
+    let validate = move || unsafe { try_clear_unpark_bits(logs, pin_epoch) };
     let before_sleep = || {};
     let timed_out = |_, _| {};
 

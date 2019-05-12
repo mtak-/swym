@@ -390,6 +390,13 @@ impl<'tcell> WriteLog<'tcell> {
     }
 
     #[inline]
+    pub fn clear_unpark_bits_htm(&self, pin_epoch: QuiesceEpoch, htx: &HardwareTx) {
+        for epoch_lock in self.epoch_locks() {
+            epoch_lock.clear_unpark_bit_htm(pin_epoch, htx)
+        }
+    }
+
+    #[inline]
     pub fn try_clear_unpark_bits(&self, pin_epoch: QuiesceEpoch) -> bool {
         let mut park_statuses = Vec::new();
         for epoch_lock in self.epoch_locks() {

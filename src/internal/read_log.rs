@@ -98,7 +98,7 @@ impl<'tcell> ReadLog<'tcell> {
     }
 
     #[inline]
-    pub fn validate_reads_htm(&self, pin_epoch: QuiesceEpoch, htm: &HardwareTx) {
+    pub fn validate_reads_htm(&self, pin_epoch: QuiesceEpoch, htx: &HardwareTx) {
         for logged_read in self.data.iter().rev() {
             let logged_read = match *logged_read {
                 Some(logged_read) => logged_read,
@@ -115,8 +115,17 @@ impl<'tcell> ReadLog<'tcell> {
                 },
             };
             if unlikely!(!pin_epoch.read_write_valid_lockable(&logged_read.current_epoch)) {
-                htm.abort()
+                htx.abort()
             }
+        }
+    }
+
+    #[inline]
+    pub fn clear_unpark_bits_htm(&self, pin_epoch: QuiesceEpoch, htx: &HardwareTx) {
+        for logged_read in self.iter() {
+            logged_read
+                .current_epoch
+                .clear_unpark_bit_htm(pin_epoch, htx)
         }
     }
 
