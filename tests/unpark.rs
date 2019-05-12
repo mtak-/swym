@@ -2,7 +2,9 @@ mod unpark {
     use crossbeam_utils::thread;
     use swym::{tcell::TCell, thread_key, tx::Status};
 
+    #[cfg(debug_assertions)]
     #[test]
+    #[should_panic]
     fn empty_tx() {
         let key = thread_key::get();
         let () = key.rw(|_| Err(Status::AWAIT_RETRY));
