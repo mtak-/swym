@@ -53,7 +53,7 @@ impl<T> ForcedUsizeAligned<T> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use std::mem;
+    use core::mem;
 
     #[test]
     fn alignment() {

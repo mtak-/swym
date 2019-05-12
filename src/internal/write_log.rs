@@ -1,7 +1,7 @@
 use crate::{
     internal::{
         alloc::dyn_vec::{DynElemMut, TraitObject},
-        epoch::QuiesceEpoch,
+        epoch::{EpochLock, ParkStatus, QuiesceEpoch},
         tcell_erased::TCellErased,
         usize_aligned::ForcedUsizeAligned,
     },
@@ -74,7 +74,7 @@ impl<'tcell> dyn WriteEntry + 'tcell {
     }
 
     #[inline]
-    pub fn is_dest_tcell(&self, v: &TCellErased) -> bool {
+    fn is_dest_tcell(&self, v: &TCellErased) -> bool {
         match self.tcell() {
             Some(tcell) => ptr::eq(*tcell, v),
             None => false,
@@ -101,32 +101,15 @@ impl<'tcell> dyn WriteEntry + 'tcell {
     }
 
     #[inline]
-    #[must_use]
-    pub fn try_lock(&self, pin_epoch: QuiesceEpoch) -> bool {
-        match self.tcell() {
-            Some(tcell) => tcell.current_epoch.try_lock(pin_epoch),
-            None => true,
-        }
-    }
-
-    #[inline]
-    pub fn try_lock_htm(&self, htx: &HardwareTx, pin_epoch: QuiesceEpoch) {
+    fn try_lock_htm(&self, htx: &HardwareTx, pin_epoch: QuiesceEpoch) -> ParkStatus {
         match self.tcell() {
             Some(tcell) => tcell.current_epoch.try_lock_htm(htx, pin_epoch),
-            None => {}
+            None => ParkStatus::NoParked,
         }
     }
 
     #[inline]
-    pub unsafe fn unlock(&self) {
-        match self.tcell() {
-            Some(tcell) => tcell.current_epoch.unlock_undo(),
-            None => {}
-        }
-    }
-
-    #[inline]
-    pub unsafe fn perform_write(&self) {
+    unsafe fn perform_write(&self) {
         match self.tcell() {
             Some(tcell) => {
                 let size = mem::size_of_val(self);
@@ -144,14 +127,6 @@ impl<'tcell> dyn WriteEntry + 'tcell {
                     len,
                 );
             }
-            None => {}
-        }
-    }
-
-    #[inline]
-    pub unsafe fn publish(&self, publish_epoch: QuiesceEpoch) {
-        match self.tcell() {
-            Some(tcell) => tcell.current_epoch.unlock_publish(publish_epoch),
             None => {}
         }
     }
@@ -213,6 +188,13 @@ impl<'tcell> WriteLog<'tcell> {
     }
 
     #[inline]
+    pub unsafe fn drop_writes(&mut self) {
+        for mut elem in self.data.iter_mut() {
+            ptr::drop_in_place::<dyn WriteEntry>(&mut *elem)
+        }
+    }
+
+    #[inline]
     pub fn is_empty(&self) -> bool {
         let empty = self.filter == 0;
         debug_assert_eq!(
@@ -221,6 +203,13 @@ impl<'tcell> WriteLog<'tcell> {
             "bloom filter and container out of sync"
         );
         empty
+    }
+
+    #[inline]
+    pub fn epoch_locks(&self) -> impl Iterator<Item = &EpochLock> {
+        self.data
+            .iter()
+            .flat_map(|entry| entry.tcell().map(|erased| &erased.current_epoch))
     }
 
     #[inline(never)]
@@ -300,9 +289,8 @@ impl<'tcell> WriteLog<'tcell> {
         hash: NonZeroUsize,
     ) {
         debug_assert!(
-            self.data
-                .iter()
-                .find(|x| x.is_dest_tcell(dest_tcell))
+            self.epoch_locks()
+                .find(|&x| ptr::eq(x, &dest_tcell.current_epoch))
                 .is_none(),
             "attempt to add `TCell` to the `WriteLog` twice"
         );
@@ -319,9 +307,8 @@ impl<'tcell> WriteLog<'tcell> {
         hash: NonZeroUsize,
     ) {
         debug_assert!(
-            self.data
-                .iter()
-                .find(|x| x.is_dest_tcell(dest_tcell))
+            self.epoch_locks()
+                .find(|&x| ptr::eq(x, &dest_tcell.current_epoch))
                 .is_none(),
             "attempt to add `TCell` to the `WriteLog` twice"
         );
@@ -331,43 +318,59 @@ impl<'tcell> WriteLog<'tcell> {
             .push_unchecked(WriteEntryImpl::new(dest_tcell, val));
     }
 
-    #[must_use]
     #[inline]
-    pub fn try_lock_entries(&self, pin_epoch: QuiesceEpoch) -> bool {
-        debug_assert!(!self.is_empty(), "attempt to lock empty write set");
-
-        for entry in &self.data {
-            if unlikely!(!entry.try_lock(pin_epoch)) {
-                unsafe {
-                    self.unlock_entries_until(entry);
-                }
+    pub fn validate_writes(&self, pin_epoch: QuiesceEpoch) -> bool {
+        for epoch_lock in self.epoch_locks() {
+            if !pin_epoch.read_write_valid_lockable(epoch_lock) {
                 return false;
             }
         }
         true
     }
 
+    #[must_use]
     #[inline]
-    pub fn write_and_lock_htm(&self, htx: &HardwareTx, pin_epoch: QuiesceEpoch) {
+    pub fn try_lock(&self, pin_epoch: QuiesceEpoch) -> Option<ParkStatus> {
+        debug_assert!(!self.is_empty(), "attempt to lock empty write set");
+
+        let mut status = ParkStatus::NoParked;
+        for epoch_lock in self.epoch_locks() {
+            match epoch_lock.try_lock(pin_epoch) {
+                Some(cur_status) => status = status.merge(cur_status),
+                None => {
+                    unsafe {
+                        self.unlock_until(epoch_lock);
+                    }
+                    return None;
+                }
+            }
+        }
+        Some(status)
+    }
+
+    #[inline]
+    pub fn write_and_lock_htm(&self, htx: &HardwareTx, pin_epoch: QuiesceEpoch) -> ParkStatus {
+        let mut status = ParkStatus::NoParked;
         for entry in &self.data {
             unsafe { entry.perform_write() };
-            entry.try_lock_htm(htx, pin_epoch);
+            status = status.merge(entry.try_lock_htm(htx, pin_epoch));
         }
+        status
     }
 
     #[inline(never)]
     #[cold]
-    unsafe fn unlock_entries_until(&self, entry: &dyn WriteEntry) {
-        let iter = self.data.iter().take_while(move |&e| !ptr::eq(e, entry));
-        for entry in iter {
-            entry.unlock();
+    unsafe fn unlock_until(&self, end: &EpochLock) {
+        let iter = self.epoch_locks().take_while(move |&e| !ptr::eq(e, end));
+        for epoch_lock in iter {
+            epoch_lock.unlock_undo();
         }
     }
 
     #[inline]
-    pub unsafe fn unlock_entries(&self) {
-        for entry in &self.data {
-            entry.unlock();
+    pub unsafe fn unlock(&self) {
+        for epoch_lock in self.epoch_locks() {
+            epoch_lock.unlock_undo()
         }
     }
 
@@ -381,8 +384,8 @@ impl<'tcell> WriteLog<'tcell> {
 
     #[inline]
     pub unsafe fn publish(&self, publish_epoch: QuiesceEpoch) {
-        for entry in &self.data {
-            entry.publish(publish_epoch);
+        for epoch_lock in self.epoch_locks() {
+            epoch_lock.unlock_publish(publish_epoch);
         }
     }
 }

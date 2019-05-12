@@ -64,7 +64,7 @@ impl<'tcell> Read<'tcell> for ReadTx<'tcell> {
                 {
                     Ok(value)
                 } else {
-                    Err(Error::RETRY)
+                    Err(Error::CONFLICT)
                 }
             } else {
                 // If the type is zero sized, there's no need to any synchronization.

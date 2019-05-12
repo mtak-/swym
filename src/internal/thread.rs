@@ -1,6 +1,6 @@
 use crate::{
     internal::{
-        epoch::{QuiesceEpoch, EPOCH_CLOCK},
+        epoch::{ParkStatus, QuiesceEpoch, EPOCH_CLOCK},
         gc::{GlobalSynchList, OwnedSynch, ThreadGarbage},
         phoenix_tls::PhoenixTarget,
         read_log::ReadLog,
@@ -9,7 +9,7 @@ use crate::{
     read::ReadTx,
     rw::RwTx,
     stats,
-    tx::Error,
+    tx::{Error, InternalStatus, Status},
 };
 use core::{
     cell::UnsafeCell,
@@ -18,7 +18,7 @@ use core::{
     mem,
     ops::{Deref, DerefMut},
     ptr,
-    sync::atomic::Ordering::Release,
+    sync::atomic::Ordering::{Relaxed, Release},
 };
 use crossbeam_utils::Backoff;
 use swym_htm::HardwareTx;
@@ -126,11 +126,7 @@ impl<'tcell> Logs<'tcell> {
             if write_log.find(src).is_none() {
                 true
             } else {
-                // don't capture count in release
-                #[cfg(feature = "stats")]
-                {
-                    count += 1;
-                }
+                count += 1;
                 false
             }
         });
@@ -302,22 +298,22 @@ impl<'tcell> Pin<'tcell> {
     where
         F: FnMut(&ReadTx<'tcell>) -> Result<O, Error>,
     {
-        let mut retries = 0;
+        let mut conflicts = 0;
         let mut exceeded_backoff = 0;
         let backoff = Backoff::new();
         let result = loop {
             let r = f(ReadTx::new(&mut self));
             match r {
                 Ok(o) => break o,
-                Err(Error::RETRY) => {}
+                Err(Error::CONFLICT) => {}
             }
-            retries += 1;
+            conflicts += 1;
             self.snooze_repin(&backoff);
             if backoff.is_completed() {
                 exceeded_backoff += 1;
             }
         };
-        stats::read_transaction_retries(retries);
+        stats::read_transaction_conflicts(conflicts);
         stats::should_park_read(exceeded_backoff);
         result
     }
@@ -326,26 +322,35 @@ impl<'tcell> Pin<'tcell> {
     #[inline]
     pub fn run_rw<F, O>(mut self, mut f: F) -> O
     where
-        F: FnMut(&mut RwTx<'tcell>) -> Result<O, Error>,
+        F: FnMut(&mut RwTx<'tcell>) -> Result<O, Status>,
     {
-        let mut eager_retries = 0;
-        let mut commit_retries = 0;
+        let mut eager_conflicts = 0;
+        let mut commit_conflicts = 0;
         let mut exceeded_backoff = 0;
         let backoff = Backoff::new();
         let result = loop {
             self.logs().validate_start_state();
             {
-                let mut pin = unsafe { PinRw::new(&mut self) };
-                let r = f(RwTx::new(&mut pin));
+                let mut pin_rw = unsafe { PinRw::new(&mut self) };
+                let r = f(RwTx::new(&mut pin_rw));
                 match r {
                     Ok(o) => {
-                        if likely!(pin.commit()) {
+                        if likely!(pin_rw.commit()) {
                             self.logs().validate_start_state();
                             break o;
                         }
-                        commit_retries += 1;
+                        commit_conflicts += 1;
                     }
-                    Err(Error::RETRY) => eager_retries += 1,
+                    Err(Status {
+                        kind: InternalStatus::Error(Error::CONFLICT),
+                    }) => {
+                        eager_conflicts += 1;
+                    }
+                    Err(Status::AWAIT_RETRY) => {
+                        crate::internal::parking::park(pin_rw, &backoff);
+                        self.repin();
+                        continue;
+                    }
                 }
             }
             self.snooze_repin(&backoff);
@@ -353,8 +358,8 @@ impl<'tcell> Pin<'tcell> {
                 exceeded_backoff += 1;
             }
         };
-        stats::write_transaction_eager_retries(eager_retries);
-        stats::write_transaction_commit_retries(commit_retries);
+        stats::write_transaction_eager_conflicts(eager_conflicts);
+        stats::write_transaction_commit_conflicts(commit_conflicts);
         stats::should_park_write(exceeded_backoff);
         result
     }
@@ -463,14 +468,14 @@ impl<'tx, 'tcell> PinRw<'tx, 'tcell> {
             match htx {
                 Ok(htx) => {
                     let success = self.commit_hard(htx);
-                    stats::htm_retries(retry_count);
+                    stats::htm_conflicts(retry_count);
                     return success;
                 }
                 Err(HtxRetry::SoftwareFallback) => {
-                    stats::htm_retries(retry_count);
+                    stats::htm_conflicts(retry_count);
                 }
                 Err(HtxRetry::FullRetry) => {
-                    stats::htm_retries(retry_count);
+                    stats::htm_conflicts(retry_count);
                     return false;
                 }
             }
@@ -484,7 +489,7 @@ impl<'tx, 'tcell> PinRw<'tx, 'tcell> {
             let (synch, logs) = self.into_inner();
             let current = synch.current_epoch();
             logs.read_log.validate_reads_htm(current, &htx);
-            logs.write_log.write_and_lock_htm(&htx, current);
+            let park_status = logs.write_log.write_and_lock_htm(&htx, current);
 
             drop(htx);
 
@@ -493,6 +498,9 @@ impl<'tx, 'tcell> PinRw<'tx, 'tcell> {
 
             logs.read_log.clear();
             logs.write_log.clear_no_drop();
+            if unlikely!(park_status == ParkStatus::HasParked) {
+                crate::internal::parking::unpark();
+            }
             logs.garbage.seal_with_epoch(synch, sync_epoch);
 
             true
@@ -513,8 +521,8 @@ impl<'tx, 'tcell> PinRw<'tx, 'tcell> {
             //
             // TODO: would commit algorithm be faster with a single global lock, or lock striping?
             // per object locking causes a cmpxchg per entry
-            if likely!(self.logs().write_log.try_lock_entries(self.pin_epoch())) {
-                self.write_log_lock_success()
+            if let Some(park_status) = self.logs().write_log.try_lock(self.pin_epoch()) {
+                self.write_log_lock_success(park_status)
             } else {
                 self.write_log_lock_failure()
             }
@@ -528,19 +536,19 @@ impl<'tx, 'tcell> PinRw<'tx, 'tcell> {
     }
 
     #[inline]
-    unsafe fn write_log_lock_success(self) -> bool {
+    unsafe fn write_log_lock_success(self, park_status: ParkStatus) -> bool {
         // after locking the write set, ensure nothing in the read set has been modified.
         if likely!(self.logs().read_log.validate_reads(self.pin_epoch())) {
             // The transaction can no longer fail, so proceed to modify and publish the TCells in
             // the write set.
-            self.validation_success()
+            self.validation_success(park_status)
         } else {
             self.validation_failure()
         }
     }
 
     #[inline]
-    unsafe fn validation_success(self) -> bool {
+    unsafe fn validation_success(self, park_status: ParkStatus) -> bool {
         let (synch, logs) = self.into_inner();
 
         // The writes must be performed before the EPOCH_CLOCK is tick'ed.
@@ -557,6 +565,9 @@ impl<'tx, 'tcell> PinRw<'tx, 'tcell> {
         logs.write_log.publish(sync_epoch.next());
         logs.read_log.clear();
         logs.write_log.clear_no_drop();
+        if unlikely!(park_status == ParkStatus::HasParked) {
+            crate::internal::parking::unpark();
+        }
         logs.garbage.seal_with_epoch(synch, sync_epoch);
 
         true
@@ -566,7 +577,68 @@ impl<'tx, 'tcell> PinRw<'tx, 'tcell> {
     #[cold]
     unsafe fn validation_failure(self) -> bool {
         // on fail unlock the write set
-        self.logs().write_log.unlock_entries();
+        self.logs().write_log.unlock();
         false
+    }
+
+    pub fn parked(self) -> ParkPinMutRef<'tx, 'tcell> {
+        ParkPinMutRef::new(self)
+    }
+}
+
+pub struct ParkPinMutRef<'tx, 'tcell> {
+    logs:          &'tx mut Logs<'tcell>,
+    pub pin_epoch: QuiesceEpoch,
+    synch:         &'tx OwnedSynch,
+}
+
+impl<'tx, 'tcell> Drop for ParkPinMutRef<'tx, 'tcell> {
+    fn drop(&mut self) {
+        self.logs.read_log.clear();
+        self.logs.write_log.clear_no_drop();
+        let now = EPOCH_CLOCK.now();
+        if let Some(now) = now {
+            self.synch.pin(now, Release);
+        } else {
+            abort!()
+        }
+    }
+}
+
+impl<'tx, 'tcell> Deref for ParkPinMutRef<'tx, 'tcell> {
+    type Target = Logs<'tcell>;
+
+    #[inline]
+    fn deref(&self) -> &Logs<'tcell> {
+        self.logs
+    }
+}
+
+impl<'tx, 'tcell> ParkPinMutRef<'tx, 'tcell> {
+    fn new(pin_rw: PinRw<'tx, 'tcell>) -> Self {
+        let (synch, logs) = unsafe { pin_rw.into_inner() };
+        let pin_epoch = synch.current_epoch();
+
+        // Before doing anything that can panic, create our `Drop` type that will cleanup our logs.
+        let result = ParkPinMutRef {
+            logs,
+            pin_epoch,
+            synch,
+        };
+
+        result.logs.garbage.abort_speculative_garbage();
+
+        // this can panic
+        unsafe { result.logs.write_log.drop_writes() };
+        synch.unpin(Relaxed);
+        result
+    }
+
+    pub fn park_token(&self) -> usize {
+        self as *const _ as usize
+    }
+
+    pub unsafe fn from_park_token(token: usize) -> &'static Self {
+        &*(token as *const _)
     }
 }

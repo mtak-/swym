@@ -4,7 +4,11 @@
 //! checking that the reads are still valid (validate_reads).
 
 use crate::{
-    internal::{alloc::FVec, epoch::QuiesceEpoch, tcell_erased::TCellErased},
+    internal::{
+        alloc::FVec,
+        epoch::{EpochLock, QuiesceEpoch},
+        tcell_erased::TCellErased,
+    },
     stats,
 };
 use swym_htm::HardwareTx;
@@ -78,14 +82,14 @@ impl<'tcell> ReadLog<'tcell> {
     }
 
     #[inline]
-    fn iter<'a>(&'a self) -> impl DoubleEndedIterator<Item = &'a TCellErased> {
-        self.data.iter().flat_map(|v| *v)
+    pub fn epoch_locks<'a>(&'a self) -> impl DoubleEndedIterator<Item = &'a EpochLock> {
+        self.data.iter().flatten().map(|x| &x.current_epoch)
     }
 
     #[inline]
     pub fn validate_reads(&self, pin_epoch: QuiesceEpoch) -> bool {
-        for logged_read in self.iter() {
-            if unlikely!(!pin_epoch.read_write_valid_lockable(&logged_read.current_epoch)) {
+        for epoch_lock in self.epoch_locks() {
+            if unlikely!(!pin_epoch.read_write_valid_lockable(epoch_lock)) {
                 return false;
             }
         }
@@ -93,7 +97,7 @@ impl<'tcell> ReadLog<'tcell> {
     }
 
     #[inline]
-    pub fn validate_reads_htm(&self, pin_epoch: QuiesceEpoch, htm: &HardwareTx) {
+    pub fn validate_reads_htm(&self, pin_epoch: QuiesceEpoch, htx: &HardwareTx) {
         for logged_read in self.data.iter().rev() {
             let logged_read = match *logged_read {
                 Some(logged_read) => logged_read,
@@ -110,7 +114,7 @@ impl<'tcell> ReadLog<'tcell> {
                 },
             };
             if unlikely!(!pin_epoch.read_write_valid_lockable(&logged_read.current_epoch)) {
-                htm.abort()
+                htx.abort()
             }
         }
     }
