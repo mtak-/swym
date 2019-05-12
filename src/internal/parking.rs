@@ -22,12 +22,12 @@ fn parkable<'tx, 'tcell>(pin: PinMutRef<'tx, 'tcell>) -> bool {
     !logs.read_log.is_empty() || !logs.write_log.is_empty()
 }
 
-unsafe fn try_clear_unpark_bits<'tcell>(logs: &Logs<'tcell>, pin_epoch: QuiesceEpoch) -> bool {
+unsafe fn begin_htx_park<'tcell>(
+    logs: &Logs<'tcell>,
+    retry_count: &mut usize,
+) -> Result<HardwareTx, bool> {
     const MAX_HTM_RETRIES: usize = 10;
-
-    let mut retry_count = 0;
-    let htx = if swym_htm::htm_supported() && logs.read_log.len() >= 3 {
-        let retry_count = &mut retry_count;
+    if swym_htm::htm_supported() && logs.read_log.len() >= 3 {
         HardwareTx::new(|code| {
             if code.is_explicit_abort() || code.is_conflict() && !code.is_retry() {
                 Err(false)
@@ -40,8 +40,31 @@ unsafe fn try_clear_unpark_bits<'tcell>(logs: &Logs<'tcell>, pin_epoch: QuiesceE
         })
     } else {
         Err(true)
-    };
-    let result = match htx {
+    }
+}
+
+#[inline(never)]
+#[cold]
+unsafe fn park_failure_cleanup<'tcell>(logs: &Logs<'tcell>, park_statuses: Vec<ParkStatus>) {
+    // On failure, for every EpochLock where we cleared the unpark bit, set it
+    // again.
+    logs.read_log
+        .epoch_locks()
+        .chain(logs.write_log.epoch_locks())
+        .zip(park_statuses)
+        .filter_map(|(epoch_lock, park_status)| {
+            if park_status == ParkStatus::NoParked {
+                Some(epoch_lock)
+            } else {
+                None
+            }
+        })
+        .for_each(|epoch_lock| epoch_lock.set_unpark_bit())
+}
+
+unsafe fn try_clear_unpark_bits<'tcell>(logs: &Logs<'tcell>, pin_epoch: QuiesceEpoch) -> bool {
+    let mut retry_count = 0;
+    let result = match begin_htx_park(logs, &mut retry_count) {
         Ok(htx) => {
             // Try hardware transactional parking first. This could potentially eliminate many
             // cmpxchg's, and on park failure, all we have to do is abort the transaction.
@@ -61,22 +84,10 @@ unsafe fn try_clear_unpark_bits<'tcell>(logs: &Logs<'tcell>, pin_epoch: QuiesceE
                 .epoch_locks()
                 .chain(logs.write_log.epoch_locks())
             {
-                let park_status = epoch_lock.try_clear_unpark_bit(pin_epoch);
-                match park_status {
+                match epoch_lock.try_clear_unpark_bit(pin_epoch) {
                     Some(status) => park_statuses.push(status),
                     None => {
-                        // On failure, for every EpochLock where we cleared the unpark bit, set it
-                        // again.
-                        for (epoch_lock, park_status) in logs
-                            .read_log
-                            .epoch_locks()
-                            .chain(logs.write_log.epoch_locks())
-                            .zip(park_statuses)
-                        {
-                            if park_status != ParkStatus::HasParked {
-                                epoch_lock.set_unpark_bit()
-                            }
-                        }
+                        park_failure_cleanup(logs, park_statuses);
                         stats::htm_park_conflicts(retry_count);
                         return false;
                     }
