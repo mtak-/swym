@@ -70,7 +70,7 @@ fn main() {
     thread::scope(|s| {
         for i in 0..8 {
             s.spawn(move |_| {
-                for _ in 0..1000_000 {
+                for _ in 0..1_000_000 {
                     let mut guard = string.lock();
                     *guard = format!("hello there from thread {}", i);
                 }
