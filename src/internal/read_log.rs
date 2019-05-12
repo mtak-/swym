@@ -6,12 +6,11 @@
 use crate::{
     internal::{
         alloc::FVec,
-        epoch::{ParkStatus, QuiesceEpoch},
+        epoch::{EpochLock, QuiesceEpoch},
         tcell_erased::TCellErased,
     },
     stats,
 };
-use core::ptr;
 use swym_htm::HardwareTx;
 
 const READ_CAPACITY: usize = 1024;
@@ -83,14 +82,14 @@ impl<'tcell> ReadLog<'tcell> {
     }
 
     #[inline]
-    fn iter<'a>(&'a self) -> impl DoubleEndedIterator<Item = &'a TCellErased> {
-        self.data.iter().flat_map(|v| *v)
+    pub fn epoch_locks<'a>(&'a self) -> impl DoubleEndedIterator<Item = &'a EpochLock> {
+        self.data.iter().flatten().map(|x| &x.current_epoch)
     }
 
     #[inline]
     pub fn validate_reads(&self, pin_epoch: QuiesceEpoch) -> bool {
-        for logged_read in self.iter() {
-            if unlikely!(!pin_epoch.read_write_valid_lockable(&logged_read.current_epoch)) {
+        for epoch_lock in self.epoch_locks() {
+            if unlikely!(!pin_epoch.read_write_valid_lockable(epoch_lock)) {
                 return false;
             }
         }
@@ -116,53 +115,6 @@ impl<'tcell> ReadLog<'tcell> {
             };
             if unlikely!(!pin_epoch.read_write_valid_lockable(&logged_read.current_epoch)) {
                 htx.abort()
-            }
-        }
-    }
-
-    #[inline]
-    pub fn clear_unpark_bits_htm(&self, pin_epoch: QuiesceEpoch, htx: &HardwareTx) {
-        for logged_read in self.iter() {
-            logged_read
-                .current_epoch
-                .clear_unpark_bit_htm(pin_epoch, htx)
-        }
-    }
-
-    #[inline]
-    pub fn try_clear_unpark_bits(&self, pin_epoch: QuiesceEpoch) -> Option<Vec<ParkStatus>> {
-        let mut park_statuses = Vec::with_capacity(self.data.capacity());
-        for logged_read in self.iter() {
-            let park_status = logged_read.current_epoch.try_clear_unpark_bit(pin_epoch);
-            match park_status {
-                Some(status) => park_statuses.push(status),
-                None => {
-                    self.set_unpark_bits_until(logged_read, park_statuses);
-                    return None;
-                }
-            }
-        }
-        Some(park_statuses)
-    }
-
-    #[inline]
-    fn set_unpark_bits_until(&self, end: &TCellErased, park_statuses: Vec<ParkStatus>) {
-        for (logged_read, park_status) in self
-            .iter()
-            .take_while(|read| !ptr::eq(*read, end))
-            .zip(park_statuses)
-        {
-            if park_status != ParkStatus::HasParked {
-                logged_read.current_epoch.set_unpark_bit()
-            }
-        }
-    }
-
-    #[inline]
-    pub fn set_unpark_bits(&self, park_statuses: Vec<ParkStatus>) {
-        for (logged_read, park_status) in self.iter().zip(park_statuses) {
-            if park_status != ParkStatus::HasParked {
-                logged_read.current_epoch.set_unpark_bit()
             }
         }
     }

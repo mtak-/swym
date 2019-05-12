@@ -388,42 +388,6 @@ impl<'tcell> WriteLog<'tcell> {
             epoch_lock.unlock_publish(publish_epoch);
         }
     }
-
-    #[inline]
-    pub fn clear_unpark_bits_htm(&self, pin_epoch: QuiesceEpoch, htx: &HardwareTx) {
-        for epoch_lock in self.epoch_locks() {
-            epoch_lock.clear_unpark_bit_htm(pin_epoch, htx)
-        }
-    }
-
-    #[inline]
-    pub fn try_clear_unpark_bits(&self, pin_epoch: QuiesceEpoch) -> bool {
-        let mut park_statuses = Vec::new();
-        for epoch_lock in self.epoch_locks() {
-            let park_status = epoch_lock.try_clear_unpark_bit(pin_epoch);
-            match park_status {
-                Some(status) => park_statuses.push(status),
-                None => {
-                    self.set_unpark_bits_until(epoch_lock, park_statuses);
-                    return false;
-                }
-            }
-        }
-        true
-    }
-
-    #[inline]
-    fn set_unpark_bits_until(&self, end: &EpochLock, park_statuses: Vec<ParkStatus>) {
-        for (epoch_lock, park_status) in self
-            .epoch_locks()
-            .take_while(move |&e| !ptr::eq(e, end))
-            .zip(park_statuses)
-        {
-            if park_status != ParkStatus::HasParked {
-                epoch_lock.set_unpark_bit();
-            }
-        }
-    }
 }
 
 pub enum Entry<'a, 'tcell> {

@@ -1,6 +1,6 @@
 use crate::{
     internal::{
-        epoch::{QuiesceEpoch, EPOCH_CLOCK},
+        epoch::{ParkStatus, QuiesceEpoch, EPOCH_CLOCK},
         thread::{Logs, ParkPinMutRef, PinMutRef, PinRw},
     },
     stats,
@@ -45,25 +45,44 @@ unsafe fn try_clear_unpark_bits<'tcell>(logs: &Logs<'tcell>, pin_epoch: QuiesceE
         Ok(htx) => {
             // Try hardware transactional parking first. This could potentially eliminate many
             // cmpxchg's, and on park failure, all we have to do is abort the transaction.
-            logs.read_log.clear_unpark_bits_htm(pin_epoch, &htx);
-            logs.write_log.clear_unpark_bits_htm(pin_epoch, &htx);
-            drop(htx);
+            logs.read_log
+                .epoch_locks()
+                .chain(logs.write_log.epoch_locks())
+                .for_each(move |epoch_lock| epoch_lock.clear_unpark_bit_htm(pin_epoch, &htx));
             true
         }
         Err(true) => {
             // Software parking (e.g. cmpxchg).
-            let park_statuses = logs.read_log.try_clear_unpark_bits(pin_epoch);
-            match park_statuses {
-                Some(statuses) => {
-                    if logs.write_log.try_clear_unpark_bits(pin_epoch) {
-                        true
-                    } else {
-                        logs.read_log.set_unpark_bits(statuses);
-                        false
+
+            // keep track of whether we were the ones to clear the unpark bit
+            let mut park_statuses = Vec::with_capacity(logs.read_log.len());
+            for epoch_lock in logs
+                .read_log
+                .epoch_locks()
+                .chain(logs.write_log.epoch_locks())
+            {
+                let park_status = epoch_lock.try_clear_unpark_bit(pin_epoch);
+                match park_status {
+                    Some(status) => park_statuses.push(status),
+                    None => {
+                        // On failure, for every EpochLock where we cleared the unpark bit, set it
+                        // again.
+                        for (epoch_lock, park_status) in logs
+                            .read_log
+                            .epoch_locks()
+                            .chain(logs.write_log.epoch_locks())
+                            .zip(park_statuses)
+                        {
+                            if park_status != ParkStatus::HasParked {
+                                epoch_lock.set_unpark_bit()
+                            }
+                        }
+                        stats::htm_park_conflicts(retry_count);
+                        return false;
                     }
                 }
-                None => false,
             }
+            true
         }
         Err(false) => false,
     };
