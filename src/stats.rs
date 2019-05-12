@@ -190,22 +190,24 @@ stats! {
     /// Number of times a garbage collection cycle hit the maximum Backoff during quiescing.
     should_park_gc:                     Size @ SHOULD_PARK_GC,
 
-    /// Number of threads awaiting retry ([`AWAIT_RETRY`]) woken up per call to unpark.
+    /// Number of threads awaiting retry ([`AWAIT_RETRY`](crate::tx::Status::AWAIT_RETRY)) woken up
+    /// per call to unpark.
     unparked_size:                      Size @ UNPARKED_SIZE,
 
-    /// Number of threads awaiting retry ([`AWAIT_RETRY`]) that were _not_ woken up per call to
-    /// unpark.
+    /// Number of threads awaiting retry ([`AWAIT_RETRY`](crate::tx::Status::AWAIT_RETRY)) that were
+    /// _not_ woken up per call to unpark.
     not_unparked_size:                  Size @ NOT_UNPARKED_SIZE,
 
-    /// When a thread attempts to [`AWAIT_RETRY`], this is the number of times it attempted a HTM
-    /// park, and failed.
+    /// When a thread attempts to [`AWAIT_RETRY`](crate::tx::Status::AWAIT_RETRY), this is the
+    /// number of times it attempted a HTM park, and failed.
     htm_park_conflicts:                 Size @ HTM_PARK_CONFLICTS,
 
-    /// When a thread attempts to [`AWAIT_RETRY`], but one of the waited on `EpochLock`'s gets
-    /// modified before being parked.
+    /// When a thread attempts to [`AWAIT_RETRY`](crate::tx::Status::AWAIT_RETRY), but one of the
+    /// waited on `EpochLock`'s gets modified before being parked.
     park_failure_size:                  Size @ PARK_FAILURE_SIZE,
 
-    /// Number of `EpochLock`s a parked (via [`AWAIT_RETRY`]) thread can be woken up from.
+    /// Number of `EpochLock`s a parked (via [`AWAIT_RETRY`](crate::tx::Status::AWAIT_RETRY)) thread
+    /// can be woken up from.
     parked_size:                        Size @ PARKED_SIZE,
 }
 
