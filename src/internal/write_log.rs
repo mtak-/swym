@@ -206,7 +206,13 @@ impl<'tcell> WriteLog<'tcell> {
     }
 
     #[inline]
-    pub fn epoch_locks(&self) -> impl Iterator<Item = &EpochLock> {
+    pub fn epoch_locks<'a>(
+        &'a self,
+    ) -> std::iter::FlatMap<
+        crate::internal::alloc::dyn_vec::Iter<'a, (dyn WriteEntry + 'tcell)>,
+        Option<&'a EpochLock>,
+        impl FnMut(&'a (dyn WriteEntry + 'tcell)) -> Option<&'a EpochLock>,
+    > {
         self.data
             .iter()
             .flat_map(|entry| entry.tcell().map(|erased| &erased.current_epoch))
@@ -328,26 +334,6 @@ impl<'tcell> WriteLog<'tcell> {
         true
     }
 
-    #[must_use]
-    #[inline]
-    pub fn try_lock(&self, pin_epoch: QuiesceEpoch) -> Option<ParkStatus> {
-        debug_assert!(!self.is_empty(), "attempt to lock empty write set");
-
-        let mut status = ParkStatus::NoParked;
-        for epoch_lock in self.epoch_locks() {
-            match epoch_lock.try_lock(pin_epoch) {
-                Some(cur_status) => status = status.merge(cur_status),
-                None => {
-                    unsafe {
-                        self.unlock_until(epoch_lock);
-                    }
-                    return None;
-                }
-            }
-        }
-        Some(status)
-    }
-
     #[inline]
     pub fn write_and_lock_htm(&self, htx: &HardwareTx, pin_epoch: QuiesceEpoch) -> ParkStatus {
         let mut status = ParkStatus::NoParked;
@@ -358,34 +344,11 @@ impl<'tcell> WriteLog<'tcell> {
         status
     }
 
-    #[inline(never)]
-    #[cold]
-    unsafe fn unlock_until(&self, end: &EpochLock) {
-        let iter = self.epoch_locks().take_while(move |&e| !ptr::eq(e, end));
-        for epoch_lock in iter {
-            epoch_lock.unlock_undo();
-        }
-    }
-
-    #[inline]
-    pub unsafe fn unlock(&self) {
-        for epoch_lock in self.epoch_locks() {
-            epoch_lock.unlock_undo()
-        }
-    }
-
     #[inline]
     pub unsafe fn perform_writes(&self) {
         atomic::fence(Release);
         for entry in &self.data {
             entry.perform_write();
-        }
-    }
-
-    #[inline]
-    pub unsafe fn publish(&self, publish_epoch: QuiesceEpoch) {
-        for epoch_lock in self.epoch_locks() {
-            epoch_lock.unlock_publish(publish_epoch);
         }
     }
 }

@@ -1,6 +1,6 @@
 use crate::{
     internal::{
-        epoch::{ParkStatus, QuiesceEpoch, EPOCH_CLOCK},
+        epoch::{QuiesceEpoch, EPOCH_CLOCK},
         gc::{GlobalSynchList, OwnedSynch, ThreadGarbage},
         phoenix_tls::PhoenixTarget,
         read_log::ReadLog,
@@ -21,9 +21,6 @@ use core::{
     sync::atomic::Ordering::{Relaxed, Release},
 };
 use crossbeam_utils::Backoff;
-use swym_htm::HardwareTx;
-
-const MAX_HTX_RETRIES: usize = 3;
 
 /// Thread local data.
 ///
@@ -408,177 +405,10 @@ impl<'tx, 'tcell> PinRw<'tx, 'tcell> {
     }
 
     #[inline]
-    unsafe fn into_inner(self) -> (&'tx OwnedSynch, &'tx mut Logs<'tcell>) {
+    pub unsafe fn into_inner(self) -> (&'tx OwnedSynch, &'tx mut Logs<'tcell>) {
         let pin_ref = ptr::read(&self.pin_ref);
         mem::forget(self);
         pin_ref.into_inner()
-    }
-
-    /// The commit algorithm, called after user code has finished running without returning an
-    /// error. Returns true if the transaction committed successfully.
-    #[inline]
-    fn commit(self) -> bool {
-        if likely!(!self.logs().write_log.is_empty()) {
-            self.commit_slow()
-        } else {
-            unsafe { self.commit_empty_write_log() }
-        }
-    }
-
-    #[inline]
-    unsafe fn commit_empty_write_log(self) -> bool {
-        let (_, logs) = self.into_inner();
-        // RwTx validates reads as they occur. As a result, if there are no writes, then we have
-        // no work to do in our commit algorithm.
-        //
-        // On the off chance we do have garbage, with an empty write log. Then there's no way
-        // that garbage could have been previously been shared, as the data cannot
-        // have been made inaccessible via an STM write. It is a logic error in user
-        // code, and requires `unsafe` to make that error. This assert helps to
-        // catch that.
-        debug_assert!(
-            logs.garbage.is_speculative_bag_empty(),
-            "Garbage queued, without any writes!"
-        );
-        logs.read_log.clear();
-        true
-    }
-
-    #[inline]
-    fn commit_slow(self) -> bool {
-        if swym_htm::htm_supported() && self.logs().write_log.word_len() >= 9 {
-            enum HtxRetry {
-                SoftwareFallback,
-                FullRetry,
-            }
-            let mut retry_count = 0;
-            let htx = unsafe {
-                let retry_count = &mut retry_count;
-                HardwareTx::new(move |code| {
-                    if code.is_explicit_abort() || code.is_conflict() && !code.is_retry() {
-                        Err(HtxRetry::FullRetry)
-                    } else if code.is_retry() && *retry_count < MAX_HTX_RETRIES {
-                        *retry_count += 1;
-                        Ok(())
-                    } else {
-                        Err(HtxRetry::SoftwareFallback)
-                    }
-                })
-            };
-            match htx {
-                Ok(htx) => {
-                    let success = self.commit_hard(htx);
-                    stats::htm_conflicts(retry_count);
-                    return success;
-                }
-                Err(HtxRetry::SoftwareFallback) => {
-                    stats::htm_conflicts(retry_count);
-                }
-                Err(HtxRetry::FullRetry) => {
-                    stats::htm_conflicts(retry_count);
-                    return false;
-                }
-            }
-        }
-        self.commit_soft()
-    }
-
-    #[inline(never)]
-    fn commit_hard(self, htx: HardwareTx) -> bool {
-        unsafe {
-            let (synch, logs) = self.into_inner();
-            let current = synch.current_epoch();
-            logs.read_log.validate_reads_htm(current, &htx);
-            let park_status = logs.write_log.write_and_lock_htm(&htx, current);
-
-            drop(htx);
-
-            let sync_epoch = EPOCH_CLOCK.fetch_and_tick();
-            logs.write_log.publish(sync_epoch.next());
-
-            logs.read_log.clear();
-            logs.write_log.clear_no_drop();
-            if unlikely!(park_status == ParkStatus::HasParked) {
-                crate::internal::parking::unpark();
-            }
-            logs.garbage.seal_with_epoch(synch, sync_epoch);
-
-            true
-        }
-    }
-
-    /// This performs a lot of lock cmpxchgs, so inlining doesn't really doesn't give us much.
-    #[inline(never)]
-    fn commit_soft(mut self) -> bool {
-        unsafe {
-            // Locking the write log, would cause validation of any reads to the same TCell to fail.
-            // So we remove all TCells in the read log that are also in the read log, and assume all
-            // TCells in the write log, have been read.
-            self.logs_mut().remove_writes_from_reads();
-
-            // Locking the write set can fail if another thread has the lock, or if any TCell in the
-            // write set has been updated since the transaction began.
-            //
-            // TODO: would commit algorithm be faster with a single global lock, or lock striping?
-            // per object locking causes a cmpxchg per entry
-            if let Some(park_status) = self.logs().write_log.try_lock(self.pin_epoch()) {
-                self.write_log_lock_success(park_status)
-            } else {
-                self.write_log_lock_failure()
-            }
-        }
-    }
-
-    #[inline(never)]
-    #[cold]
-    unsafe fn write_log_lock_failure(self) -> bool {
-        false
-    }
-
-    #[inline]
-    unsafe fn write_log_lock_success(self, park_status: ParkStatus) -> bool {
-        // after locking the write set, ensure nothing in the read set has been modified.
-        if likely!(self.logs().read_log.validate_reads(self.pin_epoch())) {
-            // The transaction can no longer fail, so proceed to modify and publish the TCells in
-            // the write set.
-            self.validation_success(park_status)
-        } else {
-            self.validation_failure()
-        }
-    }
-
-    #[inline]
-    unsafe fn validation_success(self, park_status: ParkStatus) -> bool {
-        let (synch, logs) = self.into_inner();
-
-        // The writes must be performed before the EPOCH_CLOCK is tick'ed.
-        // Reads can get away with performing less work with this ordering.
-        logs.write_log.perform_writes();
-
-        let sync_epoch = EPOCH_CLOCK.fetch_and_tick();
-        debug_assert!(
-            synch.current_epoch() <= sync_epoch,
-            "`EpochClock::fetch_and_tick` returned an earlier time than expected"
-        );
-
-        // unlocks everything in the write lock and sets the TCell epochs to sync_epoch.next()
-        logs.write_log.publish(sync_epoch.next());
-        logs.read_log.clear();
-        logs.write_log.clear_no_drop();
-        if unlikely!(park_status == ParkStatus::HasParked) {
-            crate::internal::parking::unpark();
-        }
-        logs.garbage.seal_with_epoch(synch, sync_epoch);
-
-        true
-    }
-
-    #[inline(never)]
-    #[cold]
-    unsafe fn validation_failure(self) -> bool {
-        // on fail unlock the write set
-        self.logs().write_log.unlock();
-        false
     }
 
     pub fn parked(self) -> ParkPinMutRef<'tx, 'tcell> {

@@ -7,6 +7,7 @@ pub mod alloc;
 #[macro_use]
 pub mod phoenix_tls;
 
+pub mod commit;
 pub mod epoch;
 pub mod gc;
 pub mod parking;
