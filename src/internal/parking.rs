@@ -39,7 +39,7 @@ pub fn park<'tx, 'tcell>(mut pin: PinRw<'tx, 'tcell>, backoff: &Backoff) {
     let park_token = ParkToken(parked_pin.park_token());
     let logs = &*parked_pin;
     let pin_epoch = parked_pin.pin_epoch;
-    let validate = move || unsafe { try_clear_unpark_bits(logs, pin_epoch) };
+    let validate = move || try_clear_unpark_bits(logs, pin_epoch);
     let before_sleep = || {};
     let timed_out = |_, _| {};
 
@@ -66,7 +66,7 @@ pub fn park<'tx, 'tcell>(mut pin: PinRw<'tx, 'tcell>, backoff: &Backoff) {
     drop(parked_pin);
 }
 
-unsafe fn try_clear_unpark_bits<'tcell>(logs: &Logs<'tcell>, pin_epoch: QuiesceEpoch) -> bool {
+fn try_clear_unpark_bits<'tcell>(logs: &Logs<'tcell>, pin_epoch: QuiesceEpoch) -> bool {
     let mut retry_count = 0;
     let result = match begin_htx_park(logs, &mut retry_count) {
         Ok(htx) => {
@@ -118,7 +118,7 @@ fn begin_htx_park<'tcell>(
 
 #[inline(never)]
 #[cold]
-unsafe fn park_failure_cleanup<'tcell>(logs: &Logs<'tcell>, park_statuses: Vec<ParkStatus>) {
+fn park_failure_cleanup<'tcell>(logs: &Logs<'tcell>, park_statuses: Vec<ParkStatus>) {
     // On failure, for every EpochLock where we cleared the unpark bit, set it
     // again.
     logs.read_log
@@ -142,15 +142,7 @@ pub fn unpark() {
     let callback = |_| DEFAULT_UNPARK_TOKEN;
     let mut not_unparked_count = 0;
     let unpark_result = unsafe {
-        let not_unparked_count = &mut not_unparked_count;
-        let filter = move |token| {
-            if should_unpark(token) {
-                FilterOp::Unpark
-            } else {
-                *not_unparked_count += 1;
-                FilterOp::Skip
-            }
-        };
+        let filter = move |token| should_unpark(token, &mut not_unparked_count);
         parking_lot_core::unpark_filter(key, filter, callback)
     };
     stats::unparked_size(unpark_result.unparked_threads);
@@ -158,10 +150,16 @@ pub fn unpark() {
 }
 
 #[inline]
-unsafe fn should_unpark(ParkToken(token): ParkToken) -> bool {
+unsafe fn should_unpark(ParkToken(token): ParkToken, not_unparked_count: &mut usize) -> FilterOp {
     // TODO: parkpinmutref should be Send somehow
     let parked_pin = ParkPinMutRef::from_park_token(token);
     let pin_epoch = parked_pin.pin_epoch;
-    !parked_pin.read_log.validate_reads(pin_epoch)
+    if !parked_pin.read_log.validate_reads(pin_epoch)
         || !parked_pin.write_log.validate_writes(pin_epoch)
+    {
+        FilterOp::Unpark
+    } else {
+        *not_unparked_count += 1;
+        FilterOp::Skip
+    }
 }
