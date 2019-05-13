@@ -1,7 +1,8 @@
 use crate::{
     internal::{
-        epoch::{EpochLock, ParkStatus, EPOCH_CLOCK},
+        epoch::{EpochLock, ParkStatus, QuiesceEpoch, EPOCH_CLOCK},
         thread::PinRw,
+        write_log::WriteLog,
     },
     stats,
 };
@@ -9,6 +10,14 @@ use core::ptr;
 use swym_htm::{BoundedHtxErr, HardwareTx};
 
 const MAX_HTX_RETRIES: u8 = 3;
+
+impl<'tcell> WriteLog<'tcell> {
+    #[inline]
+    unsafe fn publish(&self, sync_epoch: QuiesceEpoch) {
+        self.epoch_locks()
+            .for_each(|epoch_lock| epoch_lock.unlock_publish(sync_epoch))
+    }
+}
 
 impl<'tx, 'tcell> PinRw<'tx, 'tcell> {
     /// The commit algorithm, called after user code has finished running without returning an
@@ -81,11 +90,7 @@ impl<'tx, 'tcell> PinRw<'tx, 'tcell> {
             drop(htx);
 
             let sync_epoch = EPOCH_CLOCK.fetch_and_tick();
-
-            // publish
-            logs.write_log
-                .epoch_locks()
-                .for_each(|epoch_lock| epoch_lock.unlock_publish(sync_epoch.next()));
+            logs.write_log.publish(sync_epoch.next());
 
             logs.read_log.clear();
             logs.write_log.clear_no_drop();
@@ -168,9 +173,8 @@ impl<'tx, 'tcell> PinRw<'tx, 'tcell> {
         );
 
         // unlocks everything in the write lock and sets the TCell epochs to sync_epoch.next()
-        logs.write_log
-            .epoch_locks()
-            .for_each(|epoch_lock| epoch_lock.unlock_publish(sync_epoch.next()));
+        logs.write_log.publish(sync_epoch.next());
+
         logs.read_log.clear();
         logs.write_log.clear_no_drop();
         if unlikely!(park_status == ParkStatus::HasParked) {
