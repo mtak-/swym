@@ -94,6 +94,18 @@ macro_rules! dyn_vec_decl {
             }
 
             #[inline]
+            $vis unsafe fn word_index_unchecked(&self, word_index: usize) -> &dyn $trait {
+                let raw = $crate::internal::alloc::dyn_vec::TraitObject::from_flat(self.data.get_unchecked(word_index).into());
+                &*raw.cast().as_ptr()
+            }
+
+            #[inline]
+            $vis unsafe fn word_index_unchecked_mut(&mut self, word_index: usize) -> &mut dyn $trait {
+                let raw = $crate::internal::alloc::dyn_vec::TraitObject::from_flat(self.data.get_unchecked_mut(word_index).into());
+                &mut *raw.cast().as_ptr()
+            }
+
+            #[inline]
             $vis fn next_push_allocates<U: $trait>(&self) -> bool {
                 assert!(
                     mem::align_of::<U>() == mem::align_of::<usize>(),
