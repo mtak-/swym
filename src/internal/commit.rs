@@ -6,9 +6,9 @@ use crate::{
     stats,
 };
 use core::ptr;
-use swym_htm::HardwareTx;
+use swym_htm::{BoundedHtxErr, HardwareTx};
 
-const MAX_HTX_RETRIES: usize = 3;
+const MAX_HTX_RETRIES: u8 = 3;
 
 impl<'tx, 'tcell> PinRw<'tx, 'tcell> {
     /// The commit algorithm, called after user code has finished running without returning an
@@ -42,42 +42,32 @@ impl<'tx, 'tcell> PinRw<'tx, 'tcell> {
     }
 
     #[inline]
-    fn commit_slow(self) -> bool {
+    fn start_htx(&self, retry_count: &mut u8) -> Result<HardwareTx, BoundedHtxErr> {
         if swym_htm::htm_supported() && self.logs().write_log.word_len() >= 9 {
-            enum HtxRetry {
-                SoftwareFallback,
-                FullRetry,
+            HardwareTx::bounded(retry_count, MAX_HTX_RETRIES)
+        } else {
+            Err(BoundedHtxErr::SoftwareFallback)
+        }
+    }
+
+    #[inline]
+    fn commit_slow(self) -> bool {
+        let mut retry_count = 0;
+        match self.start_htx(&mut retry_count) {
+            Ok(htx) => {
+                let success = self.commit_hard(htx);
+                stats::htm_conflicts(retry_count as _);
+                success
             }
-            let mut retry_count = 0;
-            let htx = unsafe {
-                let retry_count = &mut retry_count;
-                HardwareTx::new(move |code| {
-                    if code.is_explicit_abort() || code.is_conflict() && !code.is_retry() {
-                        Err(HtxRetry::FullRetry)
-                    } else if code.is_retry() && *retry_count < MAX_HTX_RETRIES {
-                        *retry_count += 1;
-                        Ok(())
-                    } else {
-                        Err(HtxRetry::SoftwareFallback)
-                    }
-                })
-            };
-            match htx {
-                Ok(htx) => {
-                    let success = self.commit_hard(htx);
-                    stats::htm_conflicts(retry_count);
-                    return success;
-                }
-                Err(HtxRetry::SoftwareFallback) => {
-                    stats::htm_conflicts(retry_count);
-                }
-                Err(HtxRetry::FullRetry) => {
-                    stats::htm_conflicts(retry_count);
-                    return false;
-                }
+            Err(BoundedHtxErr::SoftwareFallback) => {
+                stats::htm_conflicts(retry_count as _);
+                self.commit_soft()
+            }
+            Err(BoundedHtxErr::AbortOrConflict) => {
+                stats::htm_conflicts(retry_count as _);
+                false
             }
         }
-        self.commit_soft()
     }
 
     #[inline(never)]
