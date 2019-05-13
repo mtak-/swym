@@ -105,7 +105,7 @@ unsafe fn try_clear_unpark_bits<'tcell>(logs: &Logs<'tcell>, pin_epoch: QuiesceE
     result
 }
 
-unsafe fn begin_htx_park<'tcell>(
+fn begin_htx_park<'tcell>(
     logs: &Logs<'tcell>,
     retry_count: &mut u8,
 ) -> Result<HardwareTx, BoundedHtxErr> {
