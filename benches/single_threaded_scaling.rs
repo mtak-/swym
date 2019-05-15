@@ -6,10 +6,8 @@ extern crate test;
 static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
 
 mod single_threaded_scaling {
-    use std::sync::{
-        atomic::{AtomicUsize, Ordering::Relaxed},
-        Mutex,
-    };
+    use parking_lot::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
     use swym::{tcell::TCell, thread_key, tx::Ordering};
     use test::Bencher;
 
@@ -45,7 +43,7 @@ mod single_threaded_scaling {
                 }
                 b.iter(|| {
                     for i in 0..COUNT {
-                        let mut x_i = x[i].lock().unwrap();
+                        let mut x_i = x[i].lock();
                         *x_i += 1;
                     }
                 })
