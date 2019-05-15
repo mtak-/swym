@@ -61,7 +61,7 @@ macro_rules! dyn_vec_decl {
         }
 
         #[allow(unused)]
-        impl $name<'_> {
+        impl<'a> $name<'a> {
             #[inline]
             $vis fn new() -> Self {
                 $name {
@@ -94,15 +94,15 @@ macro_rules! dyn_vec_decl {
             }
 
             #[inline]
-            $vis unsafe fn word_index_unchecked(&self, word_index: usize) -> &dyn $trait {
+            $vis unsafe fn word_index_unchecked(&self, word_index: usize) -> &(dyn $trait + 'a) {
                 let raw = $crate::internal::alloc::dyn_vec::TraitObject::from_flat(self.data.get_unchecked(word_index).into());
                 &*raw.cast().as_ptr()
             }
 
             #[inline]
-            $vis unsafe fn word_index_unchecked_mut(&mut self, word_index: usize) -> &mut dyn $trait {
+            $vis unsafe fn word_index_unchecked_mut(&mut self, word_index: usize) -> $crate::internal::alloc::dyn_vec::DynElemMut<'_, dyn $trait + 'a> {
                 let raw = $crate::internal::alloc::dyn_vec::TraitObject::from_flat(self.data.get_unchecked_mut(word_index).into());
-                &mut *raw.cast().as_ptr()
+                $crate::internal::alloc::dyn_vec::DynElemMut::from_raw(&mut *raw.cast().as_ptr())
             }
 
             #[inline]
@@ -228,6 +228,12 @@ impl<U> Elem<U> {
 #[derive(Debug)]
 pub struct DynElemMut<'a, T: ?Sized> {
     value: &'a mut T,
+}
+
+impl<'a, T: ?Sized> DynElemMut<'a, T> {
+    pub unsafe fn from_raw(value: &'a mut T) -> Self {
+        DynElemMut { value }
+    }
 }
 
 impl<'a, T: ?Sized> Deref for DynElemMut<'a, T> {
