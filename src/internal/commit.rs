@@ -1,21 +1,95 @@
 use crate::{
     internal::{
         epoch::{EpochLock, ParkStatus, QuiesceEpoch, EPOCH_CLOCK},
-        thread::PinRw,
-        write_log::WriteLog,
+        thread::{Logs, PinRw},
+        write_log::{WriteEntry, WriteLog},
     },
     stats,
 };
-use core::ptr;
+use core::{
+    mem,
+    ptr::{self, NonNull},
+    sync::atomic::{self, Ordering::Release},
+};
 use swym_htm::{BoundedHtxErr, HardwareTx};
 
 const MAX_HTX_RETRIES: u8 = 3;
+
+impl<'tcell> Logs<'tcell> {
+    #[inline]
+    pub unsafe fn remove_writes_from_reads(&mut self) {
+        #[allow(unused_mut)]
+        let mut count = 0;
+
+        let write_log = &mut self.write_log;
+        self.read_log.filter_in_place(|src| {
+            if write_log.find(src).is_none() {
+                true
+            } else {
+                count += 1;
+                false
+            }
+        });
+        stats::write_after_logged_read(count)
+    }
+}
+
+impl<'tcell> dyn WriteEntry + 'tcell {
+    #[inline]
+    fn try_lock_htm(&self, htx: &HardwareTx, pin_epoch: QuiesceEpoch) -> ParkStatus {
+        match self.tcell() {
+            Some(tcell) => tcell.current_epoch.try_lock_htm(htx, pin_epoch),
+            None => ParkStatus::NoParked,
+        }
+    }
+
+    #[inline]
+    unsafe fn perform_write(&self) {
+        match self.tcell() {
+            Some(tcell) => {
+                let size = mem::size_of_val(self);
+                assume!(
+                    size % mem::size_of::<usize>() == 0,
+                    "buggy alignment on `WriteEntry`"
+                );
+                let len = size / mem::size_of::<usize>() - 1;
+                assume!(
+                    len > 0,
+                    "`WriteEntry` performing a write of size 0 unexpectedly"
+                );
+                self.pending().as_ptr().copy_to_nonoverlapping(
+                    NonNull::from(*tcell).cast::<usize>().as_ptr().sub(len),
+                    len,
+                );
+            }
+            None => {}
+        }
+    }
+}
 
 impl<'tcell> WriteLog<'tcell> {
     #[inline]
     unsafe fn publish(&self, sync_epoch: QuiesceEpoch) {
         self.epoch_locks()
             .for_each(|epoch_lock| epoch_lock.unlock_publish(sync_epoch))
+    }
+
+    #[inline]
+    fn write_and_lock_htm(&self, htx: &HardwareTx, pin_epoch: QuiesceEpoch) -> ParkStatus {
+        let mut status = ParkStatus::NoParked;
+        for entry in self.write_entries() {
+            unsafe { entry.perform_write() };
+            status = status.merge(entry.try_lock_htm(htx, pin_epoch));
+        }
+        status
+    }
+
+    #[inline]
+    unsafe fn perform_writes(&self) {
+        atomic::fence(Release);
+        for entry in self.write_entries() {
+            entry.perform_write();
+        }
     }
 }
 

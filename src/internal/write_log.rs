@@ -1,7 +1,7 @@
 use crate::{
     internal::{
         alloc::dyn_vec::{DynElemMut, TraitObject},
-        epoch::{EpochLock, ParkStatus, QuiesceEpoch},
+        epoch::{EpochLock, QuiesceEpoch},
         tcell_erased::TCellErased,
         usize_aligned::ForcedUsizeAligned,
     },
@@ -11,9 +11,7 @@ use core::{
     mem::{self, ManuallyDrop},
     num::NonZeroUsize,
     ptr::{self, NonNull},
-    sync::atomic::{self, Ordering::Release},
 };
-use swym_htm::HardwareTx;
 
 #[repr(C)]
 pub struct WriteEntryImpl<'tcell, T> {
@@ -48,7 +46,7 @@ impl<'tcell> dyn WriteEntry + 'tcell {
     }
 
     #[inline]
-    fn tcell(&self) -> &'_ Option<&'_ TCellErased> {
+    pub fn tcell(&self) -> &'_ Option<&'_ TCellErased> {
         let this = self.data_ptr();
         unsafe { &*(this.as_ptr() as *mut _ as *const _) }
     }
@@ -60,7 +58,7 @@ impl<'tcell> dyn WriteEntry + 'tcell {
     }
 
     #[inline]
-    fn pending(&self) -> NonNull<usize> {
+    pub fn pending(&self) -> NonNull<usize> {
         unsafe { NonNull::new_unchecked(self.data_ptr().as_ptr().add(1)) }
     }
 
@@ -97,37 +95,6 @@ impl<'tcell> dyn WriteEntry + 'tcell {
             ptr::read_unaligned::<ManuallyDrop<T>>(downcast as _)
         } else {
             ptr::read::<ManuallyDrop<T>>(downcast as _)
-        }
-    }
-
-    #[inline]
-    fn try_lock_htm(&self, htx: &HardwareTx, pin_epoch: QuiesceEpoch) -> ParkStatus {
-        match self.tcell() {
-            Some(tcell) => tcell.current_epoch.try_lock_htm(htx, pin_epoch),
-            None => ParkStatus::NoParked,
-        }
-    }
-
-    #[inline]
-    unsafe fn perform_write(&self) {
-        match self.tcell() {
-            Some(tcell) => {
-                let size = mem::size_of_val(self);
-                assume!(
-                    size % mem::size_of::<usize>() == 0,
-                    "buggy alignment on `WriteEntry`"
-                );
-                let len = size / mem::size_of::<usize>() - 1;
-                assume!(
-                    len > 0,
-                    "`WriteEntry` performing a write of size 0 unexpectedly"
-                );
-                self.pending().as_ptr().copy_to_nonoverlapping(
-                    NonNull::from(*tcell).cast::<usize>().as_ptr().sub(len),
-                    len,
-                );
-            }
-            None => {}
         }
     }
 }
@@ -216,6 +183,13 @@ impl<'tcell> WriteLog<'tcell> {
         self.data
             .iter()
             .flat_map(|entry| entry.tcell().map(|erased| &erased.current_epoch))
+    }
+
+    #[inline]
+    pub fn write_entries<'a>(
+        &'a self,
+    ) -> crate::internal::alloc::dyn_vec::Iter<'a, (dyn WriteEntry + 'tcell)> {
+        self.data.iter()
     }
 
     #[inline(never)]
@@ -332,24 +306,6 @@ impl<'tcell> WriteLog<'tcell> {
             }
         }
         true
-    }
-
-    #[inline]
-    pub fn write_and_lock_htm(&self, htx: &HardwareTx, pin_epoch: QuiesceEpoch) -> ParkStatus {
-        let mut status = ParkStatus::NoParked;
-        for entry in &self.data {
-            unsafe { entry.perform_write() };
-            status = status.merge(entry.try_lock_htm(htx, pin_epoch));
-        }
-        status
-    }
-
-    #[inline]
-    pub unsafe fn perform_writes(&self) {
-        atomic::fence(Release);
-        for entry in &self.data {
-            entry.perform_write();
-        }
     }
 }
 
