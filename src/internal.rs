@@ -11,6 +11,7 @@ pub mod bloom;
 mod commit;
 mod gc;
 mod parking;
+mod starvation;
 
 pub mod epoch;
 pub mod read_log;
