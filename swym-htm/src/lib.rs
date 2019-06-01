@@ -165,8 +165,7 @@ impl HardwareTx {
     ///
     /// # Safety
     ///
-    /// It is unsafe to pass in a retry handler that never returns `Err`. It is also unsafe to leak
-    /// the transaction, unless `end` is manually called sometime after.
+    /// It is unsafe to pass in a retry handler that never returns `Err`.
     #[inline]
     pub unsafe fn new<F, E>(retry_handler: F) -> Result<Self, E>
     where
@@ -201,6 +200,23 @@ impl HardwareTx {
         }
     }
 
+    /// Starts a new hardware transaction with a default bounded retry handler.
+    #[inline]
+    pub fn bounded(failure_count: &mut u8, max_failures: u8) -> Result<Self, BoundedHtxErr> {
+        unsafe {
+            HardwareTx::new(move |code| {
+                if code.is_explicit_abort() || code.is_conflict() && !code.is_retry() {
+                    Err(BoundedHtxErr::AbortOrConflict)
+                } else if code.is_retry() && *failure_count < max_failures {
+                    *failure_count += 1;
+                    Ok(())
+                } else {
+                    Err(BoundedHtxErr::SoftwareFallback)
+                }
+            })
+        }
+    }
+
     /// Aborts the current transaction.
     ///
     /// Aborting a hardware transaction will effectively reset the thread/call stack to the location
@@ -212,6 +228,16 @@ impl HardwareTx {
     pub fn abort(&self) -> ! {
         unsafe { abort() }
     }
+}
+
+/// Error type for default HardwareTx instances.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub enum BoundedHtxErr {
+    /// The hardware transaction requests a software fallback.
+    SoftwareFallback,
+
+    /// The hardware transaction had a conflict or explicit abort.
+    AbortOrConflict,
 }
 
 /// An atomic and hardware transactional usize.

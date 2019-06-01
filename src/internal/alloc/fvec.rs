@@ -53,7 +53,9 @@ impl<T> FVec<T> {
     #[inline]
     pub unsafe fn push_unchecked(&mut self, t: T) {
         if !self.next_push_allocates() {
-            self.push(t)
+            let len = self.len();
+            self.set_len(len + 1);
+            core::ptr::write(self.get_unchecked_mut(len), t);
         } else if cfg!(debug_assertions) {
             panic!("`push_unchecked` called when an allocation is required")
         } else {
@@ -64,7 +66,9 @@ impl<T> FVec<T> {
     #[inline]
     pub unsafe fn pop_unchecked(&mut self) -> T {
         if !self.is_empty() {
-            self.pop().unwrap()
+            let len = self.len() - 1;
+            self.set_len(len);
+            core::ptr::read(self.get_unchecked_mut(len))
         } else if cfg!(debug_assertions) {
             panic!("`FVec::pop_unchecked` called on an empty FVec")
         } else {

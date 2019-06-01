@@ -114,23 +114,6 @@ impl<'tcell> Logs<'tcell> {
     }
 
     #[inline]
-    pub unsafe fn remove_writes_from_reads(&mut self) {
-        #[allow(unused_mut)]
-        let mut count = 0;
-
-        let write_log = &mut self.write_log;
-        self.read_log.filter_in_place(|src| {
-            if write_log.find(src).is_none() {
-                true
-            } else {
-                count += 1;
-                false
-            }
-        });
-        stats::write_after_logged_read(count)
-    }
-
-    #[inline]
     fn validate_start_state(&self) {
         debug_assert!(self.read_log.is_empty());
         debug_assert!(self.write_log.is_empty());

@@ -1,14 +1,97 @@
 use crate::{
     internal::{
-        epoch::{EpochLock, ParkStatus, EPOCH_CLOCK},
-        thread::PinRw,
+        epoch::{EpochLock, ParkStatus, QuiesceEpoch, EPOCH_CLOCK},
+        thread::{Logs, PinRw},
+        write_log::{WriteEntry, WriteLog},
     },
     stats,
 };
-use core::ptr;
-use swym_htm::HardwareTx;
+use core::{
+    mem,
+    ptr::{self, NonNull},
+    sync::atomic::{self, Ordering::Release},
+};
+use swym_htm::{BoundedHtxErr, HardwareTx};
 
-const MAX_HTX_RETRIES: usize = 3;
+const MAX_HTX_RETRIES: u8 = 3;
+
+impl<'tcell> Logs<'tcell> {
+    #[inline]
+    pub unsafe fn remove_writes_from_reads(&mut self) {
+        #[allow(unused_mut)]
+        let mut count = 0;
+
+        let write_log = &mut self.write_log;
+        self.read_log.filter_in_place(|src| {
+            if write_log.find(src).is_none() {
+                true
+            } else {
+                count += 1;
+                false
+            }
+        });
+        stats::write_after_logged_read(count)
+    }
+}
+
+impl<'tcell> dyn WriteEntry + 'tcell {
+    #[inline]
+    fn try_lock_htm(&self, htx: &HardwareTx, pin_epoch: QuiesceEpoch) -> ParkStatus {
+        match self.tcell() {
+            Some(tcell) => tcell.current_epoch.try_lock_htm(htx, pin_epoch),
+            None => ParkStatus::NoParked,
+        }
+    }
+
+    #[inline]
+    unsafe fn perform_write(&self) {
+        match self.tcell() {
+            Some(tcell) => {
+                let size = mem::size_of_val(self);
+                assume!(
+                    size % mem::size_of::<usize>() == 0,
+                    "buggy alignment on `WriteEntry`"
+                );
+                let len = size / mem::size_of::<usize>() - 1;
+                assume!(
+                    len > 0,
+                    "`WriteEntry` performing a write of size 0 unexpectedly"
+                );
+                self.pending().as_ptr().copy_to_nonoverlapping(
+                    NonNull::from(*tcell).cast::<usize>().as_ptr().sub(len),
+                    len,
+                );
+            }
+            None => {}
+        }
+    }
+}
+
+impl<'tcell> WriteLog<'tcell> {
+    #[inline]
+    unsafe fn publish(&self, sync_epoch: QuiesceEpoch) {
+        self.epoch_locks()
+            .for_each(|epoch_lock| epoch_lock.unlock_publish(sync_epoch))
+    }
+
+    #[inline]
+    fn write_and_lock_htm(&self, htx: &HardwareTx, pin_epoch: QuiesceEpoch) -> ParkStatus {
+        let mut status = ParkStatus::NoParked;
+        for entry in self.write_entries() {
+            unsafe { entry.perform_write() };
+            status = status.merge(entry.try_lock_htm(htx, pin_epoch));
+        }
+        status
+    }
+
+    #[inline]
+    unsafe fn perform_writes(&self) {
+        atomic::fence(Release);
+        for entry in self.write_entries() {
+            entry.perform_write();
+        }
+    }
+}
 
 impl<'tx, 'tcell> PinRw<'tx, 'tcell> {
     /// The commit algorithm, called after user code has finished running without returning an
@@ -42,42 +125,32 @@ impl<'tx, 'tcell> PinRw<'tx, 'tcell> {
     }
 
     #[inline]
-    fn commit_slow(self) -> bool {
+    fn start_htx(&self, retry_count: &mut u8) -> Result<HardwareTx, BoundedHtxErr> {
         if swym_htm::htm_supported() && self.logs().write_log.word_len() >= 9 {
-            enum HtxRetry {
-                SoftwareFallback,
-                FullRetry,
+            HardwareTx::bounded(retry_count, MAX_HTX_RETRIES)
+        } else {
+            Err(BoundedHtxErr::SoftwareFallback)
+        }
+    }
+
+    #[inline]
+    fn commit_slow(self) -> bool {
+        let mut retry_count = 0;
+        match self.start_htx(&mut retry_count) {
+            Ok(htx) => {
+                let success = self.commit_hard(htx);
+                stats::htm_conflicts(retry_count as _);
+                success
             }
-            let mut retry_count = 0;
-            let htx = unsafe {
-                let retry_count = &mut retry_count;
-                HardwareTx::new(move |code| {
-                    if code.is_explicit_abort() || code.is_conflict() && !code.is_retry() {
-                        Err(HtxRetry::FullRetry)
-                    } else if code.is_retry() && *retry_count < MAX_HTX_RETRIES {
-                        *retry_count += 1;
-                        Ok(())
-                    } else {
-                        Err(HtxRetry::SoftwareFallback)
-                    }
-                })
-            };
-            match htx {
-                Ok(htx) => {
-                    let success = self.commit_hard(htx);
-                    stats::htm_conflicts(retry_count);
-                    return success;
-                }
-                Err(HtxRetry::SoftwareFallback) => {
-                    stats::htm_conflicts(retry_count);
-                }
-                Err(HtxRetry::FullRetry) => {
-                    stats::htm_conflicts(retry_count);
-                    return false;
-                }
+            Err(BoundedHtxErr::SoftwareFallback) => {
+                stats::htm_conflicts(retry_count as _);
+                self.commit_soft()
+            }
+            Err(BoundedHtxErr::AbortOrConflict) => {
+                stats::htm_conflicts(retry_count as _);
+                false
             }
         }
-        self.commit_soft()
     }
 
     #[inline(never)]
@@ -91,11 +164,7 @@ impl<'tx, 'tcell> PinRw<'tx, 'tcell> {
             drop(htx);
 
             let sync_epoch = EPOCH_CLOCK.fetch_and_tick();
-
-            // publish
-            logs.write_log
-                .epoch_locks()
-                .for_each(|epoch_lock| epoch_lock.unlock_publish(sync_epoch.next()));
+            logs.write_log.publish(sync_epoch.next());
 
             logs.read_log.clear();
             logs.write_log.clear_no_drop();
@@ -178,9 +247,8 @@ impl<'tx, 'tcell> PinRw<'tx, 'tcell> {
         );
 
         // unlocks everything in the write lock and sets the TCell epochs to sync_epoch.next()
-        logs.write_log
-            .epoch_locks()
-            .for_each(|epoch_lock| epoch_lock.unlock_publish(sync_epoch.next()));
+        logs.write_log.publish(sync_epoch.next());
+
         logs.read_log.clear();
         logs.write_log.clear_no_drop();
         if unlikely!(park_status == ParkStatus::HasParked) {

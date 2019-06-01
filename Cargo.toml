@@ -23,12 +23,13 @@ nightly = [
     "crossbeam-utils/nightly",
     "lock_api/nightly",
     "parking_lot/nightly",
+    "parking_lot_core/nightly",
 ]
 rtm = ["swym-htm/rtm"]
 stats = []
 
 [dependencies]
-cfg-if = "0.1.7"
+cfg-if = "0.1.9"
 crossbeam-utils = "0.6.5"
 lazy_static = "1.3.0"
 lock_api = "0.2.0"
