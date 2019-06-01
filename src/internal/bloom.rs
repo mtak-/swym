@@ -19,11 +19,9 @@ pub enum Contained {
     Maybe,
 }
 
-#[derive(Copy, Clone, Debug)]
-enum Filter {
-    Inline(usize),
-    Overflow,
-}
+type Filter = usize;
+
+const OVERFLOWED: Filter = !0;
 
 #[derive(Debug)]
 pub struct Bloom<'tcell, K> {
@@ -36,7 +34,7 @@ impl<'tcell, K> Bloom<'tcell, K> {
     #[inline]
     pub fn new() -> Self {
         Bloom {
-            filter:   Cell::new(Filter::Inline(0)),
+            filter:   Cell::new(0),
             overflow: Default::default(),
             phantom:  PhantomData,
         }
@@ -48,19 +46,16 @@ impl<'tcell, K> Bloom<'tcell, K> {
 
     #[inline]
     fn has_overflowed(&self) -> bool {
-        match self.filter.get() {
-            Filter::Overflow => true,
-            Filter::Inline(_) => false,
-        }
+        self.filter.get() == OVERFLOWED
     }
 
     #[inline]
     pub fn clear(&mut self) {
-        match *self.filter.get_mut() {
-            Filter::Overflow => self.overflow().clear(),
-            Filter::Inline(_) => {}
+        let filter = *self.filter.get_mut();
+        if filter == OVERFLOWED {
+            self.overflow().clear()
         }
-        *self.filter.get_mut() = Filter::Inline(0);
+        *self.filter.get_mut() = 0;
         debug_assert!(
             self.overflow().is_empty(),
             "`clear` failed to empty the container"
@@ -74,58 +69,52 @@ impl<'tcell, K> Bloom<'tcell, K> {
 
     #[inline]
     pub fn is_empty(&self) -> bool {
-        match self.filter.get() {
-            Filter::Inline(filter) => filter == 0,
-            Filter::Overflow => self.overflow().is_empty(),
-        }
+        self.filter.get() == 0
     }
 
     #[inline]
     pub fn to_overflow(&self, offsets: impl Iterator<Item = (&'tcell K, usize)>) {
-        match self.filter.get() {
-            Filter::Overflow => {}
-            Filter::Inline(_) => self.run_overflow(offsets),
+        if self.filter.get() != OVERFLOWED {
+            self.run_overflow(offsets)
         }
     }
 
     #[inline(never)]
     #[cold]
     fn run_overflow(&self, offsets: impl Iterator<Item = (&'tcell K, usize)>) {
-        self.filter.set(Filter::Overflow);
+        self.filter.set(OVERFLOWED);
         let overflow = self.overflow();
         overflow.extend(offsets.map(|(k, v)| (k as *const K, v)));
     }
 
     #[inline]
     pub fn contained(&self, key: &K) -> Contained {
-        match self.filter.get() {
-            Filter::Inline(filter) => {
-                let bit = bloom_bit(key);
+        let bit = bloom_bit(key);
 
-                if unlikely!(filter & bit.0.get() != 0) {
-                    Contained::Maybe
-                } else {
-                    Contained::No
-                }
-            }
-            Filter::Overflow => Contained::Maybe,
+        if unlikely!(self.filter.get() & bit.0.get() != 0) {
+            Contained::Maybe
+        } else {
+            Contained::No
         }
     }
 
+    // If this returns Maybe, then there's no guarantee the value was inserted. At that time,
+    // overflowing is required.
     #[inline]
     pub fn insert_inline(&self, key: &'tcell K) -> Contained {
-        match self.filter.get() {
-            Filter::Inline(filter) => {
-                let bit = bloom_bit(key);
+        let filter = self.filter.get();
+        let bit = bloom_bit(key);
 
-                if unlikely!(filter & bit.0.get() != 0) {
-                    Contained::Maybe
-                } else {
-                    self.filter.set(Filter::Inline(filter | bit.0.get()));
-                    Contained::No
-                }
+        if unlikely!(filter & bit.0.get() != 0) {
+            Contained::Maybe
+        } else {
+            let new_filter = filter | bit.0.get();
+            if new_filter != OVERFLOWED {
+                self.filter.set(new_filter);
+                Contained::No
+            } else {
+                Contained::Maybe
             }
-            Filter::Overflow => Contained::Maybe,
         }
     }
 
@@ -136,7 +125,7 @@ impl<'tcell, K> Bloom<'tcell, K> {
     }
 
     #[inline]
-    pub fn overflow_entry(&self, key: &K) -> Entry<'_, *const K, usize> {
+    pub fn overflow_entry(&mut self, key: &K) -> Entry<'_, *const K, usize> {
         debug_assert!(self.has_overflowed());
         self.overflow().entry(key as _)
     }

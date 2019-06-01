@@ -75,9 +75,10 @@ mod single_threaded_scaling {
         write_008, lock_write_008, atomic_write_008, 8;
         write_016, lock_write_016, atomic_write_016, 16;
         write_032, lock_write_032, atomic_write_032, 32;
-        write_064, lock_write_064, atomic_write_064, 64;
+        write_063, lock_write_063, atomic_write_063, 63;
 
         // start to hit bloom filter failure here
+        write_064, lock_write_064, atomic_write_064, 64;
         write_065, lock_write_065, atomic_write_065, 65;
         write_066, lock_write_066, atomic_write_066, 66;
         write_067, lock_write_067, atomic_write_067, 67;
