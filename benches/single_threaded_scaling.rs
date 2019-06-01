@@ -11,7 +11,7 @@ mod single_threaded_scaling {
     use swym::{tcell::TCell, thread_key, tx::Ordering};
     use test::Bencher;
 
-    /// this demonstrates issues with the writelog
+    /// This should reveal performance cliffs and regressions in the write log.
     macro_rules! write_count {
         ($name:ident, $lock_name:ident, $atomic_name:ident, $amount:expr) => {
             #[bench]
@@ -84,7 +84,7 @@ mod single_threaded_scaling {
         write_068, lock_write_068, atomic_write_068, 68;
 
         write_128, lock_write_128, atomic_write_128, 128;
-
-        write_256, lock_write_256, atomic_write_256, 256
+        write_256, lock_write_256, atomic_write_256, 256;
+        write_512, lock_write_512, atomic_write_512, 512
     }
 }

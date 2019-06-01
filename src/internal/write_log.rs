@@ -1,6 +1,6 @@
 use crate::{
     internal::{
-        alloc::dyn_vec::{DynElemMut, TraitObject},
+        alloc::dyn_vec::{self, DynElemMut, TraitObject},
         bloom::{Bloom, Contained},
         epoch::{EpochLock, QuiesceEpoch},
         tcell_erased::TCellErased,
@@ -9,9 +9,11 @@ use crate::{
     stats,
 };
 use core::{
+    marker::PhantomData,
     mem::{self, ManuallyDrop},
     ptr::{self, NonNull},
 };
+use std::collections::hash_map::{Entry as HashMapEntry, OccupiedEntry as HashMapOccupiedEntry};
 
 #[repr(C)]
 pub struct WriteEntryImpl<'tcell, T> {
@@ -233,15 +235,15 @@ impl<'tcell> WriteLog<'tcell> {
     pub fn entry<'a>(&'a mut self, dest_tcell: &TCellErased) -> Entry<'a, 'tcell> {
         self.overflow();
 
-        match self.bloom.overflow_get(dest_tcell) {
-            Some(index) => {
+        match self.bloom.overflow_entry(dest_tcell) {
+            HashMapEntry::Occupied(o) => {
                 stats::bloom_success_slow();
                 stats::write_after_write();
-                debug_assert!(index < self.data.word_len());
-                let entry = unsafe { self.data.word_index_unchecked_mut(index) };
-                Entry::new_occupied(entry)
+                debug_assert!(*o.get() < self.data.word_len());
+                Entry::new_occupied(o, &mut self.data)
             }
-            None => {
+            HashMapEntry::Vacant(v) => {
+                drop(v.insert(self.data.word_len()));
                 stats::bloom_collision();
                 Entry::Vacant
             }
@@ -268,10 +270,8 @@ impl<'tcell> WriteLog<'tcell> {
     }
 
     #[inline]
-    pub fn record_update<T: 'static>(&mut self, dest_tcell: &'tcell TCellErased, val: T) -> bool {
-        let replaced = self.bloom.insert_overflow(dest_tcell, self.data.word_len());
+    pub fn record<T: 'static>(&mut self, dest_tcell: &'tcell TCellErased, val: T) {
         self.data.push(WriteEntryImpl::new(dest_tcell, val));
-        replaced
     }
 
     #[inline]
@@ -287,14 +287,42 @@ impl<'tcell> WriteLog<'tcell> {
 
 pub enum Entry<'a, 'tcell> {
     Vacant,
-    Occupied {
-        entry: DynElemMut<'a, dyn WriteEntry + 'tcell>,
-    },
+    Occupied(OccupiedEntry<'a, 'tcell>),
 }
 
 impl<'a, 'tcell> Entry<'a, 'tcell> {
     #[inline]
-    fn new_occupied(entry: DynElemMut<'a, dyn WriteEntry + 'tcell>) -> Self {
-        Entry::Occupied { entry }
+    fn new_occupied(
+        entry: HashMapOccupiedEntry<'a, *const TCellErased, usize>,
+        data: &'a mut DynVecWriteEntry<'tcell>,
+    ) -> Self {
+        Entry::Occupied(OccupiedEntry {
+            entry,
+            data,
+            phantom: PhantomData,
+        })
+    }
+}
+
+pub struct OccupiedEntry<'a, 'tcell> {
+    entry:   HashMapOccupiedEntry<'a, *const TCellErased, usize>,
+    data:    &'a mut DynVecWriteEntry<'tcell>,
+    phantom: PhantomData<Vec<&'tcell TCellErased>>,
+}
+
+impl<'a, 'tcell> OccupiedEntry<'a, 'tcell> {
+    pub fn overwrite<T: 'static>(self, dest_tcell: &'tcell TCellErased, val: T) {
+        let new_entry = WriteEntryImpl::new(dest_tcell, val);
+        let new_vtable = dyn_vec::vtable::<dyn WriteEntry + 'tcell>(&new_entry);
+        unsafe {
+            let dyn_elem = self.data.word_index_unchecked_mut(*self.entry.get());
+            DynElemMut::assign_unchecked(dyn_elem, new_vtable, new_entry)
+        }
+    }
+
+    pub fn tombstone_replace<T: 'static>(mut self, dest_tcell: &'tcell TCellErased, val: T) {
+        let prev = self.entry.insert(self.data.word_len());
+        unsafe { self.data.word_index_unchecked_mut(prev).deactivate() };
+        self.data.push(WriteEntryImpl::new(dest_tcell, val));
     }
 }

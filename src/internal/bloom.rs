@@ -11,6 +11,7 @@ use core::{
     num::NonZeroUsize,
 };
 use fxhash::FxHashMap;
+use std::collections::hash_map::Entry;
 
 #[derive(Copy, Clone, PartialEq, Eq)]
 pub enum Contained {
@@ -128,17 +129,16 @@ impl<'tcell, K> Bloom<'tcell, K> {
         }
     }
 
-    #[inline(never)]
-    #[cold]
-    pub fn insert_overflow(&self, key: &'tcell K, index: usize) -> bool {
-        debug_assert!(self.has_overflowed());
-        self.overflow().insert(key, index).is_some()
-    }
-
     #[inline]
     pub fn overflow_get(&self, key: &K) -> Option<usize> {
         debug_assert!(self.has_overflowed());
         self.overflow().get(&(key as _)).cloned()
+    }
+
+    #[inline]
+    pub fn overflow_entry(&self, key: &K) -> Entry<'_, *const K, usize> {
+        debug_assert!(self.has_overflowed());
+        self.overflow().entry(key as _)
     }
 }
 

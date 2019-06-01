@@ -9,11 +9,10 @@
 
 use crate::{
     internal::{
-        alloc::dyn_vec::{self, DynElemMut},
         bloom::Contained,
         tcell_erased::TCellErased,
         thread::{PinMutRef, PinRw},
-        write_log::{Entry, WriteEntry, WriteEntryImpl},
+        write_log::Entry,
     },
     stats,
     tcell::{Ref, TCell},
@@ -111,20 +110,15 @@ impl<'tx, 'tcell> RwTxImpl<'tx, 'tcell> {
         let logs = self.logs();
         let found = logs.write_log.find_skip_filter(&tcell.erased);
         unsafe {
-            match found {
-                None => {
-                    let value = Ref::new(tcell.optimistic_read_acquire());
-                    if likely!(self.rw_valid(&tcell.erased)) {
-                        return Ok(value);
-                    }
-                }
+            let snapshot = match found {
+                None => Ref::new(tcell.optimistic_read_acquire()),
                 Some(entry) => {
                     stats::read_after_write();
-                    let value = Ref::new(entry.read::<T>());
-                    if likely!(self.rw_valid(&tcell.erased)) {
-                        return Ok(value);
-                    }
+                    Ref::new(entry.read::<T>())
                 }
+            };
+            if likely!(self.rw_valid(&tcell.erased)) {
+                return Ok(snapshot);
             }
         }
         Err(Error::CONFLICT)
@@ -156,26 +150,18 @@ impl<'tx, 'tcell> RwTxImpl<'tx, 'tcell> {
                 Entry::Vacant => {
                     if likely!(self.rw_valid(&tcell.erased)) {
                         let logs = self.logs_mut();
-                        let replaced = logs.write_log.record_update(&tcell.erased, value);
-                        debug_assert!(!replaced);
+                        logs.write_log.record(&tcell.erased, value);
                         if mem::needs_drop::<T>() {
                             logs.garbage.dispose(tcell.optimistic_read_relaxed())
                         }
                         return Ok(());
                     }
                 }
-                Entry::Occupied { mut entry } => {
+                Entry::Occupied(o) => {
                     if V::REQUEST_TCELL_LIFETIME {
-                        entry.deactivate();
-                        let replaced = self
-                            .logs_mut()
-                            .write_log
-                            .record_update(&tcell.erased, value);
-                        debug_assert!(replaced);
+                        o.tombstone_replace(&tcell.erased, value);
                     } else {
-                        let new_entry = WriteEntryImpl::new(&tcell.erased, value);
-                        let new_vtable = dyn_vec::vtable::<dyn WriteEntry + 'tcell>(&new_entry);
-                        DynElemMut::assign_unchecked(entry, new_vtable, new_entry)
+                        o.overwrite(&tcell.erased, value);
                     }
                     return Ok(());
                 }
