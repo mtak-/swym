@@ -1,154 +1,152 @@
+//! `Starvation` is a type used for blocking other threads in order to finish some work that was
+//! unable to be performed speculatively in a finite amount of time.
+//!
+//! Based on RawMutex in parking_lot.
+//!
+//! https://github.com/Amanieu/parking_lot
+
 use core::{
-    sync::atomic::{AtomicU8, Ordering},
-    time::Duration,
+    cell::Cell,
+    sync::atomic::{AtomicBool, Ordering::Relaxed},
 };
-use lock_api::{GuardNoSend, RawMutex as RawMutexTrait};
-use parking_lot_core::{self, ParkResult, SpinWait, UnparkResult, UnparkToken, DEFAULT_PARK_TOKEN};
-use std::time::Instant;
+use parking_lot_core::{self, FilterOp, ParkResult, ParkToken, UnparkResult, UnparkToken};
 
-type U8 = u8;
+const NO_STARVERS: UnparkToken = UnparkToken(0);
+const STARVE_HANDOFF: UnparkToken = UnparkToken(1);
+const STARVE_TOKEN: ParkToken = ParkToken(0);
+const WAIT_TOKEN: ParkToken = ParkToken(1);
 
-const TOKEN_NORMAL: UnparkToken = UnparkToken(0);
-const LOCKED_BIT: U8 = 1;
-const PARKED_BIT: U8 = 2;
+pub static STARVATION: Starvation = Starvation {
+    state: AtomicBool::new(false),
+};
 
-#[inline]
-pub fn to_deadline(timeout: Duration) -> Option<Instant> {
-    #[cfg(has_checked_instant)]
-    let deadline = Instant::now().checked_add(timeout);
-    #[cfg(not(has_checked_instant))]
-    let deadline = Some(Instant::now() + timeout);
-
-    deadline
-}
-
-/// Raw mutex type backed by the parking lot.
 pub struct Starvation {
-    state: AtomicU8,
-}
-
-unsafe impl RawMutexTrait for Starvation {
-    const INIT: Starvation = Starvation {
-        state: AtomicU8::new(0),
-    };
-
-    type GuardMarker = GuardNoSend;
-
-    #[inline]
-    fn lock(&self) {
-        if self
-            .state
-            .compare_exchange_weak(0, LOCKED_BIT, Ordering::Acquire, Ordering::Relaxed)
-            .is_err()
-        {
-            drop(self.lock_slow());
-        }
-    }
-
-    #[inline]
-    fn try_lock(&self) -> bool {
-        unimplemented!()
-    }
-
-    #[inline]
-    fn unlock(&self) {
-        if self
-            .state
-            .compare_exchange(LOCKED_BIT, 0, Ordering::Release, Ordering::Relaxed)
-            .is_ok()
-        {
-            return;
-        }
-        self.unlock_slow(false);
-    }
+    state: AtomicBool,
 }
 
 impl Starvation {
     #[inline]
-    pub fn wait_unlocked(&self) {
-        let state = self.state.load(Ordering::Relaxed);
-        if unlikely!(state & LOCKED_BIT != 0) {
-            self.wait_unlocked_slow()
+    pub fn starve_lock(&self) {
+        if self
+            .state
+            .compare_exchange_weak(false, true, Relaxed, Relaxed)
+            .is_err()
+        {
+            drop(self.starve_lock_slow());
+        }
+    }
+
+    #[inline]
+    pub fn starve_unlock(&self) {
+        // If a thread is starving, unparking is usually gonna happen.
+        //
+        // There's also not much to gain from a fast path as starvation handling is already in a
+        // deeply slow path.
+        self.starve_unlock_slow();
+    }
+
+    #[inline]
+    pub fn wait_for_starvers(&self) {
+        let state = self.state.load(Relaxed);
+        if unlikely!(state) {
+            self.wait_for_starvers_slow()
         }
     }
 
     #[cold]
     #[inline(never)]
-    fn wait_unlocked_slow(&self) {
-        let mut spinwait = SpinWait::new();
-        let mut state = self.state.load(Ordering::Relaxed);
+    fn starve_lock_slow(&self) {
+        let mut state = self.state.load(Relaxed);
         loop {
-            // Grab the lock if it isn't locked, even if there is a queue on it
-            if state & LOCKED_BIT == 0 {
-                return;
-            }
-
-            // If there is no queue, try spinning a few times
-            if state & PARKED_BIT == 0 && spinwait.spin() {
-                state = self.state.load(Ordering::Relaxed);
+            if !state {
+                match self
+                    .state
+                    .compare_exchange_weak(false, true, Relaxed, Relaxed)
+                {
+                    Ok(_) => return,
+                    Err(x) => state = x,
+                }
                 continue;
             }
 
-            // Set the parked bit
-            if state & PARKED_BIT == 0 {
-                if let Err(x) = self.state.compare_exchange_weak(
-                    state,
-                    state | PARKED_BIT,
-                    Ordering::Relaxed,
-                    Ordering::Relaxed,
-                ) {
-                    state = x;
-                    continue;
+            // Park our thread until we are woken up by an unlock
+            let addr = self as *const _ as usize;
+            let validate = || self.state.load(Relaxed);
+            let before_sleep = || {};
+            let timed_out = |_, _| {};
+            match unsafe {
+                parking_lot_core::park(addr, validate, before_sleep, timed_out, STARVE_TOKEN, None)
+            } {
+                ParkResult::Unparked(STARVE_HANDOFF) => return,
+                ParkResult::Unparked(_) => {
+                    if cfg!(debug_assertions) {
+                        panic!("unfairly unparking a starving thread")
+                    }
                 }
+                ParkResult::Invalid => {}
+                ParkResult::TimedOut => {
+                    debug_assert!(false);
+                    return;
+                }
+            }
+            state = self.state.load(Relaxed);
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn wait_for_starvers_slow(&self) {
+        let mut state = self.state.load(Relaxed);
+        loop {
+            if !state {
+                return;
             }
 
             // Park our thread until we are woken up by an unlock
-            unsafe {
-                let addr = self as *const _ as usize;
-                let validate = || self.state.load(Ordering::Relaxed) == LOCKED_BIT | PARKED_BIT;
-                let before_sleep = || {};
-                let timed_out = |_, _| unimplemented!();
-                match parking_lot_core::park(
-                    addr,
-                    validate,
-                    before_sleep,
-                    timed_out,
-                    DEFAULT_PARK_TOKEN,
-                    None,
-                ) {
-                    // We were unparked normally, try acquiring the lock again
-                    ParkResult::Unparked(_) => return,
-
-                    // The validation function failed, try locking again
-                    ParkResult::Invalid => (),
-
-                    // Timeout expired
-                    ParkResult::TimedOut => {
-                        debug_assert!(false);
-                        return;
-                    }
+            let addr = self as *const _ as usize;
+            let validate = || self.state.load(Relaxed);
+            let before_sleep = || {};
+            let timed_out = |_, _| {};
+            match unsafe {
+                parking_lot_core::park(addr, validate, before_sleep, timed_out, WAIT_TOKEN, None)
+            } {
+                ParkResult::Unparked(NO_STARVERS) => return,
+                ParkResult::Unparked(_) => {}
+                ParkResult::Invalid => {}
+                ParkResult::TimedOut => {
+                    debug_assert!(false);
+                    return;
                 }
             }
-
-            // Loop back and try locking again
-            spinwait.reset();
-            state = self.state.load(Ordering::Relaxed);
+            state = self.state.load(Relaxed);
         }
     }
 
     #[cold]
     #[inline(never)]
-    fn unlock_slow(&self, force_fair: bool) {
+    fn starve_unlock_slow(&self) {
+        let addr = self as *const _ as usize;
+        let starvers = Cell::new(false);
+        let starvers = &starvers;
+        let filter = |token| {
+            if starvers.get() {
+                return FilterOp::Stop;
+            }
+            starvers.set(token == STARVE_TOKEN);
+            FilterOp::Unpark
+        };
+        let callback = |unpark_result: UnparkResult| {
+            if starvers.get() {
+                debug_assert!(unpark_result.unparked_threads > 0);
+                STARVE_HANDOFF
+            } else {
+                self.state.store(false, Relaxed);
+                NO_STARVERS
+            }
+        };
+
         unsafe {
-            let addr = self as *const _ as usize;
-            drop(parking_lot_core::unpark_all(addr, TOKEN_NORMAL));
+            drop(parking_lot_core::unpark_filter(addr, filter, callback));
         }
-    }
-
-    #[cold]
-    #[inline(never)]
-    fn bump_slow(&self) {
-        self.unlock_slow(true);
-        self.lock();
     }
 }
