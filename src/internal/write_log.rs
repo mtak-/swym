@@ -313,7 +313,7 @@ impl<'a, 'tcell> OccupiedEntry<'a, 'tcell> {
 
     pub fn tombstone_replace<T: 'static>(mut self, dest_tcell: &'tcell TCellErased, val: T) {
         let prev = self.entry.insert(self.data.word_len());
-        let entry = unsafe { self.data.word_index_unchecked_mut(prev) };
+        let mut entry = unsafe { self.data.word_index_unchecked_mut(prev) };
         debug_assert!(
             entry.tcell().is_some(),
             "unexpectedly tombstoning an already tombstoned write log entry"
