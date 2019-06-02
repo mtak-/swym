@@ -13,7 +13,7 @@ use crate::{
 };
 use swym_htm::HardwareTx;
 
-const READ_CAPACITY: usize = 1024;
+const READ_CAPACITY: usize = 0;
 
 #[derive(Debug)]
 pub struct ReadLog<'tcell> {
