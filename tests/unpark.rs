@@ -17,7 +17,7 @@ mod unpark {
     #[test]
     fn park_failure() {
         const ITER: usize = 1_000;
-        const TRIES: usize = 100;
+        const TRIES: usize = 50;
 
         // if we haven't completed in a reasonable amount of time, abort, failing the test
         std::thread::spawn(|| {

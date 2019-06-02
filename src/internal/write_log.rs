@@ -1,6 +1,7 @@
 use crate::{
     internal::{
-        alloc::dyn_vec::{DynElemMut, TraitObject},
+        alloc::dyn_vec::{self, DynElemMut, TraitObject},
+        bloom::{Bloom, Contained},
         epoch::{EpochLock, QuiesceEpoch},
         tcell_erased::TCellErased,
         usize_aligned::ForcedUsizeAligned,
@@ -8,10 +9,11 @@ use crate::{
     stats,
 };
 use core::{
+    marker::PhantomData,
     mem::{self, ManuallyDrop},
-    num::NonZeroUsize,
     ptr::{self, NonNull},
 };
+use std::collections::hash_map::{Entry as HashMapEntry, OccupiedEntry as HashMapOccupiedEntry};
 
 #[repr(C)]
 pub struct WriteEntryImpl<'tcell, T> {
@@ -72,14 +74,6 @@ impl<'tcell> dyn WriteEntry + 'tcell {
     }
 
     #[inline]
-    fn is_dest_tcell(&self, v: &TCellErased) -> bool {
-        match self.tcell() {
-            Some(tcell) => ptr::eq(*tcell, v),
-            None => false,
-        }
-    }
-
-    #[inline]
     pub unsafe fn read<T>(&self) -> ManuallyDrop<T> {
         debug_assert!(
             mem::size_of_val(self) == mem::size_of::<WriteEntryImpl<'tcell, T>>(),
@@ -101,37 +95,33 @@ impl<'tcell> dyn WriteEntry + 'tcell {
 
 dyn_vec_decl! {struct DynVecWriteEntry: WriteEntry;}
 
-#[derive(Copy, Clone, PartialEq, Eq)]
-pub enum Contained {
-    No,
-    Maybe,
-}
-
 /// TODO: WriteLog is very very slow if the bloom filter fails.
 /// probably worth looking into some true hashmaps
 #[repr(C)]
 pub struct WriteLog<'tcell> {
-    filter: usize,
-    data:   DynVecWriteEntry<'tcell>,
+    bloom: Bloom<'tcell, TCellErased>,
+    data:  DynVecWriteEntry<'tcell>,
 }
 
 impl<'tcell> WriteLog<'tcell> {
     #[inline]
     pub fn new() -> Self {
         WriteLog {
-            filter: 0,
-            data:   DynVecWriteEntry::new(),
+            bloom: Bloom::new(),
+            data:  DynVecWriteEntry::new(),
         }
     }
 
     #[inline]
-    pub fn contained(&self, hash: NonZeroUsize) -> Contained {
+    pub fn contained(&self, tcell: &'tcell TCellErased) -> Contained {
         stats::bloom_check();
-        if unlikely!(self.filter & hash.get() != 0) {
-            Contained::Maybe
-        } else {
-            Contained::No
-        }
+        self.bloom.contained(tcell)
+    }
+
+    #[inline]
+    pub fn contained_set(&self, tcell: &'tcell TCellErased) -> Contained {
+        stats::bloom_check();
+        self.bloom.insert_inline(tcell)
     }
 
     #[inline]
@@ -141,7 +131,7 @@ impl<'tcell> WriteLog<'tcell> {
 
     #[inline]
     pub fn clear(&mut self) {
-        self.filter = 0;
+        self.bloom.clear();
         // TODO: NESTING: tx's can start here
         stats::write_word_size(self.word_len());
         self.data.clear();
@@ -149,7 +139,7 @@ impl<'tcell> WriteLog<'tcell> {
 
     #[inline]
     pub fn clear_no_drop(&mut self) {
-        self.filter = 0;
+        self.bloom.clear();
         stats::write_word_size(self.word_len());
         self.data.clear_no_drop();
     }
@@ -163,10 +153,10 @@ impl<'tcell> WriteLog<'tcell> {
 
     #[inline]
     pub fn is_empty(&self) -> bool {
-        let empty = self.filter == 0;
+        let empty = self.data.is_empty();
         debug_assert_eq!(
             empty,
-            self.data.is_empty(),
+            self.bloom.is_empty(),
             "bloom filter and container out of sync"
         );
         empty
@@ -192,12 +182,32 @@ impl<'tcell> WriteLog<'tcell> {
         self.data.iter()
     }
 
-    #[inline(never)]
-    fn find_slow(&self, dest_tcell: &TCellErased) -> Option<&dyn WriteEntry> {
-        let result = self
-            .data
-            .iter()
-            .find(move |&entry| entry.is_dest_tcell(dest_tcell));
+    #[inline]
+    fn overflow(&self) {
+        unsafe {
+            self.bloom
+                .to_overflow(self.write_entries().flat_map(|elem| {
+                    let raw = TraitObject::from_pointer(self.data.word_index_unchecked(0).into())
+                        .data as usize;
+                    let raw2 = TraitObject::from_pointer(elem.into()).data as usize;
+                    elem.tcell()
+                        .map(move |tcell| (tcell, (raw2 - raw) / mem::size_of::<usize>()))
+                }));
+        }
+    }
+
+    #[inline]
+    pub fn find_skip_filter(&self, dest_tcell: &TCellErased) -> Option<&dyn WriteEntry> {
+        self.overflow();
+        let result = self.bloom.overflow_get(dest_tcell).map(|index| {
+            debug_assert!(
+                index < self.data.word_len(),
+                "attempting to index at word {} of a {} word dynvec",
+                index,
+                self.data.word_len()
+            );
+            unsafe { self.data.word_index_unchecked(index) }
+        });
         if result.is_some() {
             stats::bloom_success_slow()
         } else {
@@ -206,53 +216,37 @@ impl<'tcell> WriteLog<'tcell> {
         result
     }
 
+    #[inline(never)]
+    fn find_slow(&self, dest_tcell: &TCellErased) -> Option<&dyn WriteEntry> {
+        self.find_skip_filter(dest_tcell)
+    }
+
     // biased against finding the tcell
     #[inline]
     pub fn find(&self, dest_tcell: &TCellErased) -> Option<&dyn WriteEntry> {
-        let hash = bloom_hash(dest_tcell);
-        debug_assert!(hash.get() != 0, "bug in bloom_hash algorithm");
-        if likely!(self.contained(hash) == Contained::No) {
+        if likely!(self.bloom.contained(dest_tcell) == Contained::No) {
             None
         } else {
             self.find_slow(dest_tcell)
         }
     }
 
-    #[inline(never)]
-    fn entry_slow<'a>(
-        &'a mut self,
-        dest_tcell: &TCellErased,
-        hash: NonZeroUsize,
-    ) -> Entry<'a, 'tcell> {
-        match self
-            .data
-            .iter_mut()
-            .find(|entry| entry.is_dest_tcell(dest_tcell))
-        {
-            // TODO: Borrow checker is a little off here. Without the transmute, the code does not
-            // compile. But, replacing either branch's return with `unimplemented` compiles.
-            // polonius would fix this.
-            Some(entry) => {
-                stats::bloom_success_slow();
-                stats::write_after_write();
-                Entry::new_occupied(unsafe { mem::transmute(entry) }, hash)
-            }
-            None => {
-                stats::bloom_collision();
-                Entry::new_hash(self, hash)
-            }
-        }
-    }
-
-    // biased against finding the tcell
     #[inline]
     pub fn entry<'a>(&'a mut self, dest_tcell: &TCellErased) -> Entry<'a, 'tcell> {
-        let hash = bloom_hash(dest_tcell);
-        debug_assert!(hash.get() != 0, "bug in dumb_reference_hash algorithm");
-        if likely!(self.contained(hash) == Contained::No) {
-            Entry::new_hash(self, hash)
-        } else {
-            self.entry_slow(dest_tcell, hash)
+        self.overflow();
+
+        match self.bloom.overflow_entry(dest_tcell) {
+            HashMapEntry::Occupied(o) => {
+                stats::bloom_success_slow();
+                stats::write_after_write();
+                debug_assert!(*o.get() < self.data.word_len());
+                Entry::new_occupied(o, &mut self.data)
+            }
+            HashMapEntry::Vacant(v) => {
+                drop(v.insert(self.data.word_len()));
+                stats::bloom_collision();
+                Entry::Vacant
+            }
         }
     }
 
@@ -262,40 +256,22 @@ impl<'tcell> WriteLog<'tcell> {
     }
 
     #[inline]
-    pub fn record<T: 'static>(
-        &mut self,
-        dest_tcell: &'tcell TCellErased,
-        val: T,
-        hash: NonZeroUsize,
-    ) {
+    pub unsafe fn record_unchecked<T: 'static>(&mut self, dest_tcell: &'tcell TCellErased, val: T) {
         debug_assert!(
             self.epoch_locks()
                 .find(|&x| ptr::eq(x, &dest_tcell.current_epoch))
                 .is_none(),
             "attempt to add `TCell` to the `WriteLog` twice"
         );
+        debug_assert!(self.bloom.contained(dest_tcell) == Contained::Maybe);
 
-        self.filter |= hash.get();
-        self.data.push(WriteEntryImpl::new(dest_tcell, val));
+        self.data
+            .push_unchecked(WriteEntryImpl::new(dest_tcell, val));
     }
 
     #[inline]
-    pub unsafe fn record_unchecked<T: 'static>(
-        &mut self,
-        dest_tcell: &'tcell TCellErased,
-        val: T,
-        hash: NonZeroUsize,
-    ) {
-        debug_assert!(
-            self.epoch_locks()
-                .find(|&x| ptr::eq(x, &dest_tcell.current_epoch))
-                .is_none(),
-            "attempt to add `TCell` to the `WriteLog` twice"
-        );
-
-        self.filter |= hash.get();
-        self.data
-            .push_unchecked(WriteEntryImpl::new(dest_tcell, val));
+    pub fn record<T: 'static>(&mut self, dest_tcell: &'tcell TCellErased, val: T) {
+        self.data.push(WriteEntryImpl::new(dest_tcell, val));
     }
 
     #[inline]
@@ -310,44 +286,43 @@ impl<'tcell> WriteLog<'tcell> {
 }
 
 pub enum Entry<'a, 'tcell> {
-    Vacant {
-        write_log: &'a mut WriteLog<'tcell>,
-        hash:      NonZeroUsize,
-    },
-    Occupied {
-        entry: DynElemMut<'a, dyn WriteEntry + 'tcell>,
-        hash:  NonZeroUsize,
-    },
+    Vacant,
+    Occupied(OccupiedEntry<'a, 'tcell>),
 }
 
 impl<'a, 'tcell> Entry<'a, 'tcell> {
     #[inline]
-    fn new_hash(write_log: &'a mut WriteLog<'tcell>, hash: NonZeroUsize) -> Self {
-        Entry::Vacant { write_log, hash }
-    }
-
-    #[inline]
-    fn new_occupied(entry: DynElemMut<'a, dyn WriteEntry + 'tcell>, hash: NonZeroUsize) -> Self {
-        Entry::Occupied { entry, hash }
+    fn new_occupied(
+        entry: HashMapOccupiedEntry<'a, *const TCellErased, usize>,
+        data: &'a mut DynVecWriteEntry<'tcell>,
+    ) -> Self {
+        Entry::Occupied(OccupiedEntry {
+            entry,
+            data,
+            phantom: PhantomData,
+        })
     }
 }
 
-#[inline]
-const fn calc_shift() -> usize {
-    (mem::align_of::<TCellErased>() > 1) as usize
-        + (mem::align_of::<TCellErased>() > 2) as usize
-        + (mem::align_of::<TCellErased>() > 4) as usize
-        + (mem::align_of::<TCellErased>() > 8) as usize
-        + 1 // In practice this +1 results in less failures, however it's not "correct". Any TCell with a
-            // meaningful value happens to have a minimum size of mem::size_of::<usize>() + 1 which might
-            // explain why the +1 is helpful for certain workloads.
+pub struct OccupiedEntry<'a, 'tcell> {
+    entry:   HashMapOccupiedEntry<'a, *const TCellErased, usize>,
+    data:    &'a mut DynVecWriteEntry<'tcell>,
+    phantom: PhantomData<Vec<&'tcell TCellErased>>,
 }
 
-#[inline]
-pub fn bloom_hash(value: &TCellErased) -> NonZeroUsize {
-    const SHIFT: usize = calc_shift();
-    let raw_hash: usize = value as *const TCellErased as usize >> SHIFT;
-    let result = 1 << (raw_hash & (mem::size_of::<NonZeroUsize>() * 8 - 1));
-    debug_assert!(result > 0, "bloom_hash should not return 0");
-    unsafe { NonZeroUsize::new_unchecked(result) }
+impl<'a, 'tcell> OccupiedEntry<'a, 'tcell> {
+    pub fn overwrite<T: 'static>(self, dest_tcell: &'tcell TCellErased, val: T) {
+        let new_entry = WriteEntryImpl::new(dest_tcell, val);
+        let new_vtable = dyn_vec::vtable::<dyn WriteEntry + 'tcell>(&new_entry);
+        unsafe {
+            let dyn_elem = self.data.word_index_unchecked_mut(*self.entry.get());
+            DynElemMut::assign_unchecked(dyn_elem, new_vtable, new_entry)
+        }
+    }
+
+    pub fn tombstone_replace<T: 'static>(mut self, dest_tcell: &'tcell TCellErased, val: T) {
+        let prev = self.entry.insert(self.data.word_len());
+        unsafe { self.data.word_index_unchecked_mut(prev).deactivate() };
+        self.data.push(WriteEntryImpl::new(dest_tcell, val));
+    }
 }

@@ -9,10 +9,10 @@
 
 use crate::{
     internal::{
-        alloc::dyn_vec::{self, DynElemMut},
+        bloom::Contained,
         tcell_erased::TCellErased,
         thread::{PinMutRef, PinRw},
-        write_log::{bloom_hash, Contained, Entry, WriteEntry, WriteEntryImpl},
+        write_log::Entry,
     },
     stats,
     tcell::{Ref, TCell},
@@ -90,7 +90,7 @@ impl<'tx, 'tcell> RwTxImpl<'tx, 'tcell> {
     fn borrow_impl<T>(mut self, tcell: &'tcell TCell<T>) -> Result<Ref<'tx, T>, Error> {
         let logs = self.logs();
         if likely!(!logs.read_log.next_push_allocates())
-            && likely!(logs.write_log.contained(bloom_hash(&tcell.erased)) == Contained::No)
+            && likely!(logs.write_log.contained(&tcell.erased) == Contained::No)
         {
             unsafe {
                 let value = Ref::new(tcell.optimistic_read_acquire());
@@ -108,22 +108,17 @@ impl<'tx, 'tcell> RwTxImpl<'tx, 'tcell> {
     #[cold]
     fn borrow_unlogged_slow<T>(self, tcell: &TCell<T>) -> Result<Ref<'tx, T>, Error> {
         let logs = self.logs();
-        let found = logs.write_log.find(&tcell.erased);
+        let found = logs.write_log.find_skip_filter(&tcell.erased);
         unsafe {
-            match found {
-                None => {
-                    let value = Ref::new(tcell.optimistic_read_acquire());
-                    if likely!(self.rw_valid(&tcell.erased)) {
-                        return Ok(value);
-                    }
-                }
+            let snapshot = match found {
+                None => Ref::new(tcell.optimistic_read_acquire()),
                 Some(entry) => {
                     stats::read_after_write();
-                    let value = Ref::new(entry.read::<T>());
-                    if likely!(self.rw_valid(&tcell.erased)) {
-                        return Ok(value);
-                    }
+                    Ref::new(entry.read::<T>())
                 }
+            };
+            if likely!(self.rw_valid(&tcell.erased)) {
+                return Ok(snapshot);
             }
         }
         Err(Error::CONFLICT)
@@ -132,7 +127,7 @@ impl<'tx, 'tcell> RwTxImpl<'tx, 'tcell> {
     #[inline]
     fn borrow_unlogged_impl<T>(self, tcell: &'tcell TCell<T>) -> Result<Ref<'tx, T>, Error> {
         let logs = self.logs();
-        if likely!(logs.write_log.contained(bloom_hash(&tcell.erased)) == Contained::No) {
+        if likely!(logs.write_log.contained(&tcell.erased) == Contained::No) {
             unsafe {
                 let value = Ref::new(tcell.optimistic_read_acquire());
                 if likely!(self.rw_valid(&tcell.erased)) {
@@ -152,24 +147,21 @@ impl<'tx, 'tcell> RwTxImpl<'tx, 'tcell> {
     ) -> Result<(), SetError<T>> {
         unsafe {
             match self.logs_mut().write_log.entry(&tcell.erased) {
-                Entry::Vacant { write_log: _, hash } => {
+                Entry::Vacant => {
                     if likely!(self.rw_valid(&tcell.erased)) {
                         let logs = self.logs_mut();
-                        logs.write_log.record(&tcell.erased, value, hash);
+                        logs.write_log.record(&tcell.erased, value);
                         if mem::needs_drop::<T>() {
                             logs.garbage.dispose(tcell.optimistic_read_relaxed())
                         }
                         return Ok(());
                     }
                 }
-                Entry::Occupied { mut entry, hash } => {
+                Entry::Occupied(o) => {
                     if V::REQUEST_TCELL_LIFETIME {
-                        entry.deactivate();
-                        self.logs_mut().write_log.record(&tcell.erased, value, hash);
+                        o.tombstone_replace(&tcell.erased, value);
                     } else {
-                        let new_entry = WriteEntryImpl::new(&tcell.erased, value);
-                        let new_vtable = dyn_vec::vtable::<dyn WriteEntry + 'tcell>(&new_entry);
-                        DynElemMut::assign_unchecked(entry, new_vtable, new_entry)
+                        o.overwrite(&tcell.erased, value);
                     }
                     return Ok(());
                 }
@@ -191,16 +183,14 @@ impl<'tx, 'tcell> RwTxImpl<'tx, 'tcell> {
         value: V,
     ) -> Result<(), SetError<T>> {
         let logs = self.logs();
-        let hash = bloom_hash(&tcell.erased);
-
         if likely!(!logs.write_log.next_push_allocates::<V>())
             && (!mem::needs_drop::<T>() || likely!(!logs.garbage.next_dispose_allocates::<T>()))
-            && likely!(logs.write_log.contained(hash) == Contained::No)
+            && likely!(logs.write_log.contained_set(&tcell.erased) == Contained::No)
             && likely!(self.rw_valid(&tcell.erased))
         {
             let logs = self.logs_mut();
             unsafe {
-                logs.write_log.record_unchecked(&tcell.erased, value, hash);
+                logs.write_log.record_unchecked(&tcell.erased, value);
                 if mem::needs_drop::<T>() {
                     logs.garbage
                         .dispose_unchecked(tcell.optimistic_read_relaxed())
