@@ -4,6 +4,7 @@ use crate::{
         gc::{GlobalSynchList, OwnedSynch, ThreadGarbage},
         phoenix_tls::PhoenixTarget,
         read_log::ReadLog,
+        starvation::Progress,
         write_log::WriteLog,
     },
     read::ReadTx,
@@ -20,7 +21,6 @@ use core::{
     ptr,
     sync::atomic::Ordering::{Relaxed, Release},
 };
-use crossbeam_utils::Backoff;
 
 /// Thread local data.
 ///
@@ -37,6 +37,9 @@ pub struct Thread {
     /// The part of a Thread that is visible to other threads in swym (an atomic epoch, and sharded
     /// lock).
     synch: OwnedSynch,
+
+    /// Backoff handling for thread starvation.
+    progress: Progress,
 }
 
 impl Default for Thread {
@@ -50,8 +53,9 @@ impl Thread {
     #[inline]
     pub fn new() -> Self {
         Thread {
-            logs:  UnsafeCell::new(Logs::new()),
-            synch: OwnedSynch::new(),
+            logs:     UnsafeCell::new(Logs::new()),
+            synch:    OwnedSynch::new(),
+            progress: Progress::new(),
         }
     }
 
@@ -161,6 +165,12 @@ impl<'tx, 'tcell> PinRef<'tx, 'tcell> {
         unsafe { &*self.thread.logs.get() }
     }
 
+    /// Returns a reference to the Progress backoff object.
+    #[inline]
+    pub fn progress(&self) -> &Progress {
+        &self.thread.progress
+    }
+
     /// Gets the currently pinned epoch.
     #[inline]
     pub fn pin_epoch(&self) -> QuiesceEpoch {
@@ -208,10 +218,11 @@ impl<'tx, 'tcell> PinMutRef<'tx, 'tcell> {
     }
 
     #[inline]
-    unsafe fn into_inner(self) -> (&'tx OwnedSynch, &'tx mut Logs<'tcell>) {
+    unsafe fn into_inner(self) -> (&'tx OwnedSynch, &'tx mut Logs<'tcell>, &'tx Progress) {
         let synch = &self.pin_ref.thread.synch;
         let logs = &mut *(self.pin_ref.thread.logs.get() as *const _ as *mut _);
-        (synch, logs)
+        let progress = &self.pin_ref.thread.progress;
+        (synch, logs, progress)
     }
 }
 
@@ -222,7 +233,9 @@ pub struct Pin<'tcell> {
 impl<'tcell> Drop for Pin<'tcell> {
     #[inline]
     fn drop(&mut self) {
-        self.synch().unpin(Release)
+        self.synch().unpin(Release);
+        // Panics are more or less considered a successful transaction with no write log.
+        self.progress().progressed();
     }
 }
 
@@ -267,9 +280,15 @@ impl<'tcell> Pin<'tcell> {
     }
 
     #[inline]
-    fn snooze_repin(&mut self, backoff: &Backoff) {
-        backoff.snooze();
+    fn snooze_repin(&mut self) {
+        self.progress().failed_to_progress();
         self.repin()
+    }
+
+    #[inline]
+    fn unpin_without_progress(self) {
+        self.synch().unpin(Release);
+        mem::forget(self);
     }
 
     /// Runs a read only transaction.
@@ -279,8 +298,6 @@ impl<'tcell> Pin<'tcell> {
         F: FnMut(&ReadTx<'tcell>) -> Result<O, Error>,
     {
         let mut conflicts = 0;
-        let mut exceeded_backoff = 0;
-        let backoff = Backoff::new();
         let result = loop {
             let r = f(ReadTx::new(&mut self));
             match r {
@@ -288,13 +305,9 @@ impl<'tcell> Pin<'tcell> {
                 Err(Error::CONFLICT) => {}
             }
             conflicts += 1;
-            self.snooze_repin(&backoff);
-            if backoff.is_completed() {
-                exceeded_backoff += 1;
-            }
+            self.snooze_repin();
         };
         stats::read_transaction_conflicts(conflicts);
-        stats::should_park_read(exceeded_backoff);
         result
     }
 
@@ -306,8 +319,6 @@ impl<'tcell> Pin<'tcell> {
     {
         let mut eager_conflicts = 0;
         let mut commit_conflicts = 0;
-        let mut exceeded_backoff = 0;
-        let backoff = Backoff::new();
         let result = loop {
             self.logs().validate_start_state();
             {
@@ -327,20 +338,18 @@ impl<'tcell> Pin<'tcell> {
                         eager_conflicts += 1;
                     }
                     Err(Status::AWAIT_RETRY) => {
-                        crate::internal::parking::park(pin_rw, &backoff);
+                        crate::internal::parking::park(pin_rw);
                         self.repin();
                         continue;
                     }
                 }
             }
-            self.snooze_repin(&backoff);
-            if backoff.is_completed() {
-                exceeded_backoff += 1;
-            }
+            self.snooze_repin();
         };
+        // A successful commit has already recorded progress
+        self.unpin_without_progress();
         stats::write_transaction_eager_conflicts(eager_conflicts);
         stats::write_transaction_commit_conflicts(commit_conflicts);
-        stats::should_park_write(exceeded_backoff);
         result
     }
 }
@@ -388,7 +397,7 @@ impl<'tx, 'tcell> PinRw<'tx, 'tcell> {
     }
 
     #[inline]
-    pub unsafe fn into_inner(self) -> (&'tx OwnedSynch, &'tx mut Logs<'tcell>) {
+    pub unsafe fn into_inner(self) -> (&'tx OwnedSynch, &'tx mut Logs<'tcell>, &'tx Progress) {
         let pin_ref = ptr::read(&self.pin_ref);
         mem::forget(self);
         pin_ref.into_inner()
@@ -429,7 +438,8 @@ impl<'tx, 'tcell> Deref for ParkPinMutRef<'tx, 'tcell> {
 
 impl<'tx, 'tcell> ParkPinMutRef<'tx, 'tcell> {
     fn new(pin_rw: PinRw<'tx, 'tcell>) -> Self {
-        let (synch, logs) = unsafe { pin_rw.into_inner() };
+        pin_rw.progress().progressed();
+        let (synch, logs, _) = unsafe { pin_rw.into_inner() };
         let pin_epoch = synch.current_epoch();
 
         // Before doing anything that can panic, create our `Drop` type that will cleanup our logs.

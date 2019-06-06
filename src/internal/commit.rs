@@ -18,7 +18,6 @@ const MAX_HTX_RETRIES: u8 = 3;
 impl<'tcell> Logs<'tcell> {
     #[inline]
     pub unsafe fn remove_writes_from_reads(&mut self) {
-        #[allow(unused_mut)]
         let mut count = 0;
 
         let write_log = &mut self.write_log;
@@ -107,7 +106,8 @@ impl<'tx, 'tcell> PinRw<'tx, 'tcell> {
 
     #[inline]
     unsafe fn commit_empty_write_log(self) -> bool {
-        let (_, logs) = self.into_inner();
+        let (_, logs, progress) = self.into_inner();
+        progress.progressed();
         // RwTx validates reads as they occur. As a result, if there are no writes, then we have
         // no work to do in our commit algorithm.
         //
@@ -136,6 +136,7 @@ impl<'tx, 'tcell> PinRw<'tx, 'tcell> {
     #[inline]
     fn commit_slow(self) -> bool {
         let mut retry_count = 0;
+        self.progress().wait_for_starvers();
         match self.start_htx(&mut retry_count) {
             Ok(htx) => {
                 let success = self.commit_hard(htx);
@@ -156,7 +157,7 @@ impl<'tx, 'tcell> PinRw<'tx, 'tcell> {
     #[inline(never)]
     fn commit_hard(self, htx: HardwareTx) -> bool {
         unsafe {
-            let (synch, logs) = self.into_inner();
+            let (synch, logs, progress) = self.into_inner();
             let current = synch.current_epoch();
             logs.read_log.validate_reads_htm(current, &htx);
             let park_status = logs.write_log.write_and_lock_htm(&htx, current);
@@ -168,6 +169,8 @@ impl<'tx, 'tcell> PinRw<'tx, 'tcell> {
 
             logs.read_log.clear();
             logs.write_log.clear_no_drop();
+
+            progress.progressed();
             if unlikely!(park_status == ParkStatus::HasParked) {
                 crate::internal::parking::unpark();
             }
@@ -234,7 +237,7 @@ impl<'tx, 'tcell> PinRw<'tx, 'tcell> {
 
     #[inline]
     unsafe fn validation_success(self, park_status: ParkStatus) -> bool {
-        let (synch, logs) = self.into_inner();
+        let (synch, logs, progress) = self.into_inner();
 
         // The writes must be performed before the EPOCH_CLOCK is tick'ed.
         // Reads can get away with performing less work with this ordering.
@@ -251,6 +254,7 @@ impl<'tx, 'tcell> PinRw<'tx, 'tcell> {
 
         logs.read_log.clear();
         logs.write_log.clear_no_drop();
+        progress.progressed();
         if unlikely!(park_status == ParkStatus::HasParked) {
             crate::internal::parking::unpark();
         }

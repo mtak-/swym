@@ -181,11 +181,8 @@ stats! {
     /// Writes after logged reads currently causes the commit algorithm to do more work.
     write_after_logged_read:            Size @ WRITE_AFTER_LOGGED_READ,
 
-    /// Number of times a read transaction hit the maximum Backoff.
-    should_park_read:                   Size @ SHOULD_PARK_READ,
-
-    /// Number of times a read/write transaction hit the maximum Backoff.
-    should_park_write:                  Size @ SHOULD_PARK_WRITE,
+    /// Number of threads that were blocked by a starvation event.
+    blocked_by_starvation:              Size @ BLOCKED_BY_STARVATION,
 
     /// Number of times a garbage collection cycle hit the maximum Backoff during quiescing.
     should_park_gc:                     Size @ SHOULD_PARK_GC,

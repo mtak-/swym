@@ -5,18 +5,23 @@
 //!
 //! https://github.com/Amanieu/parking_lot
 
+use crate::stats;
 use core::{
     cell::Cell,
-    sync::atomic::{AtomicBool, Ordering::Relaxed},
+    num::NonZeroU32,
+    sync::atomic::{self, AtomicBool, Ordering::Relaxed},
 };
 use parking_lot_core::{self, FilterOp, ParkResult, ParkToken, UnparkResult, UnparkToken};
+use std::thread;
 
 const NO_STARVERS: UnparkToken = UnparkToken(0);
 const STARVE_HANDOFF: UnparkToken = UnparkToken(1);
 const STARVE_TOKEN: ParkToken = ParkToken(0);
 const WAIT_TOKEN: ParkToken = ParkToken(1);
+const SPIN_LIMIT: u32 = 6;
+const YIELD_LIMIT: u32 = 10;
 
-pub static STARVATION: Starvation = Starvation {
+static STARVATION: Starvation = Starvation {
     state: AtomicBool::new(false),
 };
 
@@ -145,8 +150,81 @@ impl Starvation {
             }
         };
 
-        unsafe {
-            drop(parking_lot_core::unpark_filter(addr, filter, callback));
+        let result = unsafe { parking_lot_core::unpark_filter(addr, filter, callback) };
+        stats::blocked_by_starvation(result.unparked_threads)
+    }
+}
+
+#[derive(Copy, Clone)]
+enum ProgressImpl {
+    NotStarving(NonZeroU32),
+    Starving,
+}
+
+pub struct Progress {
+    inner: Cell<ProgressImpl>,
+}
+
+#[cfg(debug_assertions)]
+impl Drop for Progress {
+    fn drop(&mut self) {
+        match self.inner.get() {
+            ProgressImpl::NotStarving(_) => {}
+            ProgressImpl::Starving => panic!("Progress dropped while Starving"),
         }
+    }
+}
+
+impl Progress {
+    #[inline]
+    pub fn new() -> Self {
+        Progress {
+            inner: Cell::new(ProgressImpl::NotStarving(NonZeroU32::new(1).unwrap())),
+        }
+    }
+
+    #[cold]
+    pub fn failed_to_progress(&self) {
+        match self.inner.get() {
+            ProgressImpl::NotStarving(count) => {
+                if count.get() <= SPIN_LIMIT {
+                    for _ in 0..1 << count.get() {
+                        atomic::spin_loop_hint();
+                    }
+                } else {
+                    thread::yield_now();
+                }
+
+                if count.get() <= YIELD_LIMIT {
+                    self.inner.set(ProgressImpl::NotStarving(unsafe {
+                        NonZeroU32::new_unchecked(count.get() + 1)
+                    }));
+                } else {
+                    STARVATION.starve_lock();
+                    self.inner.set(ProgressImpl::Starving)
+                }
+            }
+            ProgressImpl::Starving => {}
+        };
+    }
+
+    #[inline]
+    pub fn wait_for_starvers(&self) {
+        match self.inner.get() {
+            ProgressImpl::NotStarving(_) => STARVATION.wait_for_starvers(),
+            ProgressImpl::Starving => {}
+        };
+    }
+
+    #[inline]
+    pub fn progressed(&self) {
+        match self.inner.get() {
+            ProgressImpl::NotStarving(_) => {}
+            ProgressImpl::Starving => {
+                self.inner
+                    .set(ProgressImpl::NotStarving(NonZeroU32::new(1).unwrap()));
+                STARVATION.starve_unlock();
+            }
+        };
     }
 }
