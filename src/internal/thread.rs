@@ -281,7 +281,7 @@ impl<'tcell> Pin<'tcell> {
 
     #[inline]
     fn snooze_repin(&mut self) {
-        self.progress().failed_to_progress();
+        self.progress().failed_to_progress(self.pin_epoch());
         self.repin()
     }
 
