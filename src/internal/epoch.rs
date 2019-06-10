@@ -492,6 +492,7 @@ impl ThreadEpoch {
 
 /// A monotonically increasing clock.
 #[derive(Debug)]
+#[repr(align(64))]
 pub struct EpochClock(HtmStorage);
 
 /// The world clock. The source of truth, and synchronization for swym. Every write transaction

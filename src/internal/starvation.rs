@@ -42,14 +42,14 @@ const PARKED_BIT: u8 = 1 << 1;
 /// CPU cycles for large transactions.
 // TODO: Use a value based on the concurrency of the machine. Should be larger than the concurrency
 // to avoid collapsing into serialization.
-const MAX_ELAPSED_EPOCHS: usize = 64 * TICK_SIZE;
+const MAX_ELAPSED_EPOCHS: usize = 16 * TICK_SIZE;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-struct Token(NonNull<()>);
+struct Token(NonNull<Progress>);
 
 impl Token {
     #[inline]
-    fn new<T>(raw: &T) -> Self {
+    fn new(raw: &Progress) -> Self {
         Token(NonNull::from(raw).cast())
     }
 
@@ -66,26 +66,24 @@ impl Token {
     #[inline]
     fn from_park_token(park_token: ParkToken) -> Self {
         debug_assert!(park_token.0 != 0);
-        // park tokens are only ever created with non-zero values.
-        Token::new(unsafe { &*(park_token.0 as *mut ()) })
+        // park tokens are only ever created with valid Progress addresses.
+        Token::new(unsafe { &*(park_token.0 as *mut Progress) })
     }
 
     #[inline]
-    unsafe fn as_ref<T>(self) -> &'static T {
-        &*self.0.cast::<T>().as_ptr()
+    unsafe fn as_ref(self) -> &'static Progress {
+        &*self.0.cast().as_ptr()
     }
 }
 
 static STARVATION: Starvation = Starvation {
-    state:    AtomicU8::new(0),
-    _padding: [0; 63],
+    state: AtomicU8::new(0),
 };
 
 /// `Starvation` only uses `Relaxed` memory ` ordering.
 #[repr(align(64))]
 struct Starvation {
-    state:    AtomicU8,
-    _padding: [u8; 63],
+    state: AtomicU8,
 }
 
 impl Starvation {
@@ -342,6 +340,8 @@ impl ProgressImpl {
 }
 
 pub struct Progress {
+    /// The `Cell` here is actually accessed from multiple threads, but only while the "owning"
+    /// thread is parked, and parking lots bucket locks are held.
     inner: Cell<ProgressImpl>,
 }
 
@@ -433,15 +433,20 @@ impl Progress {
                 first_failed_epoch: None,
                 ..
             } => return,
+            _ => {}
+        }
+        self.progressed_slow()
+    }
+
+    #[inline(never)]
+    #[cold]
+    fn progressed_slow(&self) {
+        match self.inner.get() {
             ProgressImpl::NotStarving { .. } => {}
             ProgressImpl::Starving => {
                 STARVATION.starve_unlock(
-                    |this| unsafe { this.as_ref::<Self>() }.inner.get().should_starve(),
-                    |this| {
-                        unsafe { this.as_ref::<Self>() }
-                            .inner
-                            .set(ProgressImpl::Starving)
-                    },
+                    |this| unsafe { this.as_ref() }.inner.get().should_starve(),
+                    |this| unsafe { this.as_ref() }.inner.set(ProgressImpl::Starving),
                 );
             }
         };
