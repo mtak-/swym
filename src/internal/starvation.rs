@@ -23,6 +23,7 @@ use crate::{
 };
 use core::{
     cell::Cell,
+    mem,
     ptr::NonNull,
     sync::atomic::{self, AtomicU8, Ordering::Relaxed},
 };
@@ -65,8 +66,11 @@ impl Token {
 
     #[inline]
     fn from_park_token(park_token: ParkToken) -> Self {
-        debug_assert!(park_token.0 != 0);
-        // park tokens are only ever created with valid Progress addresses.
+        debug_assert!(
+            park_token.0 != 0 && park_token.0 % mem::align_of::<Progress>() == 0,
+            "ParkToken is not a valid pointer"
+        );
+        // park tokens (in this file) are only ever created with valid Progress addresses.
         Token::new(unsafe { &*(park_token.0 as *mut Progress) })
     }
 
@@ -246,10 +250,10 @@ impl Starvation {
 
         // We don't know what thread we wish to unpark until we finish filtering. This means that
         // threads will sometimes be unparked without the possibility of making progress.
-        let filter = move |token: ParkToken| {
+        let filter = |token: ParkToken| {
             debug_assert!(token.0 != NO_STARVERS, "invalid ParkToken detected");
             let next_starved = next_starved_token.get();
-            if let None = next_starved {
+            if next_starved.is_none() {
                 let token = Token::from_park_token(token);
                 if should_upgrade(token) {
                     next_starved_token.set(Some(token));
@@ -261,23 +265,34 @@ impl Starvation {
             }
         };
         let callback = |unpark_result: UnparkResult| {
-            debug_assert!(self.state.load(Relaxed) & LOCKED_BIT != 0);
-            debug_assert!(next_starved_token.get().is_none() || unpark_result.unparked_threads > 0);
             debug_assert!(
-                unpark_result.unparked_threads == 0 || self.state.load(Relaxed) & PARKED_BIT != 0
+                self.state.load(Relaxed) & LOCKED_BIT != 0,
+                "`Starvation::starve_unlock_slow`: unexpectedly not locked"
             );
-            debug_assert!(!unpark_result.have_more_threads || next_starved_token.get().is_some());
+            debug_assert!(
+                unpark_result.unparked_threads == 0 || self.state.load(Relaxed) & PARKED_BIT != 0,
+                "`Starvation::starve_unlock_slow`: park bit was not properly set"
+            );
+            debug_assert!(
+                next_starved_token.get().is_none() || unpark_result.unparked_threads > 0,
+                "`Starvation::starve_unlock_slow`: detected a starvation handoff that does not \
+                 unpark any threads"
+            );
+            debug_assert!(
+                !unpark_result.have_more_threads || next_starved_token.get().is_some(),
+                "`Starvation::starve_unlock_slow`: no starvers remaining, but threads remain \
+                 parked"
+            );
 
             let next_starved = next_starved_token.get();
-            let next_state = if unpark_result.have_more_threads {
-                LOCKED_BIT | PARKED_BIT
-            } else if next_starved.is_some() {
-                LOCKED_BIT
-            } else {
-                0
-            };
-
-            self.state.store(next_state, Relaxed);
+            if !unpark_result.have_more_threads {
+                let next_state = if next_starved.is_some() {
+                    LOCKED_BIT
+                } else {
+                    0
+                };
+                self.state.store(next_state, Relaxed);
+            }
 
             match next_starved {
                 Some(next_starved) => {
@@ -307,7 +322,7 @@ enum ProgressImpl {
 
 impl ProgressImpl {
     #[inline]
-    fn new() -> Self {
+    const fn new() -> Self {
         ProgressImpl::NotStarving {
             first_failed_epoch: None,
             backoff:            0,
@@ -351,8 +366,8 @@ impl Drop for Progress {
         match self.inner.get() {
             ProgressImpl::NotStarving {
                 first_failed_epoch: None,
-                backoff,
-            } if backoff == 1 => {}
+                backoff: 0,
+            } => {}
             inner => panic!(
                 "`Progress` dropped without having made progress: {:?}",
                 inner
@@ -363,7 +378,7 @@ impl Drop for Progress {
 
 impl Progress {
     #[inline]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Progress {
             inner: Cell::new(ProgressImpl::new()),
         }
