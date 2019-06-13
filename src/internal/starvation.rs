@@ -25,10 +25,32 @@ use core::{
     cell::Cell,
     mem,
     ptr::NonNull,
-    sync::atomic::{self, AtomicU8, Ordering::Relaxed},
+    sync::atomic::{self, AtomicU8, AtomicUsize, Ordering::Relaxed},
 };
 use parking_lot_core::{self, FilterOp, ParkResult, ParkToken, UnparkResult, UnparkToken};
 use std::thread;
+
+/// If a thread started a transaction this many epochs ago, the thread will skip move directly into
+/// the `yield_now` phase of backoff.
+///
+/// Lower values result in more serialization under contention. Higher values result in more wasted
+/// CPU cycles for large transactions.
+// TODO: Use a value based on the concurrency of the machine. Should be larger than the concurrency
+// to avoid collapsing into serialization.
+static MAX_ELAPSED_EPOCHS: AtomicUsize = AtomicUsize::new(0);
+
+#[inline]
+fn max_elapsed_epochs() -> usize {
+    let cached = MAX_ELAPSED_EPOCHS.load(Relaxed);
+    if likely!(cached != 0) {
+        cached
+    } else {
+        let cpus = num_cpus::get();
+        let max_elapsed = cpus * TICK_SIZE << 1;
+        MAX_ELAPSED_EPOCHS.store(max_elapsed, Relaxed);
+        max_elapsed
+    }
+}
 
 const NO_STARVERS: usize = 0;
 const SPIN_LIMIT: u32 = 6;
@@ -36,14 +58,6 @@ const YIELD_LIMIT: u32 = 10;
 
 const LOCKED_BIT: u8 = 1 << 0;
 const PARKED_BIT: u8 = 1 << 1;
-
-/// If a thread started a transaction this many epochs ago, the thread is considered to be starving.
-///
-/// Lower values result in more serialization under contention. Higher values result in more wasted
-/// CPU cycles for large transactions.
-// TODO: Use a value based on the concurrency of the machine. Should be larger than the concurrency
-// to avoid collapsing into serialization.
-const MAX_ELAPSED_EPOCHS: usize = 16 * TICK_SIZE;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 struct Token(NonNull<Progress>);
@@ -340,7 +354,7 @@ impl ProgressImpl {
                     return true;
                 }
                 let now = EPOCH_CLOCK.now().unwrap_or_else(|| abort!());
-                now.get().get() - epoch.get().get() >= MAX_ELAPSED_EPOCHS
+                now.get().get() - epoch.get().get() >= max_elapsed_epochs()
             }
             ProgressImpl::NotStarving {
                 first_failed_epoch: None,
@@ -397,7 +411,8 @@ impl Progress {
                 if backoff <= YIELD_LIMIT {
                     let first_failed_epoch = first_failed_epoch.unwrap_or(epoch);
                     if backoff <= SPIN_LIMIT {
-                        if epoch.get().get() - first_failed_epoch.get().get() >= MAX_ELAPSED_EPOCHS
+                        if epoch.get().get() - first_failed_epoch.get().get()
+                            >= max_elapsed_epochs()
                         {
                             // long transaction detected, `spin_loop_hint` is probably a bad backoff
                             // strategy.
