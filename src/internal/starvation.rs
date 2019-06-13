@@ -51,7 +51,7 @@ struct Token(NonNull<Progress>);
 impl Token {
     #[inline]
     fn new(raw: &Progress) -> Self {
-        Token(NonNull::from(raw).cast())
+        Token(raw.into())
     }
 
     #[inline]
@@ -299,7 +299,7 @@ impl Starvation {
                     upgrade(next_starved);
                     next_starved.unpark_token()
                 }
-                None => UnparkToken(0),
+                None => UnparkToken(NO_STARVERS),
             }
         };
 
@@ -330,7 +330,7 @@ impl ProgressImpl {
     }
 
     #[inline]
-    fn should_starve(&self) -> bool {
+    fn should_upgrade(&self) -> bool {
         match self {
             ProgressImpl::NotStarving {
                 first_failed_epoch: Some(epoch),
@@ -388,36 +388,35 @@ impl Progress {
     /// pessimistic phase of concurrency.
     #[cold]
     pub fn failed_to_progress(&self, epoch: QuiesceEpoch) {
+        // TODO: can this be golfed, and/or write to less memory?
         match self.inner.get() {
             ProgressImpl::NotStarving {
                 first_failed_epoch,
                 backoff,
             } => {
-                if backoff <= SPIN_LIMIT {
+                if backoff <= YIELD_LIMIT {
                     let first_failed_epoch = first_failed_epoch.unwrap_or(epoch);
-                    if epoch.get().get() - first_failed_epoch.get().get() >= MAX_ELAPSED_EPOCHS {
-                        // long transaction detected, `spin_loop_hint` is probably a bad backoff
-                        // strategy.
-                        self.inner.set(ProgressImpl::NotStarving {
-                            first_failed_epoch: Some(epoch),
-                            backoff:            SPIN_LIMIT + 1,
-                        });
-                        thread::yield_now();
-                        return;
-                    } else {
-                        for _ in 0..1 << backoff {
-                            atomic::spin_loop_hint();
+                    if backoff <= SPIN_LIMIT {
+                        if epoch.get().get() - first_failed_epoch.get().get() >= MAX_ELAPSED_EPOCHS
+                        {
+                            // long transaction detected, `spin_loop_hint` is probably a bad backoff
+                            // strategy.
+                            self.inner.set(ProgressImpl::NotStarving {
+                                first_failed_epoch: Some(first_failed_epoch),
+                                backoff:            SPIN_LIMIT + 1,
+                            });
+                            thread::yield_now();
+                            return;
+                        } else {
+                            for _ in 0..1 << backoff {
+                                atomic::spin_loop_hint();
+                            }
                         }
-                        self.inner.set(ProgressImpl::NotStarving {
-                            first_failed_epoch: Some(epoch),
-                            backoff:            backoff + 1,
-                        });
+                    } else {
+                        thread::yield_now();
                     }
-                } else if backoff <= YIELD_LIMIT {
-                    thread::yield_now();
-
                     self.inner.set(ProgressImpl::NotStarving {
-                        first_failed_epoch: Some(epoch),
+                        first_failed_epoch: Some(first_failed_epoch),
                         backoff:            backoff + 1,
                     });
                 } else {
@@ -426,7 +425,12 @@ impl Progress {
                     self.inner.set(ProgressImpl::Starving)
                 }
             }
-            ProgressImpl::Starving => thread::yield_now(),
+            ProgressImpl::Starving => {
+                // There might be a few straggler threads that were in the middle of a commit when
+                // this thread signaled it was starving. Rare, but in that scenario we can commit
+                // twice, and some backoff is probably warranted.
+                thread::yield_now();
+            }
         };
     }
 
@@ -458,12 +462,12 @@ impl Progress {
     fn progressed_slow(&self) {
         match self.inner.get() {
             ProgressImpl::NotStarving { .. } => {}
-            ProgressImpl::Starving => {
+            ProgressImpl::Starving => unsafe {
                 STARVATION.starve_unlock(
-                    |this| unsafe { this.as_ref() }.inner.get().should_starve(),
-                    |this| unsafe { this.as_ref() }.inner.set(ProgressImpl::Starving),
+                    |this| this.as_ref().inner.get().should_upgrade(),
+                    |this| this.as_ref().inner.set(ProgressImpl::Starving),
                 );
-            }
+            },
         };
         self.inner.set(ProgressImpl::new());
     }
