@@ -5,7 +5,9 @@
 //! Another subtle difference is a change to when the global clock is bumped. By doing it after
 //! TCells have had their value updated, but before releasing their locks, we can simplify reads.
 //! Reads don't have to read the per object epoch _before_ and after loading the value from shared
-//! memory. They only have to read the per object epoch after loading the value.
+//! memory. They only have to read the per object epoch after loading the value. Originally, it was
+//! thought this optimization was novel to swym, but it is documented in section 3.5.4 of Cunha's
+//! 2007 masters thesis: https://run.unl.pt/bitstream/10362/2312/1/Cunha_2007.pdf
 
 use crate::{
     internal::{
