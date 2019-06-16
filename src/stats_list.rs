@@ -1,5 +1,3 @@
-
-
 stats! {
     /// Number of conflicts per successful read transaction.
     read_transaction_conflicts:         Size @ READ_TRANSACTION_CONFLICTS,
@@ -16,6 +14,9 @@ stats! {
     /// start 10 times, each one attempting a hardware commit, then this will be recorded 10 times
     /// with 10 different values.
     htm_conflicts:                      Size @ HTM_CONFLICTS,
+
+    /// Number of hardware transactional retries before an explicit hardware transaction abort.
+    htm_abort:                          Size @ HTM_ABORT,
 
     /// Number of `TCell`s in the read log at commit time.
     read_size:                          Size @ READ_SIZE,

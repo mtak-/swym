@@ -148,7 +148,7 @@ impl<'tx, 'tcell> PinRw<'tx, 'tcell> {
                 self.commit_soft()
             }
             Err(BoundedHtxErr::AbortOrConflict) => {
-                stats::htm_conflicts(retry_count as _);
+                stats::htm_abort(retry_count as _);
                 false
             }
         }
