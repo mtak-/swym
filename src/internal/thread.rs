@@ -4,7 +4,7 @@ use crate::{
         gc::{GlobalSynchList, OwnedSynch, ThreadGarbage},
         phoenix_tls::PhoenixTarget,
         read_log::ReadLog,
-        starvation::Progress,
+        starvation::{self, Progress},
         write_log::WriteLog,
     },
     read::ReadTx,
@@ -77,6 +77,7 @@ impl Thread {
 impl PhoenixTarget for Thread {
     fn subscribe(&mut self) {
         unsafe {
+            starvation::inc_thread_estimate();
             GlobalSynchList::instance().write().register(&self.synch);
         }
     }
@@ -96,6 +97,7 @@ impl PhoenixTarget for Thread {
             did_remove,
             "failed to find thread in the global thread list"
         );
+        starvation::dec_thread_estimate();
     }
 }
 

@@ -35,21 +35,26 @@ use std::thread;
 ///
 /// Lower values result in more serialization under contention. Higher values result in more wasted
 /// CPU cycles for large transactions.
-// TODO: Use a value based on the concurrency of the machine. Should be larger than the concurrency
-// to avoid collapsing into serialization.
 static MAX_ELAPSED_EPOCHS: AtomicUsize = AtomicUsize::new(0);
+
+// TODO: tinker with this value
+const EPOCH_BUFFER_ROOM: usize = 16;
+
+#[inline]
+pub fn inc_thread_estimate() {
+    drop(MAX_ELAPSED_EPOCHS.fetch_add(TICK_SIZE * EPOCH_BUFFER_ROOM, Relaxed));
+}
+
+#[inline]
+pub fn dec_thread_estimate() {
+    drop(MAX_ELAPSED_EPOCHS.fetch_sub(TICK_SIZE * EPOCH_BUFFER_ROOM, Relaxed));
+}
 
 #[inline]
 fn max_elapsed_epochs() -> usize {
-    let cached = MAX_ELAPSED_EPOCHS.load(Relaxed);
-    if likely!(cached != 0) {
-        cached
-    } else {
-        let cpus = num_cpus::get();
-        let max_elapsed = cpus * TICK_SIZE << 1;
-        MAX_ELAPSED_EPOCHS.store(max_elapsed, Relaxed);
-        max_elapsed
-    }
+    let result = MAX_ELAPSED_EPOCHS.load(Relaxed);
+    debug_assert!(result > TICK_SIZE && result % TICK_SIZE == 0);
+    result
 }
 
 const NO_STARVERS: usize = 0;
