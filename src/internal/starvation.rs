@@ -38,7 +38,7 @@ use std::thread;
 static MAX_ELAPSED_EPOCHS: AtomicUsize = AtomicUsize::new(0);
 
 // TODO: tinker with this value
-const EPOCH_BUFFER_ROOM: usize = 16;
+const EPOCH_BUFFER_ROOM: usize = 2;
 
 #[inline]
 pub fn inc_thread_estimate() {
