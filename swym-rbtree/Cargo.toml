@@ -16,7 +16,7 @@ stats = ["swym/stats"]
 swym = { path = "../" }
 
 [dev-dependencies]
-criterion = "0.2.11"
+criterion = { version = "0.2.11", default-features = false }
 crossbeam-utils = "0.6.5"
 jemallocator = "0.3.2"
 rand = "0.6.5"
