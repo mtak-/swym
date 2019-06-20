@@ -10,7 +10,7 @@ mod rbtree {
     use criterion::{BatchSize, Benchmark, Criterion, Throughput};
     use crossbeam_utils::thread;
     use rand::{seq::SliceRandom, thread_rng};
-    use std::rc::Rc;
+    use std::{rc::Rc, time::Duration};
     use swym_rbtree::RBTreeMap;
 
     const SAMPLE_SIZE: usize = 24;
@@ -18,6 +18,7 @@ mod rbtree {
     // Caps the total allocation size at a value where the allocators performance doesnt start to
     // crumble
     const NUM_ITERATIONS: u64 = COUNT as u64 * 300 / 100_000;
+    const WARMUP_TIME_NS: u64 = 1_000_000_000;
 
     fn random_data(count: usize) -> Rc<Vec<usize>> {
         let mut vec = Vec::new();
@@ -85,7 +86,7 @@ mod rbtree {
                 },
             )
             .sample_size(SAMPLE_SIZE)
-            .warm_up_time(std::time::Duration::from_nanos(1))
+            .warm_up_time(Duration::from_nanos(WARMUP_TIME_NS))
             .throughput(throughput)
         })
     }
