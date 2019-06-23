@@ -34,6 +34,7 @@ pub fn _likely(b: bool) -> bool {
     b
 }
 
+#[cold]
 pub fn _abort() -> ! {
     std::process::abort();
 }
