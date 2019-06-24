@@ -33,12 +33,6 @@ mod rbtree {
     fn spawn_chunked<F: Fn(usize) + Copy + Send + Sync>(data: &Vec<usize>, threads: usize, f: F) {
         let chunk = data.len() / threads;
 
-        assert_eq!(
-            chunk * threads,
-            data.len(),
-            "not an even amount of work for each thread"
-        );
-
         thread::scope(|scope| {
             for idx in 0..threads {
                 let chunk = &data[idx * chunk..(idx + 1) * chunk];
