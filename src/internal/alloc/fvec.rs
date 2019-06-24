@@ -1,6 +1,6 @@
 use core::ops::{Deref, DerefMut};
 
-const START_SIZE: usize = 1024;
+const START_SIZE: usize = 0;
 
 #[derive(Debug)]
 pub struct FVec<T> {

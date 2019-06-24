@@ -65,15 +65,6 @@ impl<'tcell> dyn WriteEntry + 'tcell {
     }
 
     #[inline]
-    pub fn deactivate(&mut self) {
-        debug_assert!(
-            self.tcell().is_some(),
-            "unexpectedly deactivating an inactive write log entry"
-        );
-        *self.tcell_mut() = None
-    }
-
-    #[inline]
     pub unsafe fn read<T>(&self) -> ManuallyDrop<T> {
         debug_assert!(
             mem::size_of_val(self) == mem::size_of::<WriteEntryImpl<'tcell, T>>(),
@@ -322,7 +313,12 @@ impl<'a, 'tcell> OccupiedEntry<'a, 'tcell> {
 
     pub fn tombstone_replace<T: 'static>(mut self, dest_tcell: &'tcell TCellErased, val: T) {
         let prev = self.entry.insert(self.data.word_len());
-        unsafe { self.data.word_index_unchecked_mut(prev).deactivate() };
+        let mut entry = unsafe { self.data.word_index_unchecked_mut(prev) };
+        debug_assert!(
+            entry.tcell().is_some(),
+            "unexpectedly tombstoning an already tombstoned write log entry"
+        );
+        *entry.tcell_mut() = None;
         self.data.push(WriteEntryImpl::new(dest_tcell, val));
     }
 }

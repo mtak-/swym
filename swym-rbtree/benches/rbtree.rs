@@ -1,219 +1,135 @@
-// based off of https://en.wikipedia.org/wiki/Red%E2%80%93black_tree
-// probly lots to optimize and cleanup
-
-#![feature(test)]
 #![deny(unused_must_use)]
 
-extern crate test;
+#[macro_use]
+extern crate criterion;
 
 #[global_allocator]
 static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
 
 mod rbtree {
+    use criterion::{BatchSize, Benchmark, Criterion, Throughput};
     use crossbeam_utils::thread;
     use rand::{seq::SliceRandom, thread_rng};
+    use std::{rc::Rc, time::Duration};
     use swym_rbtree::RBTreeMap;
-    use test::Bencher;
 
-    macro_rules! insert_bench {
-        ($name:ident, $count:expr, $threads:expr) => {
-            #[bench]
-            fn $name(bencher: &mut Bencher) {
-                const COUNT: usize = $count;
-                const THREADS: usize = $threads;
+    const SAMPLE_SIZE: usize = 24;
+    const COUNT: usize = 100_000;
+    // Caps the total allocation size at a value where the allocators performance doesnt start to
+    // crumble
+    const NUM_ITERATIONS: u64 = COUNT as u64 * 300 / 100_000;
+    const WARMUP_TIME_NS: u64 = 1_000_000_000;
 
-                let mut vec = Vec::new();
-                for x in 0..COUNT {
-                    vec.push(x);
-                }
-                let mut rng = thread_rng();
-                vec.shuffle(&mut rng);
-                let vec = &vec;
-
-                bencher.iter(move || {
-                    let _tree = RBTreeMap::new();
-                    let tree = &_tree;
-                    thread::scope(|scope| {
-                        for idx in 0..THREADS {
-                            scope.spawn(move |_| {
-                                for elem in
-                                    &vec[(idx * COUNT / THREADS)..((idx + 1) * COUNT / THREADS)]
-                                {
-                                    let elem = *elem;
-                                    tree.insert(elem, 0);
-                                }
-                            });
-                        }
-                    })
-                    .unwrap();
-                    std::mem::forget(_tree);
-                });
-                swym::stats::print_stats();
-            }
-        };
+    fn random_data(count: usize) -> Rc<Vec<usize>> {
+        let mut vec = Vec::new();
+        for x in 0..count {
+            vec.push(x);
+        }
+        let mut rng = thread_rng();
+        vec.shuffle(&mut rng);
+        Rc::new(vec)
     }
-    insert_bench! {insert_01_100000, 100000, 1}
-    insert_bench! {insert_02_100000, 100000, 2}
-    insert_bench! {insert_03_100000, 100000, 3}
-    insert_bench! {insert_04_100000, 100000, 4}
-    insert_bench! {insert_05_100000, 100000, 5}
-    insert_bench! {insert_06_100000, 100000, 6}
-    insert_bench! {insert_07_100000, 100000, 7}
-    insert_bench! {insert_08_100000, 100000, 8}
 
-    macro_rules! entry_bench {
-        ($name:ident, $count:expr, $threads:expr) => {
-            #[bench]
-            fn $name(bencher: &mut Bencher) {
-                const COUNT: usize = $count;
-                const THREADS: usize = $threads;
+    fn spawn_chunked<F: Fn(usize) + Copy + Send + Sync>(data: &Vec<usize>, threads: usize, f: F) {
+        let chunk = data.len() / threads;
 
-                let mut vec = Vec::new();
-                for x in 0..COUNT {
-                    vec.push(x);
-                }
-                let mut rng = thread_rng();
-                vec.shuffle(&mut rng);
-                let vec = &vec;
-
-                bencher.iter(move || {
-                    let _tree = RBTreeMap::new();
-                    let tree = &_tree;
-                    thread::scope(|scope| {
-                        for idx in 0..THREADS {
-                            scope.spawn(move |_| {
-                                for elem in
-                                    &vec[(idx * COUNT / THREADS)..((idx + 1) * COUNT / THREADS)]
-                                {
-                                    let elem = *elem;
-                                    tree.atomic(|mut tree| {
-                                        tree.entry(elem)?.or_insert(0)?;
-                                        Ok(())
-                                    })
-                                }
-                            });
-                        }
-                    })
-                    .unwrap();
-                });
-                swym::stats::print_stats();
-            }
-        };
-    }
-    entry_bench! {entry_01_100000, 100000, 1}
-    entry_bench! {entry_02_100000, 100000, 2}
-    entry_bench! {entry_03_100000, 100000, 3}
-    entry_bench! {entry_04_100000, 100000, 4}
-    entry_bench! {entry_05_100000, 100000, 5}
-    entry_bench! {entry_06_100000, 100000, 6}
-    entry_bench! {entry_07_100000, 100000, 7}
-    entry_bench! {entry_08_100000, 100000, 8}
-
-    macro_rules! get_bench {
-        ($name:ident, $count:expr, $threads:expr) => {
-            #[bench]
-            fn $name(bencher: &mut Bencher) {
-                const COUNT: usize = $count;
-                const THREADS: usize = $threads;
-
-                let mut vec = Vec::new();
-                for x in 0..COUNT {
-                    vec.push(x);
-                }
-                let mut rng = thread_rng();
-                vec.shuffle(&mut rng);
-                let vec = &vec;
-                let _tree = RBTreeMap::new();
-                let tree = &_tree;
-                thread::scope(|scope| {
-                    for idx in 0..8 {
-                        scope.spawn(move |_| {
-                            for elem in &vec[(idx * COUNT / 8)..((idx + 1) * COUNT / 8)] {
-                                tree.insert(*elem, 0);
-                            }
-                        });
+        thread::scope(|scope| {
+            for idx in 0..threads {
+                let chunk = &data[idx * chunk..(idx + 1) * chunk];
+                scope.spawn(move |_| {
+                    for elem in chunk {
+                        f(*elem)
                     }
-                })
-                .unwrap();
-
-                bencher.iter(move || {
-                    thread::scope(|scope| {
-                        for idx in 0..THREADS {
-                            scope.spawn(move |_| {
-                                for elem in
-                                    &vec[(idx * COUNT / THREADS)..((idx + 1) * COUNT / THREADS)]
-                                {
-                                    tree.get(elem).unwrap();
-                                }
-                            });
-                        }
-                    })
-                    .unwrap();
                 });
-                swym::stats::print_stats();
             }
-        };
+        })
+        .unwrap();
     }
-    get_bench! {get_01_100000, 100000, 1}
-    get_bench! {get_02_100000, 100000, 2}
-    get_bench! {get_03_100000, 100000, 3}
-    get_bench! {get_04_100000, 100000, 4}
-    get_bench! {get_05_100000, 100000, 5}
-    get_bench! {get_06_100000, 100000, 6}
-    get_bench! {get_07_100000, 100000, 7}
-    get_bench! {get_08_100000, 100000, 8}
 
-    macro_rules! contains_key_bench {
-        ($name:ident, $count:expr, $threads:expr) => {
-            #[bench]
-            fn $name(bencher: &mut Bencher) {
-                const COUNT: usize = $count;
-                const THREADS: usize = $threads;
+    fn thread_benches<S, F, O>(
+        name: &'static str,
+        data: Rc<Vec<usize>>,
+        setup: S,
+        f: F,
+    ) -> impl Iterator<Item = Benchmark>
+    where
+        S: Fn() -> O + Copy + 'static,
+        F: Fn(&O, usize) + Copy + Send + Sync + 'static,
+        O: Sync,
+    {
+        (1..=8).map(move |threads| {
+            let throughput = Throughput::Elements(data.len() as _);
+            let data = data.clone();
+            Benchmark::new(
+                format!(
+                    "{name}_{threads:002}_{count}",
+                    name = name,
+                    threads = threads,
+                    count = data.len()
+                ),
+                move |bencher| {
+                    let data = &data;
+                    bencher.iter_batched(
+                        setup,
+                        move |o| {
+                            spawn_chunked(data, threads, |elem| f(&o, elem));
+                            o
+                        },
+                        BatchSize::NumIterations(NUM_ITERATIONS),
+                    );
+                },
+            )
+            .sample_size(SAMPLE_SIZE)
+            .warm_up_time(Duration::from_nanos(WARMUP_TIME_NS))
+            .throughput(throughput)
+        })
+    }
 
-                let mut vec = Vec::new();
-                for x in 0..COUNT {
-                    vec.push(x);
-                }
-                let mut rng = thread_rng();
-                vec.shuffle(&mut rng);
-                let vec = &vec;
-                let _tree = RBTreeMap::new();
-                let tree = &_tree;
-                thread::scope(|scope| {
-                    for idx in 0..8 {
-                        scope.spawn(move |_| {
-                            for elem in &vec[(idx * COUNT / 8)..((idx + 1) * COUNT / 8)] {
-                                tree.insert(*elem, 0);
-                            }
-                        });
-                    }
+    pub fn benches(c: &mut Criterion) {
+        let data = random_data(COUNT);
+        let const_tree = Box::new(RBTreeMap::new());
+        spawn_chunked(&data, 8, |elem| drop(const_tree.insert(elem, 0)));
+        let const_tree = unsafe { &*Box::into_raw(const_tree) };
+
+        let benches = thread_benches(
+            "insert",
+            data.clone(),
+            || RBTreeMap::new(),
+            |tree, elem| drop(tree.insert(elem, 0)),
+        )
+        .chain(thread_benches(
+            "entry",
+            data.clone(),
+            || RBTreeMap::new(),
+            |tree, elem| {
+                tree.atomic(move |mut tree| {
+                    tree.entry(elem)?.or_insert(0)?;
+                    Ok(())
                 })
-                .unwrap();
-
-                bencher.iter(move || {
-                    thread::scope(|scope| {
-                        for idx in 0..THREADS {
-                            scope.spawn(move |_| {
-                                for elem in
-                                    &vec[(idx * COUNT / THREADS)..((idx + 1) * COUNT / THREADS)]
-                                {
-                                    assert!(tree.contains_key(elem));
-                                }
-                            });
-                        }
-                    })
-                    .unwrap();
-                });
-                swym::stats::print_stats();
-            }
-        };
+            },
+        ))
+        .chain(thread_benches(
+            "get",
+            data.clone(),
+            || (),
+            move |(), elem| {
+                const_tree.get(&elem).unwrap();
+            },
+        ))
+        .chain(thread_benches(
+            "contains_key",
+            data,
+            || (),
+            move |(), elem| {
+                assert!(const_tree.contains_key(&elem));
+            },
+        ));
+        for bench in benches {
+            c.bench("rbtree", bench);
+        }
+        swym::stats::print_stats();
     }
-    contains_key_bench! {contains_key_01_100000, 100000, 1}
-    contains_key_bench! {contains_key_02_100000, 100000, 2}
-    contains_key_bench! {contains_key_03_100000, 100000, 3}
-    contains_key_bench! {contains_key_04_100000, 100000, 4}
-    contains_key_bench! {contains_key_05_100000, 100000, 5}
-    contains_key_bench! {contains_key_06_100000, 100000, 6}
-    contains_key_bench! {contains_key_07_100000, 100000, 7}
-    contains_key_bench! {contains_key_08_100000, 100000, 8}
 }
+
+criterion::criterion_group!(benches, rbtree::benches);
+criterion::criterion_main!(benches);

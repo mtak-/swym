@@ -5,7 +5,6 @@ use crate::{
     },
     stats,
 };
-use crossbeam_utils::Backoff;
 use parking_lot_core::{FilterOp, ParkResult, ParkToken, DEFAULT_UNPARK_TOKEN};
 use swym_htm::{BoundedHtxErr, HardwareTx};
 
@@ -26,7 +25,7 @@ fn parkable<'tx, 'tcell>(pin: PinMutRef<'tx, 'tcell>) -> bool {
 
 #[inline(never)]
 #[cold]
-pub fn park<'tx, 'tcell>(mut pin: PinRw<'tx, 'tcell>, backoff: &Backoff) {
+pub fn park<'tx, 'tcell>(mut pin: PinRw<'tx, 'tcell>) {
     debug_assert!(
         parkable(pin.reborrow()),
         "`AWAIT_RETRY` on a transaction that has an empty read set causes the thread to sleep \
@@ -50,12 +49,10 @@ pub fn park<'tx, 'tcell>(mut pin: PinRw<'tx, 'tcell>, backoff: &Backoff) {
             debug_assert_eq!(token, DEFAULT_UNPARK_TOKEN);
             let parked_size = logs.read_log.len() + logs.write_log.epoch_locks().count();
             stats::parked_size(parked_size);
-            backoff.reset()
         }
         ParkResult::Invalid => {
             let parked_size = logs.read_log.len() + logs.write_log.epoch_locks().count();
             stats::park_failure_size(parked_size);
-            backoff.snooze()
         }
         ParkResult::TimedOut => {
             if cfg!(debug_assertions) {

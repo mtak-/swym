@@ -52,7 +52,7 @@ const FIRST: Storage = TICK_SIZE + UNPARK_BIT;
 /// The smallest difference between points on the EpochClock.
 ///
 /// Two is used because the first bit of EpochLock is reserved as the UNPARK_BIT
-const TICK_SIZE: Storage = 1 << 1;
+pub const TICK_SIZE: Storage = 1 << 1;
 
 /// The least significant bit is set when _no_ threads are parked waiting for modifications to an
 /// EpochLock.
@@ -121,6 +121,11 @@ impl QuiesceEpoch {
             "creating a locked `QuieseEpoch` is a logic error"
         );
         NonZeroStorage::new(epoch).map(QuiesceEpoch)
+    }
+
+    #[inline]
+    pub fn get(self) -> NonZeroStorage {
+        self.0
     }
 
     /// Returns the maximum value that a QuiesceEpoch can hold. This is useful for finding the
@@ -487,6 +492,7 @@ impl ThreadEpoch {
 
 /// A monotonically increasing clock.
 #[derive(Debug)]
+#[repr(align(64))]
 pub struct EpochClock(HtmStorage);
 
 /// The world clock. The source of truth, and synchronization for swym. Every write transaction
