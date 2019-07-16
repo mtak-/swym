@@ -5,14 +5,8 @@ set -ex
 cd "$(dirname "$0")"/../swym-rbtree
 
 export RUSTFLAGS="-D warnings -Ctarget-cpu=native -Ctarget-feature=+rtm"
-export RTM="rtm"
 export ASAN_FLAG="-Z sanitizer=address"
 export ASAN_OPTIONS="detect_odr_violation=0 detect_leaks=0"
-
-if [[ "$TRAVIS_OS_NAME" == "osx" ]]; then
-    # no rtm support
-    export RTM=""
-fi
 
 # cheeck all combinations of features
 cargo check --no-default-features --benches --bins --examples --tests

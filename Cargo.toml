@@ -12,7 +12,7 @@ homepage = "https://github.com/mtak-/swym"
 documentation = "https://docs.rs/swym"
 
 [package.metadata.docs.rs]
-features = ["rtm"]
+features = ["nightly"]
 default-target = "x86_64-unknown-linux-gnu"
 rustc-args = ["-Ctarget-feature=+rtm"]
 
