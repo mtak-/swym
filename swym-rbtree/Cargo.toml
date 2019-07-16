@@ -9,7 +9,6 @@ publish = false
 debug-alloc = ["jemallocator/debug"]
 default = []
 nightly = ["swym/nightly"]
-rtm = ["swym/rtm"]
 stats = ["swym/stats"]
 
 [dependencies]

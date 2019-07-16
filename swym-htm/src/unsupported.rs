@@ -74,8 +74,3 @@ pub(super) unsafe fn end() {
 pub(super) const fn htm_supported() -> bool {
     false
 }
-
-#[inline]
-pub(super) const fn htm_supported_runtime() -> bool {
-    false
-}
