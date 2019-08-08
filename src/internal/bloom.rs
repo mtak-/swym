@@ -137,9 +137,10 @@ const fn calc_shift<T>() -> usize {
         + (mem::align_of::<T>() > 2) as usize
         + (mem::align_of::<T>() > 4) as usize
         + (mem::align_of::<T>() > 8) as usize
-        + 1 // In practice this +1 results in less failures, however it's not "correct". Any TCell with a
-            // meaningful value happens to have a minimum size of mem::size_of::<usize>() * 2 which might
-            // explain why the +1 is helpful for certain workloads.
+        + 1 // In practice this +1 results in less failures, however it's not "correct". Any TCell
+            // with a meaningful value happens to have a minimum size of
+            // mem::size_of::<usize>() * 2 which might explain why the +1 is helpful for
+            // certain workloads.
 }
 
 #[inline]
