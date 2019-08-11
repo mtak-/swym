@@ -3,7 +3,7 @@
 #![cfg_attr(not(test), no_std)]
 #![feature(core_intrinsics)]
 #![feature(link_llvm_intrinsics)]
-#![cfg_attr(test, feature(test))]
+#![feature(test)]
 #![warn(missing_docs)]
 
 #[cfg(test)]
