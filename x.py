@@ -4,10 +4,10 @@ import os
 import sys
 
 if sys.argv[1] == 'test':
-    prefix = 'RUST_TEST_THREADS=1 RUSTFLAGS="$RUSTFLAGS -Ctarget-feature=+rtm"'
+    prefix = 'RUST_TEST_THREADS=1 RUSTFLAGS="$RUSTFLAGS"'
     suffix = '--features debug-alloc,nightly,stats'
 elif sys.argv[1] == 'bench':
-    prefix = 'RUSTFLAGS="$RUSTFLAGS -Ctarget-cpu=native -Ctarget-feature=+rtm"'
+    prefix = 'RUSTFLAGS="$RUSTFLAGS -Ctarget-cpu=native"'
     suffix = ''
 else:
     prefix = ''

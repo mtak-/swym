@@ -2,6 +2,7 @@
 
 #![cfg_attr(feature = "htm", feature(link_llvm_intrinsics))]
 #![cfg_attr(feature = "nightly", feature(stdsimd))]
+#![cfg_attr(feature = "nightly", feature(rtm_target_feature))]
 #![feature(test)]
 #![warn(missing_docs)]
 

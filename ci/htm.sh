@@ -4,6 +4,8 @@ set -ex
 
 cd "$(dirname "$0")"/../swym-htm
 
+# the "+rtm" feature has to be set because the travis linux vm incorrectly thinks it doesn't support
+# rtm
 export RUSTFLAGS="-D warnings -Ctarget-feature=+rtm"
 
 cargo check --no-default-features --benches --bins --examples --tests

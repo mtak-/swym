@@ -59,22 +59,26 @@ impl TestCode {
     }
 }
 
+#[target_feature(enable = "rtm")]
 #[inline]
 pub(super) unsafe fn begin() -> BeginCode {
     BeginCode(_xbegin())
 }
 
-#[inline(always)]
+#[target_feature(enable = "rtm")]
+#[inline]
 pub(super) unsafe fn abort() -> ! {
     _xabort(0);
     core::hint::unreachable_unchecked();
 }
 
+#[target_feature(enable = "rtm")]
 #[inline]
 pub(super) unsafe fn test() -> TestCode {
     TestCode(_xtest())
 }
 
+#[target_feature(enable = "rtm")]
 #[inline]
 pub(super) unsafe fn end() {
     _xend()
