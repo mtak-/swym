@@ -1,8 +1,8 @@
 //! Hardware transactional memory primitives
 
-#![cfg_attr(not(test), no_std)]
-#![feature(core_intrinsics)]
-#![feature(link_llvm_intrinsics)]
+#![cfg_attr(feature = "htm", feature(link_llvm_intrinsics))]
+#![cfg_attr(feature = "nightly", feature(stdsimd))]
+#![cfg_attr(feature = "nightly", feature(rtm_target_feature))]
 #![feature(test)]
 #![warn(missing_docs)]
 
@@ -13,7 +13,7 @@ cfg_if::cfg_if! {
     if #[cfg(all(target_arch = "powerpc64", feature = "htm"))] {
         pub mod powerpc64;
         use powerpc64 as back;
-    } else if #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "rtm"))] {
+    } else if #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "nightly"))] {
         pub mod x86_64;
         use x86_64 as back;
     } else {
@@ -29,16 +29,10 @@ use core::{
     sync::atomic::AtomicUsize,
 };
 
-/// Returns true if the platform may support hardware transactional memory.
+/// Returns true if the platform supports hardware transactional memory.
 #[inline]
-pub const fn htm_supported() -> bool {
+pub fn htm_supported() -> bool {
     back::htm_supported()
-}
-
-/// Returns true if the platform definitely supports hardware transactional memory.
-#[inline]
-pub fn htm_supported_runtime() -> bool {
-    back::htm_supported_runtime()
 }
 
 /// Attempts to begin a hardware transaction.
@@ -171,8 +165,13 @@ impl HardwareTx {
     where
         F: FnMut(BeginCode) -> Result<(), E>,
     {
+        debug_assert!(
+            htm_supported(),
+            "Hardware transactional memory is not supported on this target. Check `htm_supported` \
+             before attempting a transaction"
+        );
         let b = begin();
-        if core::intrinsics::likely(b.is_started()) {
+        if nudge::likely(b.is_started()) {
             return Ok(HardwareTx {
                 _private: PhantomData,
             });
@@ -497,19 +496,10 @@ fn capacity_check() {
     );
 }
 
-// fails in virtualization
-#[ignore]
 #[test]
 fn supported() {
-    let compile = htm_supported();
-    let runtime = htm_supported_runtime();
-    if compile {
-        assert!(runtime);
-    }
-
-    println!("");
-    println!("compile time support check: {}", compile);
-    println!("     runtime support check: {}", runtime);
+    let supported = htm_supported();
+    println!("runtime support check: {}", supported);
 }
 
 #[bench]

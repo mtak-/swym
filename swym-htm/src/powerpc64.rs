@@ -239,9 +239,3 @@ pub(super) const fn htm_supported() -> bool {
     // TODO:
     false
 }
-
-#[inline]
-pub(super) const fn htm_supported_runtime() -> bool {
-    // TODO:
-    false
-}
