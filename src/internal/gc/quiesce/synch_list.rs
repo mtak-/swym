@@ -39,9 +39,9 @@ impl SynchList {
     }
 
     #[inline]
-    pub(super) fn iter<'a>(
-        &'a self,
-    ) -> impl ExactSizeIterator<Item = &'a Synch> + DoubleEndedIterator<Item = &'a Synch> {
+    pub(super) fn iter(
+        &self,
+    ) -> impl ExactSizeIterator<Item = &Synch> + DoubleEndedIterator<Item = &Synch> {
         self.synchs.iter().map(|p| unsafe {
             // register requires that Synchs aren't moved or dropped until after unregister is
             // called

@@ -109,7 +109,7 @@ impl OwnedSynch {
     ///
     /// Requires that self is registered to the GlobalThreadList
     #[inline]
-    pub unsafe fn freeze_list<'a>(&'a self) -> FreezeList<'a> {
+    pub unsafe fn freeze_list(&self) -> FreezeList<'_> {
         FreezeList::new(self)
     }
 
@@ -156,8 +156,7 @@ impl<'a> FreezeList<'a> {
             GlobalSynchList::instance()
                 .raw()
                 .iter()
-                .find(|&lhs| ptr::eq(lhs, &synch.inner))
-                .is_some(),
+                .any(|lhs| ptr::eq(lhs, &synch.inner)),
             "bug: synch not registered to the GlobalSynchList"
         );
 
@@ -198,7 +197,7 @@ impl<'a> FreezeList<'a> {
                 }
             })
             .min()
-            .unwrap_or(QuiesceEpoch::max_value());
+            .unwrap_or_else(QuiesceEpoch::max_value);
 
         debug_assert!(
             result >= epoch,

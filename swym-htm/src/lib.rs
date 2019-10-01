@@ -83,25 +83,25 @@ pub struct BeginCode(back::BeginCode);
 impl BeginCode {
     /// Returns true if the `BeginCode` represents a successfully started transaction.
     #[inline]
-    pub fn is_started(&self) -> bool {
+    pub fn is_started(self) -> bool {
         self.0.is_started()
     }
 
     /// Returns true if the `BeginCode` represents a transaction that was explicitly `abort`ed.
     #[inline]
-    pub fn is_explicit_abort(&self) -> bool {
+    pub fn is_explicit_abort(self) -> bool {
         self.0.is_explicit_abort()
     }
 
     /// Returns true if retrying the hardware transaction is suggested.
     #[inline]
-    pub fn is_retry(&self) -> bool {
+    pub fn is_retry(self) -> bool {
         self.0.is_retry()
     }
 
     /// Returns true if the transaction aborted due to a memory conflict.
     #[inline]
-    pub fn is_conflict(&self) -> bool {
+    pub fn is_conflict(self) -> bool {
         self.0.is_conflict()
     }
 
@@ -109,7 +109,7 @@ impl BeginCode {
     ///
     /// Hardware transactions are typically bounded by L1 cache sizes.
     #[inline]
-    pub fn is_capacity(&self) -> bool {
+    pub fn is_capacity(self) -> bool {
         self.0.is_capacity()
     }
 }
@@ -122,13 +122,13 @@ pub struct TestCode(back::TestCode);
 impl TestCode {
     /// Returns true if the current thread is in a hardware transaction.
     #[inline]
-    pub fn in_transaction(&self) -> bool {
+    pub fn in_transaction(self) -> bool {
         self.0.in_transaction()
     }
 
     /// Returns true if the current thread is in a suspended hardware transaction.
     #[inline]
-    pub fn is_suspended(&self) -> bool {
+    pub fn is_suspended(self) -> bool {
         self.0.is_suspended()
     }
 }
@@ -172,9 +172,9 @@ impl HardwareTx {
         );
         let b = begin();
         if nudge::likely(b.is_started()) {
-            return Ok(HardwareTx {
+            Ok(HardwareTx {
                 _private: PhantomData,
-            });
+            })
         } else {
             #[inline(never)]
             #[cold]
@@ -263,6 +263,7 @@ impl HtmUsize {
     /// This is unsafe because AtomicUsize already allows mutation through immutable reference.
     /// Therefore, the returned mutable reference cannot escape this module.
     #[inline(always)]
+    #[allow(clippy::mut_from_ref)]
     unsafe fn as_raw(&self, _: &HardwareTx) -> &mut AtomicUsize {
         &mut *self.inner.get()
     }

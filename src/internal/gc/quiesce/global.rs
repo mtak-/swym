@@ -60,7 +60,7 @@ impl GlobalSynchList {
 
     /// Gets write access to the GlobalSynchList.
     #[inline]
-    pub fn write<'a>(&'a self) -> Write<'a> {
+    pub fn write(&self) -> Write<'_> {
         Write::new(self)
     }
 }
