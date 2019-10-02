@@ -17,7 +17,7 @@ fn key() -> usize {
     &EPOCH_CLOCK as *const EpochClock as usize
 }
 
-fn parkable<'tx, 'tcell>(pin: PinMutRef<'tx, 'tcell>) -> bool {
+fn parkable(pin: PinMutRef<'_, '_>) -> bool {
     let logs = pin.logs();
     // parking a thread without any logs, will sleep the thread forever!
     !logs.read_log.is_empty() || !logs.write_log.is_empty()
@@ -25,7 +25,7 @@ fn parkable<'tx, 'tcell>(pin: PinMutRef<'tx, 'tcell>) -> bool {
 
 #[inline(never)]
 #[cold]
-pub fn park<'tx, 'tcell>(mut pin: PinRw<'tx, 'tcell>) {
+pub fn park(mut pin: PinRw<'_, '_>) {
     debug_assert!(
         parkable(pin.reborrow()),
         "`AWAIT_RETRY` on a transaction that has an empty read set causes the thread to sleep \

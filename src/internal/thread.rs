@@ -69,7 +69,7 @@ impl Thread {
     ///
     /// This makes mutable access to `Logs` safe, and is the only way to perform transactions.
     #[inline]
-    pub fn try_pin<'tcell>(&'tcell self) -> Option<Pin<'tcell>> {
+    pub fn try_pin(&self) -> Option<Pin<'_>> {
         Pin::try_new(self)
     }
 }
@@ -85,7 +85,7 @@ impl PhoenixTarget for Thread {
     fn unsubscribe(&mut self) {
         unsafe {
             // All thread garbage must be collected before the Thread is dropped.
-            (&mut *self.logs.get())
+            (*self.logs.get())
                 .garbage
                 .synch_and_collect_all(&self.synch);
         }

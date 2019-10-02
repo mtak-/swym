@@ -430,12 +430,12 @@ where
     Tx::Target: Read<'tcell> + Sized,
 {
     #[inline]
-    pub fn borrow<'a>(&'a self) -> Result<Ref<'a, T>, Error> {
+    pub fn borrow(&self) -> Result<Ref<'_, T>, Error> {
         self.borrow_ordered(Ordering::default())
     }
 
     #[inline]
-    pub fn borrow_ordered<'a>(&'a self, ordering: Ordering) -> Result<Ref<'a, T>, Error> {
+    pub fn borrow_ordered(&self, ordering: Ordering) -> Result<Ref<'_, T>, Error> {
         self.tcell.borrow(&*self.tx, ordering)
     }
 }

@@ -106,6 +106,7 @@ impl ThreadKey {
     ///     .unwrap();
     /// assert_eq!(x_clone, "not gonna be overwritten");
     /// ```
+    #[allow(clippy::redundant_closure)]
     #[inline]
     pub fn try_read<'tcell, F, O>(&'tcell self, f: F) -> Result<O, TryReadErr>
     where
@@ -142,6 +143,7 @@ impl ThreadKey {
     ///     .unwrap();
     /// assert_eq!(prev_x, "gonna be overwritten");
     /// ```
+    #[allow(clippy::redundant_closure)]
     #[inline]
     pub fn try_rw<'tcell, F, O>(&'tcell self, f: F) -> Result<O, TryRwErr>
     where

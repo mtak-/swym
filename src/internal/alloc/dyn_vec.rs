@@ -314,9 +314,8 @@ impl<'a, T: ?Sized> Iterator for Iter<'a, T> {
                 "invalid size detected for dyn T"
             );
             for _ in 0..size / mem::size_of::<usize>() {
-                match self.iter.next() {
-                    None => core::hint::unreachable_unchecked(),
-                    _ => {}
+                if self.iter.next().is_none() {
+                    core::hint::unreachable_unchecked()
                 }
             }
             Some(result)
@@ -353,9 +352,8 @@ impl<'a, T: ?Sized> Iterator for IterMut<'a, T> {
                 "invalid size detected for dyn T"
             );
             for _ in 0..size / mem::size_of::<usize>() {
-                match self.iter.next() {
-                    None => core::hint::unreachable_unchecked(),
-                    _ => {}
+                if self.iter.next().is_none() {
+                    core::hint::unreachable_unchecked()
                 }
             }
             Some(DynElemMut { value: result })
