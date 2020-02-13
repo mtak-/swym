@@ -64,7 +64,7 @@ impl<'tcell> ReadLog<'tcell> {
                     }
                 }
             };
-            if unlikely!(!filter(tcell)) {
+            if nudge::unlikely(!filter(tcell)) {
                 *elem = None;
             }
         }
@@ -89,7 +89,7 @@ impl<'tcell> ReadLog<'tcell> {
     #[inline]
     pub fn validate_reads(&self, pin_epoch: QuiesceEpoch) -> bool {
         for epoch_lock in self.epoch_locks() {
-            if unlikely!(!pin_epoch.read_write_valid_lockable(epoch_lock)) {
+            if nudge::unlikely(!pin_epoch.read_write_valid_lockable(epoch_lock)) {
                 return false;
             }
         }
@@ -113,7 +113,7 @@ impl<'tcell> ReadLog<'tcell> {
                     }
                 },
             };
-            if unlikely!(!pin_epoch.read_write_valid_lockable(&logged_read.current_epoch)) {
+            if nudge::unlikely(!pin_epoch.read_write_valid_lockable(&logged_read.current_epoch)) {
                 htx.abort()
             }
         }

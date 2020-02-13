@@ -91,7 +91,7 @@ impl<'tcell, K> Bloom<'tcell, K> {
     pub fn contained(&self, key: &K) -> Contained {
         let bit = bloom_bit(key);
 
-        if unlikely!(self.filter.get() & bit.0.get() != 0) {
+        if nudge::unlikely(self.filter.get() & bit.0.get() != 0) {
             Contained::Maybe
         } else {
             Contained::No
@@ -105,7 +105,7 @@ impl<'tcell, K> Bloom<'tcell, K> {
         let filter = self.filter.get();
         let bit = bloom_bit(key);
 
-        if unlikely!(filter & bit.0.get() != 0) {
+        if nudge::unlikely(filter & bit.0.get() != 0) {
             Contained::Maybe
         } else {
             let new_filter = filter | bit.0.get();

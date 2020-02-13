@@ -215,7 +215,7 @@ impl<'tcell> WriteLog<'tcell> {
     // biased against finding the tcell
     #[inline]
     pub fn find(&self, dest_tcell: &TCellErased) -> Option<&dyn WriteEntry> {
-        if likely!(self.bloom.contained(dest_tcell) == Contained::No) {
+        if nudge::likely(self.bloom.contained(dest_tcell) == Contained::No) {
             None
         } else {
             self.find_slow(dest_tcell)

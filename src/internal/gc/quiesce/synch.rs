@@ -188,7 +188,7 @@ impl<'a> FreezeList<'a> {
                     "deadlock detected. `wait_until_epoch_end` called by an active thread"
                 );
 
-                if likely!(td_epoch > epoch) {
+                if nudge::likely(td_epoch > epoch) {
                     Some(td_epoch)
                 } else {
                     // after quiescing, the thread owning `synch` will have entered the

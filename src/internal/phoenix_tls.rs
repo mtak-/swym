@@ -56,8 +56,8 @@ impl<T: 'static + PhoenixTarget> Clone for Phoenix<T> {
 
         // We must check for overflow because users can mem::forget(x.clone())
         // repeatedly.
-        if unlikely!(new_count == usize::max_value()) {
-            abort!()
+        if nudge::unlikely(new_count == usize::max_value()) {
+            nudge::abort()
         }
 
         Phoenix {
@@ -74,7 +74,7 @@ impl<T: 'static + PhoenixTarget> Drop for Phoenix<T> {
         debug_assert!(count > 0, "double free on `Phoenix` attempted");
         self.as_ref().ref_count.set(count - 1);
 
-        if unlikely!(count == 1) {
+        if nudge::unlikely(count == 1) {
             // this is safe as long as the reference counting logic is safe
             unsafe {
                 dealloc::<_>(self.raw);

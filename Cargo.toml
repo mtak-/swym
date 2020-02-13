@@ -22,6 +22,7 @@ default = []
 nightly = [
     "crossbeam-utils/nightly",
     "lock_api/nightly",
+    "nudge/nightly",
     "parking_lot/nightly",
     "parking_lot_core/nightly",
     "swym-htm/nightly",
@@ -34,6 +35,7 @@ crossbeam-utils = "0.7.0"
 fxhash = "0.2.1"
 lazy_static = "1.4.0"
 lock_api = "0.3.3"
+nudge = "0.2.1"
 parking_lot = "0.10.0"
 parking_lot_core = "0.7.0"
 swym-htm = { path = "./swym-htm", version = "0.1.0" }

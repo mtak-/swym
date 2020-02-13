@@ -257,8 +257,8 @@ impl EpochLock {
             "invalid max_expected epoch sent to `EpochLock::try_lock`"
         );
         let actual = self.load_raw(Relaxed); // could be a torn read, if MM permitted it
-        let success = likely!(max_expected.read_write_valid(actual))
-            && likely!({
+        let success = nudge::likely(max_expected.read_write_valid(actual))
+            && nudge::likely({
                 debug_assert!(
                     !lock_bit_set(actual.get()),
                     "lock bit unexpectedly set on `EpochLock`"
@@ -287,7 +287,7 @@ impl EpochLock {
     #[inline]
     pub fn try_lock_htm(&self, htx: &HardwareTx, max_expected: QuiesceEpoch) -> ParkStatus {
         let actual = self.0.get(htx);
-        if likely!(max_expected.read_write_valid_(actual)) {
+        if nudge::likely(max_expected.read_write_valid_(actual)) {
             self.0.set(htx, toggle_lock_bit(actual));
             if unpark_bit_set(actual) {
                 ParkStatus::NoParked
@@ -336,7 +336,7 @@ impl EpochLock {
     #[inline]
     pub fn clear_unpark_bit_htm(&self, max_expected: QuiesceEpoch, htx: &HardwareTx) {
         let actual = self.load_raw(Relaxed);
-        if likely!(max_expected.read_write_valid(actual)) {
+        if nudge::likely(max_expected.read_write_valid(actual)) {
             if unpark_bit_set(actual.get()) {
                 self.0.set(htx, clear_unpark_bit(actual.get()))
             }
@@ -357,7 +357,7 @@ impl EpochLock {
             "invalid max_expected epoch sent to `EpochLock::try_lock`"
         );
         let actual = self.load_raw(Relaxed);
-        if likely!(max_expected.read_write_valid(actual)) {
+        if nudge::likely(max_expected.read_write_valid(actual)) {
             debug_assert!(
                 !lock_bit_set(actual.get()),
                 "lock bit unexpectedly set on `EpochLock`"
@@ -365,16 +365,16 @@ impl EpochLock {
             if !unpark_bit_set(actual.get()) {
                 // if already set, say so
                 Some(ParkStatus::HasParked)
-            } else if likely!(self
-                .0
-                .compare_exchange(
-                    actual.get(),
-                    clear_unpark_bit(actual.get()),
-                    Relaxed,
-                    Relaxed,
-                )
-                .is_ok())
-            {
+            } else if nudge::likely(
+                self.0
+                    .compare_exchange(
+                        actual.get(),
+                        clear_unpark_bit(actual.get()),
+                        Relaxed,
+                        Relaxed,
+                    )
+                    .is_ok(),
+            ) {
                 Some(ParkStatus::NoParked)
             } else {
                 None
@@ -509,7 +509,7 @@ impl EpochClock {
     #[inline]
     pub fn now(&self) -> Option<QuiesceEpoch> {
         let epoch = self.0.load(Acquire);
-        if cfg!(target_pointer_width = "64") || likely!(!lock_bit_set(epoch)) {
+        if cfg!(target_pointer_width = "64") || nudge::likely(!lock_bit_set(epoch)) {
             // See fetch and tick for justification.
             unsafe {
                 assume!(

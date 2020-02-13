@@ -253,7 +253,7 @@ impl<'tcell> Deref for Pin<'tcell> {
 impl<'tcell> Pin<'tcell> {
     #[inline]
     fn try_new(thread: &'tcell Thread) -> Option<Pin<'tcell>> {
-        if likely!(!thread.is_pinned()) {
+        if nudge::likely(!thread.is_pinned()) {
             let now = EPOCH_CLOCK.now();
             if let Some(now) = now {
                 thread.synch.pin(now, Release);
@@ -264,7 +264,7 @@ impl<'tcell> Pin<'tcell> {
                     },
                 })
             } else {
-                abort!()
+                nudge::abort()
             }
         } else {
             None
@@ -277,7 +277,7 @@ impl<'tcell> Pin<'tcell> {
         if let Some(now) = now {
             self.synch().repin(now, Release);
         } else {
-            abort!()
+            nudge::abort()
         }
     }
 
@@ -328,7 +328,7 @@ impl<'tcell> Pin<'tcell> {
                 let r = f(RwTx::new(&mut pin_rw));
                 match r {
                     Ok(o) => {
-                        if likely!(pin_rw.commit()) {
+                        if nudge::likely(pin_rw.commit()) {
                             self.logs().validate_start_state();
                             break o;
                         }
@@ -424,7 +424,7 @@ impl<'tx, 'tcell> Drop for ParkPinMutRef<'tx, 'tcell> {
         if let Some(now) = now {
             self.synch.pin(now, Release);
         } else {
-            abort!()
+            nudge::abort()
         }
     }
 }

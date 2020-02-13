@@ -75,7 +75,6 @@
 
 #![feature(optin_builtin_traits)]
 #![cfg_attr(feature = "nightly", feature(cfg_target_thread_local))]
-#![cfg_attr(feature = "nightly", feature(core_intrinsics))]
 #![cfg_attr(feature = "nightly", feature(thread_local))]
 #![cfg_attr(all(test, feature = "nightly"), feature(raw))]
 #![warn(macro_use_extern_crate)]

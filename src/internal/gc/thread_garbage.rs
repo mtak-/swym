@@ -190,7 +190,7 @@ impl ThreadGarbage {
             quiesce_epoch.is_active(),
             "attempt to seal with an \"inactive\" epoch"
         );
-        if unlikely!(!self.is_speculative_bag_empty()) {
+        if nudge::unlikely(!self.is_speculative_bag_empty()) {
             self.seal_with_epoch_slow(synch, quiesce_epoch)
         }
     }
@@ -211,7 +211,7 @@ impl ThreadGarbage {
 
         // If we've run out of unused bags/room in the sealed_bags container, which should be the
         // same, then we need to collect garbage to make room for the next transaction.
-        if unlikely!(self.sealed_bags.next_push_allocates()) {
+        if nudge::unlikely(self.sealed_bags.next_push_allocates()) {
             self.synch_and_collect(synch)
         }
     }

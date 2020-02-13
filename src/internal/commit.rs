@@ -97,7 +97,7 @@ impl<'tx, 'tcell> PinRw<'tx, 'tcell> {
     /// error. Returns true if the transaction committed successfully.
     #[inline]
     pub fn commit(self) -> bool {
-        if likely!(!self.logs().write_log.is_empty()) {
+        if nudge::likely(!self.logs().write_log.is_empty()) {
             self.commit_slow()
         } else {
             unsafe { self.commit_empty_write_log() }
@@ -171,7 +171,7 @@ impl<'tx, 'tcell> PinRw<'tx, 'tcell> {
             logs.write_log.clear_no_drop();
 
             progress.progressed();
-            if unlikely!(park_status == ParkStatus::HasParked) {
+            if nudge::unlikely(park_status == ParkStatus::HasParked) {
                 crate::internal::parking::unpark();
             }
             logs.garbage.seal_with_epoch(synch, sync_epoch);
@@ -215,7 +215,7 @@ impl<'tx, 'tcell> PinRw<'tx, 'tcell> {
     #[inline]
     unsafe fn write_log_lock_success(self, park_status: ParkStatus) -> bool {
         // after locking the write set, ensure nothing in the read set has been modified.
-        if likely!(self.logs().read_log.validate_reads(self.pin_epoch())) {
+        if nudge::likely(self.logs().read_log.validate_reads(self.pin_epoch())) {
             // The transaction can no longer fail, so proceed to modify and publish the TCells in
             // the write set.
             self.validation_success(park_status)
@@ -255,7 +255,7 @@ impl<'tx, 'tcell> PinRw<'tx, 'tcell> {
         logs.read_log.clear();
         logs.write_log.clear_no_drop();
         progress.progressed();
-        if unlikely!(park_status == ParkStatus::HasParked) {
+        if nudge::unlikely(park_status == ParkStatus::HasParked) {
             crate::internal::parking::unpark();
         }
         logs.garbage.seal_with_epoch(synch, sync_epoch);

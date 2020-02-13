@@ -58,10 +58,10 @@ impl<'tcell> Read<'tcell> for ReadTx<'tcell> {
                 // The only thing that needs to be done is reading of the value, and then a check,
                 // to see if that value was written before this transaction began.
                 let value = Ref::new(tcell.optimistic_read_acquire());
-                if likely!(self
-                    .pin_epoch()
-                    .read_write_valid_lockable(&tcell.erased.current_epoch))
-                {
+                if nudge::likely(
+                    self.pin_epoch()
+                        .read_write_valid_lockable(&tcell.erased.current_epoch),
+                ) {
                     Ok(value)
                 } else {
                     Err(Error::CONFLICT)

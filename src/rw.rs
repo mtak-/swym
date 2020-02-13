@@ -71,7 +71,7 @@ impl<'tx, 'tcell> RwTxImpl<'tx, 'tcell> {
             match found {
                 None => {
                     let value = Ref::new(tcell.optimistic_read_acquire());
-                    if likely!(self.rw_valid(&tcell.erased)) {
+                    if nudge::likely(self.rw_valid(&tcell.erased)) {
                         self.logs_mut().read_log.record(&tcell.erased);
                         return Ok(value);
                     }
@@ -79,7 +79,7 @@ impl<'tx, 'tcell> RwTxImpl<'tx, 'tcell> {
                 Some(entry) => {
                     stats::read_after_write();
                     let value = Ref::new(entry.read::<T>());
-                    if likely!(self.rw_valid(&tcell.erased)) {
+                    if nudge::likely(self.rw_valid(&tcell.erased)) {
                         return Ok(value);
                     }
                 }
@@ -91,12 +91,12 @@ impl<'tx, 'tcell> RwTxImpl<'tx, 'tcell> {
     #[inline]
     fn borrow_impl<T>(mut self, tcell: &'tcell TCell<T>) -> Result<Ref<'tx, T>, Error> {
         let logs = self.logs();
-        if likely!(!logs.read_log.next_push_allocates())
-            && likely!(logs.write_log.contained(&tcell.erased) == Contained::No)
+        if nudge::likely(!logs.read_log.next_push_allocates())
+            && nudge::likely(logs.write_log.contained(&tcell.erased) == Contained::No)
         {
             unsafe {
                 let value = Ref::new(tcell.optimistic_read_acquire());
-                if likely!(self.rw_valid(&tcell.erased)) {
+                if nudge::likely(self.rw_valid(&tcell.erased)) {
                     self.logs_mut().read_log.record_unchecked(&tcell.erased);
                     return Ok(value);
                 }
@@ -119,7 +119,7 @@ impl<'tx, 'tcell> RwTxImpl<'tx, 'tcell> {
                     Ref::new(entry.read::<T>())
                 }
             };
-            if likely!(self.rw_valid(&tcell.erased)) {
+            if nudge::likely(self.rw_valid(&tcell.erased)) {
                 return Ok(snapshot);
             }
         }
@@ -129,10 +129,10 @@ impl<'tx, 'tcell> RwTxImpl<'tx, 'tcell> {
     #[inline]
     fn borrow_unlogged_impl<T>(self, tcell: &'tcell TCell<T>) -> Result<Ref<'tx, T>, Error> {
         let logs = self.logs();
-        if likely!(logs.write_log.contained(&tcell.erased) == Contained::No) {
+        if nudge::likely(logs.write_log.contained(&tcell.erased) == Contained::No) {
             unsafe {
                 let value = Ref::new(tcell.optimistic_read_acquire());
-                if likely!(self.rw_valid(&tcell.erased)) {
+                if nudge::likely(self.rw_valid(&tcell.erased)) {
                     return Ok(value);
                 }
             }
@@ -150,7 +150,7 @@ impl<'tx, 'tcell> RwTxImpl<'tx, 'tcell> {
         unsafe {
             match self.logs_mut().write_log.entry(&tcell.erased) {
                 Entry::Vacant => {
-                    if likely!(self.rw_valid(&tcell.erased)) {
+                    if nudge::likely(self.rw_valid(&tcell.erased)) {
                         let logs = self.logs_mut();
                         logs.write_log.record(&tcell.erased, value);
                         if mem::needs_drop::<T>() {
@@ -185,10 +185,11 @@ impl<'tx, 'tcell> RwTxImpl<'tx, 'tcell> {
         value: V,
     ) -> Result<(), SetError<T>> {
         let logs = self.logs();
-        if likely!(!logs.write_log.next_push_allocates::<V>())
-            && (!mem::needs_drop::<T>() || likely!(!logs.garbage.next_dispose_allocates::<T>()))
-            && likely!(logs.write_log.contained_set(&tcell.erased) == Contained::No)
-            && likely!(self.rw_valid(&tcell.erased))
+        if nudge::likely(!logs.write_log.next_push_allocates::<V>())
+            && (!mem::needs_drop::<T>()
+                || nudge::likely(!logs.garbage.next_dispose_allocates::<T>()))
+            && nudge::likely(logs.write_log.contained_set(&tcell.erased) == Contained::No)
+            && nudge::likely(self.rw_valid(&tcell.erased))
         {
             let logs = self.logs_mut();
             unsafe {

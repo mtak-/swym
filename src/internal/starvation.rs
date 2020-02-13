@@ -140,7 +140,7 @@ impl Starvation {
 
     #[inline]
     fn wait_for_starvers(&self, token: Token) {
-        if unlikely!(self.state.load(Relaxed) != 0) {
+        if nudge::unlikely(self.state.load(Relaxed) != 0) {
             self.wait_for_starvers_slow(token)
         }
     }
@@ -358,7 +358,7 @@ impl ProgressImpl {
                 if *backoff >= YIELD_LIMIT {
                     return true;
                 }
-                let now = EPOCH_CLOCK.now().unwrap_or_else(|| abort!());
+                let now = EPOCH_CLOCK.now().unwrap_or_else(|| nudge::abort());
                 now.get().get() - epoch.get().get() >= max_elapsed_epochs()
             }
             ProgressImpl::NotStarving {
