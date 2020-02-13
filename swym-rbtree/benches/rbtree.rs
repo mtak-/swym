@@ -19,6 +19,7 @@ mod rbtree {
     // crumble
     const NUM_ITERATIONS: u64 = COUNT as u64 * 300 / 100_000;
     const WARMUP_TIME_NS: u64 = 1_000_000_000;
+    const MAX_THREADS: usize = 16;
 
     fn random_data(count: usize) -> Rc<Vec<usize>> {
         let mut vec = Vec::new();
@@ -57,7 +58,7 @@ mod rbtree {
         F: Fn(&O, usize) + Copy + Send + Sync + 'static,
         O: Sync,
     {
-        (1..=8).map(move |threads| {
+        (1..=MAX_THREADS).map(move |threads| {
             let throughput = Throughput::Elements(data.len() as _);
             let data = data.clone();
             Benchmark::new(
@@ -88,7 +89,7 @@ mod rbtree {
     pub fn benches(c: &mut Criterion) {
         let data = random_data(COUNT);
         let const_tree = Box::new(RBTreeMap::new());
-        spawn_chunked(&data, 8, |elem| drop(const_tree.insert(elem, 0)));
+        spawn_chunked(&data, MAX_THREADS, |elem| drop(const_tree.insert(elem, 0)));
         let const_tree = unsafe { &*Box::into_raw(const_tree) };
 
         let benches = thread_benches(

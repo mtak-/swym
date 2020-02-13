@@ -15,10 +15,10 @@ stats = ["swym/stats"]
 swym = { path = "../" }
 
 [dev-dependencies]
-criterion = { version = "0.2.11", default-features = false }
-crossbeam-utils = "0.6.5"
+criterion = { version = "0.3.1", default-features = false }
+crossbeam-utils = "0.7.0"
 jemallocator = "0.3.2"
-rand = "0.6.5"
+rand = "0.7.3"
 
 [[bench]]
 name = "rbtree"

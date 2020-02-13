@@ -7,15 +7,13 @@ pub unsafe fn _assume(b: bool) {
 #[inline(always)]
 #[cfg(feature = "nightly")]
 pub fn _unlikely(b: bool) -> bool {
-    // not actually unsafe to say a bool is probably false
-    unsafe { core::intrinsics::unlikely(b) }
+    core::intrinsics::unlikely(b)
 }
 
 #[inline(always)]
 #[cfg(feature = "nightly")]
 pub fn _likely(b: bool) -> bool {
-    // not actually unsafe to say a bool is probably true
-    unsafe { core::intrinsics::likely(b) }
+    core::intrinsics::likely(b)
 }
 
 #[inline(always)]
