@@ -20,7 +20,7 @@ mod increment {
                 b.iter(|| {
                     for _ in 0..ITER_COUNT {
                         thread_key.rw(|tx| {
-                            x.set(tx, x.get(tx, Ordering::Read)?)?;
+                            x.set(tx, x.get(tx, Ordering::Read)? + 1)?;
                             Ok(())
                         });
                     }
@@ -41,7 +41,7 @@ mod increment {
                 b.iter(|| {
                     for _ in 0..ITER_COUNT {
                         thread_key.rw(|tx| {
-                            x.set(tx, x.get(tx, Ordering::default())?)?;
+                            x.set(tx, x.get(tx, Ordering::default())? + 1)?;
                             Ok(())
                         });
                     }
