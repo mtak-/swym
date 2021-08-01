@@ -1,5 +1,3 @@
-#![feature(test)]
-
 mod starvation {
     use crossbeam_utils::thread;
     use swym::{tcell::TCell, thread_key};

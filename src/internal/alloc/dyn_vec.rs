@@ -476,6 +476,7 @@ mod test {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn iter() {
         let mut v = AnyDynVec::with_capacity(0);
         assert!(v.iter().next().is_none());
@@ -496,6 +497,7 @@ mod test {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn iter_mut() {
         dyn_vec_decl! {
             struct SliceDynVec: AsMut<[usize]>;
@@ -530,6 +532,7 @@ mod test {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn drain() {
         use core::cell::Cell;
 

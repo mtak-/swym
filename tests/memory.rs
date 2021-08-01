@@ -1,5 +1,3 @@
-#![feature(test)]
-
 mod memory {
     use crossbeam_utils::thread;
     use std::sync::atomic::{AtomicIsize, Ordering::Relaxed};

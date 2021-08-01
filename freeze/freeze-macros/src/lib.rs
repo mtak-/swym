@@ -24,24 +24,28 @@ fn sub_types(d: &DeriveInput) -> Vec<Type> {
 
 #[proc_macro_derive(Freeze)]
 pub fn freeze(input: TokenStream) -> TokenStream {
-    // Parse the input tokens into a syntax tree
-    let mut input = parse_macro_input!(input as DeriveInput);
-    let types = sub_types(&input);
-    input.generics.make_where_clause().predicates.extend({
-        let x: syn::punctuated::Punctuated<WherePredicate, syn::token::Comma> = syn::parse_quote!(
-            #(#types: freeze::Freeze,)*
-        );
-        x
-    });
+    if cfg!(not(feature = "nightly")) {
+        // Parse the input tokens into a syntax tree
+        let mut input = parse_macro_input!(input as DeriveInput);
+        let types = sub_types(&input);
+        input.generics.make_where_clause().predicates.extend({
+            let x: syn::punctuated::Punctuated<WherePredicate, syn::token::Comma> = syn::parse_quote!(
+                #(#types: freeze::Freeze,)*
+            );
+            x
+        });
 
-    let name = &input.ident;
-    let generics = &input.generics;
+        let name = &input.ident;
+        let generics = &input.generics;
 
-    let (impl_generics, type_generics, where_clause) = &generics.split_for_impl();
+        let (impl_generics, type_generics, where_clause) = &generics.split_for_impl();
 
-    let expanded = quote! {
-        unsafe impl #impl_generics freeze::Freeze for #name #type_generics #where_clause {}
-    };
+        let expanded = quote! {
+            unsafe impl #impl_generics freeze::Freeze for #name #type_generics #where_clause {}
+        };
 
-    expanded.into()
+        expanded.into()
+    } else {
+        input
+    }
 }

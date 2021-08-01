@@ -4,10 +4,11 @@
 mod base;
 
 use crate::base::{Location, RBNode, RBRoot, VacantLocation};
+use freeze::Freeze;
 use swym::{
     tcell::{Ref, TCell, View},
     thread_key,
-    tx::{Borrow, Error, Ordering, Read, SetError, Status},
+    tx::{Error, Ordering, Read, SetError, Status},
     RwTx,
 };
 
@@ -68,7 +69,7 @@ impl<K: Send + Sync + Ord + 'static, V: Send + Sync + 'static> RBTreeMapRaw<K, V
     }
 }
 
-impl<K: Send + Sync + Ord + 'static, V: Borrow + Send + Sync + 'static> RBTreeMapRaw<K, V> {
+impl<K: Send + Sync + Ord + 'static, V: Freeze + Send + Sync + 'static> RBTreeMapRaw<K, V> {
     pub fn get<'tx, 'tcell, Q>(
         &'tcell self,
         tx: &'tx impl Read<'tcell>,
@@ -104,7 +105,7 @@ impl<K: Send + Sync + Ord + 'static, V: Borrow + Send + Sync + 'static> RBTreeMa
     }
 }
 
-impl<K: Send + Sync + Ord + 'static, V: Borrow + Clone + Send + Sync + 'static> RBTreeMapRaw<K, V> {
+impl<K: Send + Sync + Ord + 'static, V: Freeze + Clone + Send + Sync + 'static> RBTreeMapRaw<K, V> {
     pub fn insert<'tcell>(
         &'tcell self,
         tx: &mut RwTx<'tcell>,
@@ -123,7 +124,7 @@ impl<K: Send + Sync + Ord + 'static, V: Borrow + Clone + Send + Sync + 'static> 
     }
 }
 
-impl<K: Send + Sync + Ord + 'static, V: Borrow + Send + Sync + 'static> RBTreeMapRaw<K, V> {
+impl<K: Send + Sync + Ord + 'static, V: Freeze + Send + Sync + 'static> RBTreeMapRaw<K, V> {
     pub fn remove<'tcell, Q>(
         &'tcell self,
         tx: &mut RwTx<'tcell>,
@@ -158,7 +159,7 @@ impl<K, V> RBTreeMap<K, V> {
     }
 }
 
-impl<K: Send + Sync + Ord + 'static, V: Borrow + Send + Sync + 'static> RBTreeMap<K, V> {
+impl<K: Send + Sync + Ord + 'static, V: Freeze + Send + Sync + 'static> RBTreeMap<K, V> {
     pub fn with<'tx, 'tcell>(
         &'tcell self,
         tx: &'tx mut RwTx<'tcell>,
@@ -226,7 +227,7 @@ pub struct RBTreeWith<'tx, 'tcell, K, V> {
 impl<'tx, 'tcell, K, V> RBTreeWith<'tx, 'tcell, K, V>
 where
     K: Send + Sync + Ord + 'static,
-    V: Borrow + Send + Sync + 'static,
+    V: Freeze + Send + Sync + 'static,
 {
     pub fn get<Q>(&self, key: &Q) -> Result<Option<Ref<'_, V>>, Error>
     where
@@ -274,7 +275,7 @@ pub struct VacantEntry<'tx, 'tcell, K, V> {
 impl<'tx, 'tcell, K, V> VacantEntry<'tx, 'tcell, K, V>
 where
     K: Ord + Send + Sync + 'static,
-    V: Borrow + Send + Sync + 'static,
+    V: Freeze + Send + Sync + 'static,
 {
     pub fn key(&self) -> &K {
         &self.key
@@ -303,7 +304,7 @@ pub struct OccupiedEntry<'tx, 'tcell, K, V> {
 impl<'tx, 'tcell, K, V> OccupiedEntry<'tx, 'tcell, K, V>
 where
     K: Ord + Send + Sync + 'static,
-    V: Borrow + Send + Sync + 'static,
+    V: Freeze + Send + Sync + 'static,
 {
     pub fn key(&self) -> &K {
         &self.key
@@ -338,7 +339,7 @@ pub enum Entry<'tx, 'tcell, K, V> {
 impl<'tx, 'tcell, K, V> Entry<'tx, 'tcell, K, V>
 where
     K: Ord + Send + Sync + 'static,
-    V: Borrow + Send + Sync + 'static,
+    V: Freeze + Send + Sync + 'static,
 {
     #[inline]
     pub fn or_insert(self, default: V) -> Result<Value<'tx, 'tcell, V>, Error> {

@@ -21,6 +21,7 @@ debug-alloc = ["jemallocator/debug"]
 default = []
 nightly = [
     "crossbeam-utils/nightly",
+    "freeze/nightly",
     "lock_api/nightly",
     "nudge/nightly",
     "parking_lot/nightly",

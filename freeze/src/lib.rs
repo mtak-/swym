@@ -1,3 +1,5 @@
+#![cfg_attr(feature = "nightly", feature(optin_builtin_traits))]
+
 use core::{
     marker::PhantomData,
     mem::{Discriminant, ManuallyDrop, MaybeUninit},
@@ -19,11 +21,16 @@ pub use freeze_macros::Freeze;
 /// Auto trait for types lacking direct interior mutability.
 ///
 /// These types can have a snapshot (memcpy style) taken of the current state as long as the
-/// original value is not dropped. See [`TCell::borrow`].
+/// original value is not dropped.
 ///
 /// As long as the interior mutability resides on the heap (through a pointer), then the type can
-/// manually implement `Borrow`.
+/// manually implement `Freeze`.
+#[cfg(not(feature = "nightly"))]
 pub unsafe trait Freeze {}
+#[cfg(feature = "nightly")]
+pub unsafe auto trait Freeze {}
+#[cfg(feature = "nightly")]
+impl<T: ?Sized> !Freeze for core::cell::UnsafeCell<T> {}
 
 unsafe impl<T: ?Sized> Freeze for PhantomData<T> {}
 unsafe impl<T: ?Sized> Freeze for *const T {}

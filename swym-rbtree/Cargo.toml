@@ -8,10 +8,11 @@ publish = false
 [features]
 debug-alloc = ["jemallocator/debug"]
 default = []
-nightly = ["swym/nightly"]
+nightly = ["freeze/nightly", "swym/nightly"]
 stats = ["swym/stats"]
 
 [dependencies]
+freeze = { path = "../freeze" }
 swym = { path = "../" }
 
 [dev-dependencies]
