@@ -90,7 +90,7 @@ impl Token {
             "ParkToken is not a valid pointer"
         );
         // park tokens (in this file) are only ever created with valid Progress addresses.
-        Token::new(unsafe { &*(park_token.0 as *mut Progress) })
+        Token(unsafe { NonNull::new_unchecked(park_token.0 as *mut Progress) })
     }
 
     #[inline]
@@ -122,7 +122,7 @@ impl Starvation {
     }
 
     #[inline]
-    fn starve_unlock<G: FnMut(Token) -> bool, U: FnOnce(Token)>(
+    unsafe fn starve_unlock<G: FnMut(Token) -> bool, U: FnOnce(Token)>(
         &self,
         should_upgrade: G,
         upgrade: U,

@@ -6,7 +6,7 @@
 #![cfg_attr(feature = "nightly", feature(test))]
 #![warn(missing_docs)]
 
-#[cfg(test)]
+#[cfg(all(test, feature = "nightly"))]
 extern crate test;
 
 cfg_if::cfg_if! {
@@ -298,7 +298,7 @@ impl DerefMut for HtmUsize {
 
 macro_rules! bench_tx {
     ($name:ident, $count:expr) => {
-        #[cfg(test)]
+        #[cfg(all(test, feature = "nightly"))]
         #[bench]
         fn $name(bench: &mut test::Bencher) {
             const ITER_COUNT: usize = 1_000_000;
@@ -349,7 +349,7 @@ bench_tx! {bench_tx0120, 120}
 bench_tx! {bench_tx0128, 128}
 bench_tx! {bench_tx0256, 256}
 
-#[cfg(test)]
+#[cfg(all(test, feature = "nightly"))]
 #[bench]
 fn bench_abort(bench: &mut test::Bencher) {
     const ITER_COUNT: usize = 1_000_000;
@@ -376,25 +376,34 @@ fn bench_abort(bench: &mut test::Bencher) {
 fn begin_end() {
     const ITER_COUNT: usize = 1_000_000;
 
-    let mut fails = 0;
+    let mut successes = 0;
+    let mut failures = 0;
+    let mut retries = 0;
     for _ in 0..ITER_COUNT {
         unsafe {
             let mut this_fail_count = 0;
             let tx = HardwareTx::new(|_| -> Result<(), ()> {
-                fails += 1;
                 this_fail_count += 1;
                 if this_fail_count < 4 {
+                    retries += 1;
                     Ok(())
                 } else {
                     Err(())
                 }
             });
+            if let Err(_) = tx {
+                failures += 1;
+            } else {
+                successes += 1;
+            }
             drop(tx);
         }
     }
+    println!("retries: {}", retries);
+    println!("successes: {}", successes);
     println!(
         "fail rate {:.4}%",
-        fails as f64 * 100.0 / (ITER_COUNT + fails) as f64
+        failures as f64 * 100.0 / ITER_COUNT as f64
     );
 }
 
@@ -453,6 +462,7 @@ fn begin_abort() {
     println!("abort count: {}", abort_count);
 }
 
+#[cfg(all(test, feature = "nightly"))]
 #[test]
 fn capacity_check() {
     use std::mem;
@@ -504,7 +514,7 @@ fn supported() {
     println!("runtime support check: {}", supported);
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "nightly"))]
 #[bench]
 fn increment_array(b: &mut test::Bencher) {
     const U: HtmUsize = HtmUsize::new(0);

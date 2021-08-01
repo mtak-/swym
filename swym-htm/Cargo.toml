@@ -18,7 +18,7 @@ rustc-args = ["-Ctarget-feature=+rtm"]
 [features]
 default = []
 htm = []
-nightly = []
+nightly = ["nudge/nightly"]
 
 [dependencies]
 cfg-if = "1.0"

@@ -86,5 +86,7 @@ pub(super) unsafe fn end() {
 
 #[inline]
 pub(super) fn htm_supported() -> bool {
-    is_x86_feature_detected!("rtm")
+    // for now... no! intel has disable TSX in microcode, in such a way that.. cpu still reports it
+    // as existing, the transactions just always fail.
+    false && is_x86_feature_detected!("rtm")
 }
