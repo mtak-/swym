@@ -12,7 +12,7 @@ nightly = ["freeze/nightly", "swym/nightly"]
 stats = ["swym/stats"]
 
 [dependencies]
-freeze = { path = "../freeze" }
+freeze = { path = "../../freeze" }
 swym = { path = "../" }
 
 [dev-dependencies]

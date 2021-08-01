@@ -30,8 +30,8 @@ use core::{
 use parking_lot_core::{self, FilterOp, ParkResult, ParkToken, UnparkResult, UnparkToken};
 use std::thread;
 
-/// If a thread started a transaction this many epochs ago, the thread will skip move directly into
-/// the `yield_now` phase of backoff.
+/// If a thread started a transaction this many epochs ago, the thread will move directly into the
+/// `yield_now` phase of backoff.
 ///
 /// Lower values result in more serialization under contention. Higher values result in more wasted
 /// CPU cycles for large transactions.

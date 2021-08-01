@@ -35,7 +35,7 @@ stats = []
 cfg-if = "1.0.0"
 crossbeam-utils = "0.8.5"
 fxhash = "0.2.1"
-freeze = { path = "./freeze" }
+freeze = { path = "../freeze" }
 lazy_static = "1.4.0"
 lock_api = "0.4"
 nudge = "0.2.1"
@@ -70,7 +70,6 @@ overflow-checks = true
 [workspace]
 members = [
     ".",
-    "freeze",
     "swym-htm",
     "swym-rbtree",
 ]
