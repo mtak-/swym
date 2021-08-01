@@ -23,9 +23,9 @@ use crate::{
 };
 use core::{
     cell::Cell,
-    mem,
+    hint, mem,
     ptr::NonNull,
-    sync::atomic::{self, AtomicU8, AtomicUsize, Ordering::Relaxed},
+    sync::atomic::{AtomicU8, AtomicUsize, Ordering::Relaxed},
 };
 use parking_lot_core::{self, FilterOp, ParkResult, ParkToken, UnparkResult, UnparkToken};
 use std::thread;
@@ -429,7 +429,7 @@ impl Progress {
                             return;
                         } else {
                             for _ in 0..1 << backoff {
-                                atomic::spin_loop_hint();
+                                hint::spin_loop();
                             }
                         }
                     } else {

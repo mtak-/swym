@@ -1,9 +1,10 @@
+use freeze::Freeze;
 use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 use swym::{
     tcell::{Ref, TCell},
     thread_key,
     tptr::TPtr,
-    tx::{Borrow, Error, Ordering, Read, Rw},
+    tx::{Error, Ordering, Read, Rw},
 };
 
 #[global_allocator]
@@ -41,7 +42,7 @@ impl<T> TStack<T> {
     }
 }
 
-impl<T: 'static + Send + Sync + Borrow> TStack<T> {
+impl<T: 'static + Send + Sync + Freeze> TStack<T> {
     fn push<'tcell>(&'tcell self, tx: &mut impl Rw<'tcell>, value: T) -> Result<(), Error> {
         // the `next` pointer of our new node will be the current head pointer
         let next = self.head.as_ptr(tx, Ordering::Read)?;
@@ -99,7 +100,7 @@ pub struct Iter<'tx, T, Tx: ?Sized> {
     cur: *const Node<T>,
 }
 
-impl<'tcell, 'tx, T: 'static + Borrow, Tx: Read<'tcell>> Iterator for Iter<'tx, T, Tx> {
+impl<'tcell, 'tx, T: 'static + Freeze, Tx: Read<'tcell>> Iterator for Iter<'tx, T, Tx> {
     type Item = Result<Ref<'tx, T>, Error>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -117,6 +118,7 @@ impl<'tcell, 'tx, T: 'static + Borrow, Tx: Read<'tcell>> Iterator for Iter<'tx, 
 }
 
 fn main() {
+    #[derive(Freeze)]
     struct Count(usize);
     impl Count {
         fn new(x: usize) -> Self {

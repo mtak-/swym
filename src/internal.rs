@@ -4,9 +4,6 @@ pub mod optim;
 #[macro_use]
 pub mod alloc;
 
-#[macro_use]
-pub mod phoenix_tls;
-
 pub mod bloom;
 mod commit;
 mod gc;

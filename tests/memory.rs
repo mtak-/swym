@@ -6,6 +6,7 @@ mod memory {
     use swym::{tcell::TCell, thread_key, tx::Ordering};
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn _assert_single_threaded() {
         assert_eq!(
             std::env::var("RUST_TEST_THREADS")
@@ -18,6 +19,7 @@ mod memory {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn set_tcell_in_tptr() {
         const ITER_COUNT: usize = 1_000;
         const INNER_ITER_COUNT: usize = 10;

@@ -25,19 +25,22 @@ nightly = [
     "nudge/nightly",
     "parking_lot/nightly",
     "parking_lot_core/nightly",
+    "phoenix-tls/nightly",
     "swym-htm/nightly",
 ]
 stats = []
 
 [dependencies]
-cfg-if = "0.1.10"
-crossbeam-utils = "0.7.0"
+cfg-if = "1.0.0"
+crossbeam-utils = "0.8.5"
 fxhash = "0.2.1"
+freeze = { path = "./freeze" }
 lazy_static = "1.4.0"
-lock_api = "0.3.3"
+lock_api = "0.4"
 nudge = "0.2.1"
-parking_lot = "0.10.0"
-parking_lot_core = "0.7.0"
+parking_lot = "0.11"
+parking_lot_core = "0.8"
+phoenix-tls = { path = "../phoenix-tls" }
 swym-htm = { path = "./swym-htm", version = "0.1.0" }
 
 [dev-dependencies]
@@ -66,6 +69,7 @@ overflow-checks = true
 [workspace]
 members = [
     ".",
+    "freeze",
     "swym-htm",
     "swym-rbtree",
 ]

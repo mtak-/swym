@@ -3,12 +3,13 @@
 //! A handle to the thread local state can be acquired by calling [`thread_key::get`].
 
 use crate::{
-    internal::{phoenix_tls::Phoenix, thread::Thread},
+    internal::thread::Thread,
     read::ReadTx,
     rw::RwTx,
     tx::{Error, Status},
 };
 use core::fmt::{self, Debug, Formatter};
+use phoenix_tls::Phoenix;
 
 /// A handle to `swym`'s thread local state.
 ///
@@ -158,7 +159,7 @@ impl ThreadKey {
 mod tls {
     use crate::internal::thread::Thread;
 
-    phoenix_tls! {
+    phoenix_tls::phoenix_tls! {
         pub static THREAD_KEY: Thread
     }
 }
@@ -187,7 +188,7 @@ mod tls {
 #[inline]
 pub fn get() -> ThreadKey {
     ThreadKey {
-        thread: tls::THREAD_KEY.get(),
+        thread: tls::THREAD_KEY.handle(),
     }
 }
 

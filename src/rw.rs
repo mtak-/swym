@@ -210,9 +210,7 @@ impl<'tx, 'tcell> RwTxImpl<'tx, 'tcell> {
 //
 // No instances of this type are ever created. References to values of this type are created by
 // transmuting RwTxImpl's.
-pub struct RwTx<'tcell>(PhantomData<fn(&'tcell ())>);
-impl<'tcell> !Send for RwTx<'tcell> {}
-impl<'tcell> !Sync for RwTx<'tcell> {}
+pub struct RwTx<'tcell>(PhantomData<(fn(&'tcell ()), *const ())>);
 
 impl<'tcell> Debug for RwTx<'tcell> {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {

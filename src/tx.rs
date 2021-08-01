@@ -1,11 +1,8 @@
 //! Functionality for working with transactions.
 
 use crate::tcell::{Ref, TCell};
-use core::{
-    cell::UnsafeCell,
-    fmt::{self, Debug, Formatter},
-    ops::{Deref, DerefMut},
-};
+use core::fmt::{self, Debug, Formatter};
+use freeze::Freeze;
 
 #[derive(PartialEq, Eq)]
 enum ErrorKind {
@@ -238,7 +235,7 @@ impl Default for Ordering {
 /// Don't implement this trait.
 pub trait Read<'tcell> {
     #[doc(hidden)]
-    fn borrow<'tx, T: Borrow>(
+    fn borrow<'tx, T: Freeze>(
         &'tx self,
         tcell: &'tcell TCell<T>,
         ordering: Ordering,
@@ -272,53 +269,4 @@ pub unsafe trait _TValue<T: 'static>: 'static {
 }
 unsafe impl<T: 'static> _TValue<T> for T {
     const REQUEST_TCELL_LIFETIME: bool = false;
-}
-
-/// Auto trait for types lacking direct interior mutability.
-///
-/// These types can have a snapshot (memcpy style) taken of the current state as long as the
-/// original value is not dropped. See [`TCell::borrow`].
-///
-/// The list of manual implementations is conservative, and will likely be expanded in the future.
-/// As long as the interior mutability resides on the heap (through a pointer), then the type can
-/// manually implement `Borrow`.
-pub unsafe auto trait Borrow {}
-impl<T: ?Sized> !Borrow for UnsafeCell<T> {}
-unsafe impl<T: ?Sized> Borrow for Box<T> {}
-
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[repr(transparent)]
-pub(crate) struct AssertBorrow<T> {
-    value: T,
-}
-
-unsafe impl<T> Borrow for AssertBorrow<T> {}
-
-impl<T> core::borrow::Borrow<T> for AssertBorrow<T> {
-    #[inline]
-    fn borrow(&self) -> &T {
-        &self.value
-    }
-}
-
-impl<T> core::borrow::BorrowMut<T> for AssertBorrow<T> {
-    #[inline]
-    fn borrow_mut(&mut self) -> &mut T {
-        &mut self.value
-    }
-}
-
-impl<T> Deref for AssertBorrow<T> {
-    type Target = T;
-    #[inline]
-    fn deref(&self) -> &T {
-        &self.value
-    }
-}
-
-impl<T> DerefMut for AssertBorrow<T> {
-    #[inline]
-    fn deref_mut(&mut self) -> &mut T {
-        &mut self.value
-    }
 }

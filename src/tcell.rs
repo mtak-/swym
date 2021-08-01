@@ -44,7 +44,7 @@
 
 use crate::{
     internal::{tcell_erased::TCellErased, usize_aligned::UsizeAligned},
-    tx::{AssertBorrow, Borrow, Error, Ordering, Read, Rw, SetError, Write, _TValue},
+    tx::{Error, Ordering, Read, Rw, SetError, Write, _TValue},
 };
 use core::{
     cell::UnsafeCell,
@@ -55,6 +55,7 @@ use core::{
     ptr,
     sync::atomic::{self, Ordering::Acquire},
 };
+use freeze::{AssertFreeze, Freeze};
 
 /// A transactional memory location.
 ///
@@ -178,7 +179,7 @@ impl<T> TCell<T> {
     }
 }
 
-impl<T: Borrow> TCell<T> {
+impl<T: Freeze> TCell<T> {
     /// Gets a reference to the contained value using the specified memory [`Ordering`].
     ///
     /// Statically requires that the `TCell` outlives the current transaction.
@@ -236,7 +237,7 @@ impl<T: Copy> TCell<T> {
     ) -> Result<T, Error> {
         // Calling borrow on a non Borrow type is Ok if all you do is Copy the value because this
         // cannot cause any internal mutation to happen.
-        let this = unsafe { &*(self as *const Self as *const TCell<AssertBorrow<T>>) };
+        let this = unsafe { &*(self as *const Self as *const TCell<AssertFreeze<T>>) };
         this.borrow(tx, ordering).map(|v| **v)
     }
 }
@@ -302,7 +303,7 @@ impl<T: 'static + Send> TCell<T> {
     }
 }
 
-impl<T: 'static + Borrow + Clone + Send> TCell<T> {
+impl<T: 'static + Freeze + Clone + Send> TCell<T> {
     pub fn replace<'tcell, 'tx>(
         &'tcell self,
         tx: &'tx mut impl Rw<'tcell>,
@@ -352,15 +353,15 @@ impl<'tx, T> Ref<'tx, T> {
     }
 }
 
-impl<'tx, T: Borrow> From<&'tx T> for Ref<'tx, T> {
+impl<'tx, T: Freeze> From<&'tx T> for Ref<'tx, T> {
     #[inline]
     fn from(reference: &'tx T) -> Self {
-        // lifetime + swym::tx::Borrow guarantees this is safe
+        // lifetime + Freeze guarantees this is safe
         Ref::new(unsafe { ptr::read(reference as *const T as *const ManuallyDrop<T>) })
     }
 }
 
-impl<'tx, T: Borrow> From<&'tx mut T> for Ref<'tx, T> {
+impl<'tx, T: Freeze> From<&'tx mut T> for Ref<'tx, T> {
     #[inline]
     fn from(reference: &'tx mut T) -> Self {
         Ref::from(&*reference)
@@ -390,7 +391,7 @@ pub struct View<'tcell, T, Tx> {
     tcell: &'tcell TCell<T>,
 }
 
-impl<'tx, 'tcell, T: Borrow, Tx: Read<'tcell>> View<'tcell, T, &'tx Tx> {
+impl<'tx, 'tcell, T: Freeze, Tx: Read<'tcell>> View<'tcell, T, &'tx Tx> {
     #[inline]
     pub fn into_borrow(self) -> Result<Ref<'tx, T>, Error>
     where
@@ -400,7 +401,7 @@ impl<'tx, 'tcell, T: Borrow, Tx: Read<'tcell>> View<'tcell, T, &'tx Tx> {
     }
 }
 
-impl<'tx, 'tcell, T: Borrow, Tx: Read<'tcell>> View<'tcell, T, &'tx mut Tx> {
+impl<'tx, 'tcell, T: Freeze, Tx: Read<'tcell>> View<'tcell, T, &'tx mut Tx> {
     #[inline]
     pub fn into_borrow(self) -> Result<Ref<'tx, T>, Error>
     where
@@ -425,7 +426,7 @@ where
     }
 }
 
-impl<'tcell, T: Borrow, Tx: Deref> View<'tcell, T, Tx>
+impl<'tcell, T: Freeze, Tx: Deref> View<'tcell, T, Tx>
 where
     Tx::Target: Read<'tcell> + Sized,
 {
@@ -490,6 +491,7 @@ mod test {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn publish_conflict() {
         static TRIGGERED: AtomicBool = AtomicBool::new(false);
         let x = TCell::new(42);
@@ -523,6 +525,7 @@ mod test {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn publish_3x() {
         static TRIGGERED: AtomicBool = AtomicBool::new(false);
         static TRIGGERED2: AtomicBool = AtomicBool::new(false);

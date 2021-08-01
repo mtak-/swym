@@ -2,7 +2,6 @@ use crate::{
     internal::{
         epoch::{QuiesceEpoch, EPOCH_CLOCK},
         gc::{GlobalSynchList, OwnedSynch, ThreadGarbage},
-        phoenix_tls::PhoenixTarget,
         read_log::ReadLog,
         starvation::{self, Progress},
         write_log::WriteLog,
@@ -21,6 +20,7 @@ use core::{
     ptr,
     sync::atomic::Ordering::{Relaxed, Release},
 };
+use phoenix_tls::PhoenixTarget;
 
 /// Thread local data.
 ///

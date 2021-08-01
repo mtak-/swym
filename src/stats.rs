@@ -1,12 +1,12 @@
 //! Statistics collection. Enabled with `--features stats`.
 
-use crate::internal::phoenix_tls::PhoenixTarget;
 use core::{
     cell::RefCell,
     fmt::{self, Debug, Formatter},
     ops::{Deref, DerefMut},
 };
 use parking_lot::Mutex;
+use phoenix_tls::PhoenixTarget;
 
 #[derive(Copy, Clone, Default, Debug)]
 struct MinMaxTotal {
@@ -97,7 +97,7 @@ macro_rules! stats_func {
         $(#[$attr])*
         pub(crate) fn $name() {
             if cfg!(feature = "stats") || env_var_set!($env_var) {
-                THREAD_STAT.get().get().$name.happened()
+                THREAD_STAT.handle().get().$name.happened()
             }
         }
     };
@@ -211,7 +211,12 @@ impl Drop for ThreadStats {
     }
 }
 
-impl PhoenixTarget for ThreadStats {}
+impl PhoenixTarget for ThreadStats {
+    #[inline]
+    fn subscribe(&mut self) {}
+    #[inline]
+    fn unsubscribe(&mut self) {}
+}
 
 impl ThreadStats {
     /// Returns the actual statistics object.
@@ -229,7 +234,7 @@ impl ThreadStats {
     }
 }
 
-phoenix_tls! {
+phoenix_tls::phoenix_tls! {
     static THREAD_STAT: ThreadStats
 }
 
@@ -249,7 +254,7 @@ pub fn stats() -> Option<impl Deref<Target = Stats>> {
 /// Returns the thread local stats object, or None if the feature is disabled.
 pub fn thread_stats() -> Option<impl Deref<Target = ThreadStats>> {
     if any_stats_active() {
-        Some(THREAD_STAT.get())
+        Some(THREAD_STAT.handle())
     } else {
         None
     }

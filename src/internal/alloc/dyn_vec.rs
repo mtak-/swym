@@ -346,8 +346,7 @@ impl<'a, T: ?Sized> Iterator for IterMut<'a, T> {
     fn next(&mut self) -> Option<Self::Item> {
         unsafe {
             let raw = TraitObject::from_flat(self.iter.next()?.into());
-            let result = &mut *raw.cast().as_ptr();
-            let size = mem::size_of_val(result);
+            let size = mem::size_of_val::<T>(raw.cast().as_ref());
             debug_assert!(
                 size % mem::size_of::<usize>() == 0,
                 "invalid size detected for dyn T"
@@ -358,7 +357,9 @@ impl<'a, T: ?Sized> Iterator for IterMut<'a, T> {
                     _ => {}
                 }
             }
-            Some(DynElemMut { value: result })
+            Some(DynElemMut {
+                value: &mut *raw.cast().as_ptr(),
+            })
         }
     }
 }
@@ -433,23 +434,25 @@ mod trait_object {
     #[test]
     fn layout() {
         use super::TraitObject;
-        use core::{mem, raw::TraitObject as StdTraitObject};
+        use core::mem;
+
+        let x = String::from("hello there");
+        let y_ref: &dyn core::fmt::Debug = &x;
+        let y: *const dyn core::fmt::Debug = y_ref as _;
 
         assert_eq!(
             mem::size_of::<TraitObject>(),
-            mem::size_of::<StdTraitObject>()
+            mem::size_of_val(&y.to_raw_parts())
         );
         assert_eq!(
             mem::align_of::<TraitObject>(),
-            mem::align_of::<StdTraitObject>()
+            mem::align_of_val(&y.to_raw_parts())
         );
-        let x = String::from("hello there");
         unsafe {
-            let y: &dyn core::fmt::Debug = &x;
-            let std = mem::transmute::<&dyn core::fmt::Debug, StdTraitObject>(y);
-            let raw = TraitObject::from_pointer(y.into());
-            assert_eq!(raw.vtable, std.vtable);
-            assert_eq!(raw.data, std.data);
+            let (data, vtable) = y.to_raw_parts();
+            let raw = TraitObject::from_pointer(y_ref.into());
+            assert_eq!(raw.vtable, std::mem::transmute(vtable));
+            assert_eq!(raw.data, data as *mut ());
         }
     }
 }

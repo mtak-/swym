@@ -103,12 +103,14 @@ impl<T: Copy> FVec<T> {
              to do so"
         );
         let slice_len = slice.len();
-        let len = self.len();
-        let new_len = len + slice_len;
-        self.data.set_len(new_len);
-        slice
-            .as_ptr()
-            .copy_to_nonoverlapping(self.get_unchecked_mut(len), slice_len);
+        if slice_len > 0 {
+            let len = self.len();
+            let new_len = len + slice_len;
+            self.data.set_len(new_len);
+            slice
+                .as_ptr()
+                .copy_to_nonoverlapping(self.get_unchecked_mut(len), slice_len);
+        }
     }
 }
 

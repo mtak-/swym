@@ -3,6 +3,7 @@ mod unpark {
     use swym::{tcell::TCell, thread_key, tx::Status};
 
     #[cfg(debug_assertions)]
+    #[cfg_attr(miri, ignore)]
     #[test]
     #[should_panic]
     fn empty_tx() {
@@ -15,6 +16,7 @@ mod unpark {
     // unpark bit it might have just set on `a`. This is incorrect if there is another thread parked
     // on `a`.
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn park_failure() {
         const ITER: usize = 1_000;
         const TRIES: usize = 50;

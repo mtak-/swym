@@ -1,13 +1,14 @@
 use crate::{
     internal::{epoch::QuiesceEpoch, thread::Pin},
     tcell::{Ref, TCell},
-    tx::{Borrow, Error, Ordering, Read},
+    tx::{Error, Ordering, Read},
 };
 use core::{
     fmt::{self, Debug, Formatter},
     marker::PhantomData,
     mem::{self, ManuallyDrop},
 };
+use freeze::Freeze;
 
 /// A read only transaction.
 ///
@@ -15,9 +16,7 @@ use core::{
 /// transmuting QuiesceEpoch's.
 ///
 /// The lifetime contravariance allows conversions of ReadTx<'a> into ReadTx<'static>.
-pub struct ReadTx<'tcell>(PhantomData<fn(&'tcell ())>);
-impl<'tcell> !Send for ReadTx<'tcell> {}
-impl<'tcell> !Sync for ReadTx<'tcell> {}
+pub struct ReadTx<'tcell>(PhantomData<(fn(&'tcell ()), *const ())>);
 
 impl<'tcell> Debug for ReadTx<'tcell> {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
@@ -47,7 +46,7 @@ impl<'tcell> ReadTx<'tcell> {
 
 impl<'tcell> Read<'tcell> for ReadTx<'tcell> {
     #[inline]
-    fn borrow<'tx, T: Borrow>(
+    fn borrow<'tx, T: Freeze>(
         &'tx self,
         tcell: &'tcell TCell<T>,
         _: Ordering,

@@ -5,6 +5,7 @@ mod starvation {
     use swym::{tcell::TCell, thread_key};
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn large_tx() {
         const CONTENDED_IDX: usize = 0;
         const TX_SIZE: usize = 50_000;

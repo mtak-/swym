@@ -4,6 +4,7 @@ mod reentrancy {
     use swym::{tcell::TCell, thread_key};
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn try_rw_on_drop() {
         const THREAD_COUNT: usize = 4;
         const ITER_COUNT: usize = 10_000;

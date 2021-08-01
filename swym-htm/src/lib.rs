@@ -3,14 +3,14 @@
 #![cfg_attr(feature = "htm", feature(link_llvm_intrinsics))]
 #![cfg_attr(feature = "nightly", feature(stdsimd))]
 #![cfg_attr(feature = "nightly", feature(rtm_target_feature))]
-#![feature(test)]
+#![cfg_attr(feature = "nightly", feature(test))]
 #![warn(missing_docs)]
 
 #[cfg(test)]
 extern crate test;
 
 cfg_if::cfg_if! {
-    if #[cfg(all(target_arch = "powerpc64", feature = "htm"))] {
+    if #[cfg(all(target_arch = "powerpc64", feature = "htm", feature = "nightly"))] {
         pub mod powerpc64;
         use powerpc64 as back;
     } else if #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "nightly"))] {
@@ -298,6 +298,7 @@ impl DerefMut for HtmUsize {
 
 macro_rules! bench_tx {
     ($name:ident, $count:expr) => {
+        #[cfg(test)]
         #[bench]
         fn $name(bench: &mut test::Bencher) {
             const ITER_COUNT: usize = 1_000_000;
@@ -348,6 +349,7 @@ bench_tx! {bench_tx0120, 120}
 bench_tx! {bench_tx0128, 128}
 bench_tx! {bench_tx0256, 256}
 
+#[cfg(test)]
 #[bench]
 fn bench_abort(bench: &mut test::Bencher) {
     const ITER_COUNT: usize = 1_000_000;
@@ -502,6 +504,7 @@ fn supported() {
     println!("runtime support check: {}", supported);
 }
 
+#[cfg(test)]
 #[bench]
 fn increment_array(b: &mut test::Bencher) {
     const U: HtmUsize = HtmUsize::new(0);

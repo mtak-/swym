@@ -12,5 +12,6 @@ elif sys.argv[1] == 'bench':
 else:
     prefix = ''
     suffix = ''
-result = os.system(prefix + ' cargo ' + sys.argv[1] + ' ' + suffix + ' ' + ' '.join(sys.argv[2:]))
+result = os.system(prefix + ' cargo +nightly ' +
+                   sys.argv[1] + ' ' + suffix + ' ' + ' '.join(sys.argv[2:]))
 sys.exit(0 if result == 0 else -1)

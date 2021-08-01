@@ -73,16 +73,13 @@
 //! [`try_rw`]: thread_key/struct.ThreadKey.html#method.try_rw
 //! [`try_read`]: thread_key/struct.ThreadKey.html#method.try_read
 
-#![feature(optin_builtin_traits)]
-#![cfg_attr(feature = "nightly", feature(cfg_target_thread_local))]
-#![cfg_attr(feature = "nightly", feature(thread_local))]
-#![cfg_attr(all(test, feature = "nightly"), feature(raw))]
+#![cfg_attr(feature = "nightly", feature(intrinsics))]
+#![cfg_attr(all(test, feature = "nightly"), feature(ptr_metadata))]
 #![warn(macro_use_extern_crate)]
 #![warn(missing_debug_implementations)]
-// #![warn(missing_docs)]
 #![warn(unused_lifetimes)]
 #![cfg_attr(not(test), warn(unused_results))]
-#![deny(intra_doc_link_resolution_failure)]
+#![deny(rustdoc::broken_intra_doc_links)]
 #![deny(rust_2018_compatibility)]
 #![deny(rust_2018_idioms)]
 #![deny(unused_must_use)]
@@ -109,6 +106,7 @@ mod memory {
     use crossbeam_utils::thread;
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn leak_single() {
         const ITER_COUNT: usize = 100_000;
         let x = TCell::new(fvec![1, 2, 3, 4]);
@@ -132,6 +130,7 @@ mod memory {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn leak_multi() {
         const ITER_COUNT: usize = 10_000;
         const THREAD_COUNT: usize = 16;
@@ -159,7 +158,9 @@ mod memory {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn overaligned() {
+        #[derive(freeze::Freeze)]
         #[repr(align(1024))]
         struct Over(u8);
         impl Drop for Over {
@@ -192,7 +193,9 @@ mod memory {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn zero_sized() {
+        #[derive(freeze::Freeze)]
         struct ZeroNoDrop;
 
         const ITER_COUNT: usize = 10_000;
@@ -219,7 +222,9 @@ mod memory {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn zero_sized_drop() {
+        #[derive(freeze::Freeze)]
         struct Zero;
         impl Drop for Zero {
             fn drop(&mut self) {}
@@ -256,6 +261,7 @@ mod panic {
     use std::panic::{self, AssertUnwindSafe};
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn simple() {
         thread::scope(|s| {
             s.spawn(|_| {
@@ -331,6 +337,7 @@ mod panic {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn write_log() {
         let tcell = TCell::new("hello".to_owned());
         thread::scope(|s| {
@@ -364,6 +371,7 @@ mod panic {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn nest_fail() {
         thread::scope(|s| {
             s.spawn(|_| {

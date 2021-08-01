@@ -16,7 +16,7 @@ default-target = "x86_64-unknown-linux-gnu"
 rustc-args = ["-Ctarget-feature=+rtm"]
 
 [features]
-default = ["nightly"]
+default = []
 htm = []
 nightly = []
 

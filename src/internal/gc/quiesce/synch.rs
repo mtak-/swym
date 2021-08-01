@@ -6,6 +6,8 @@ use crate::{
     stats,
 };
 use core::{
+    cell::Cell,
+    marker::PhantomData,
     ptr,
     sync::atomic::Ordering::{self, Acquire},
 };
@@ -36,7 +38,7 @@ impl Synch {
     fn new() -> Self {
         let lock = RawRwLock::INIT;
         lock.lock_shared();
-        Synch {
+        Self {
             current_epoch: ThreadEpoch::inactive(),
             // Synchs are created in a locked state, since the GlobalThreadList is assumed to be
             // locked, whenever a Synch is created.
@@ -86,22 +88,22 @@ impl Synch {
     }
 
     #[inline]
-    pub(super) fn unlock(&self) {
+    pub(super) unsafe fn unlock(&self) {
         self.lock.unlock_exclusive()
     }
 }
 
 pub struct OwnedSynch {
     pub(super) inner: Synch,
+    _no_sync:         PhantomData<Cell<()>>,
 }
-
-impl !Sync for OwnedSynch {}
 
 impl OwnedSynch {
     #[inline]
     pub fn new() -> Self {
-        OwnedSynch {
-            inner: Synch::new(),
+        Self {
+            inner:    Synch::new(),
+            _no_sync: Default::default(),
         }
     }
 
@@ -211,6 +213,6 @@ impl<'a> FreezeList<'a> {
 impl<'a> Drop for FreezeList<'a> {
     #[inline]
     fn drop(&mut self) {
-        self.lock.unlock_shared()
+        unsafe { self.lock.unlock_shared() }
     }
 }

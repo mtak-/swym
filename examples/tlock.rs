@@ -47,7 +47,7 @@ unsafe impl RawMutex for RawTLock {
     }
 
     /// Unlocks this mutex.
-    fn unlock(&self) {
+    unsafe fn unlock(&self) {
         thread_key::get().rw(|tx| Ok(self.held.set(tx, false)?))
     }
 }

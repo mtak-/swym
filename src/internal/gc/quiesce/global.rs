@@ -90,9 +90,9 @@ impl<'a> Drop for Write<'a> {
     #[inline]
     fn drop(&mut self) {
         for synch in self.iter() {
-            synch.unlock();
+            unsafe { synch.unlock() }
         }
-        self.list.mutex.unlock();
+        unsafe { self.list.mutex.unlock() }
     }
 }
 

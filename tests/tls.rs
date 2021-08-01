@@ -3,6 +3,7 @@ mod tls {
     use swym::{tcell::TCell, thread_key, tx::Ordering};
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn try_rw_while_exiting() {
         struct Foo;
 
