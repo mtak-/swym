@@ -12,14 +12,14 @@ nightly = ["freeze/nightly", "swym/nightly"]
 stats = ["swym/stats"]
 
 [dependencies]
-freeze = { path = "../../freeze" }
+freeze = { git = "https://github.com/mtak-/freeze" }
 swym = { path = "../" }
 
 [dev-dependencies]
-criterion = { version = "0.3.1", default-features = false }
-crossbeam-utils = "0.7.0"
+criterion = { version = "0.3.5", default-features = false }
+crossbeam-utils = "0.8"
 jemallocator = "0.3.2"
-rand = "0.7.3"
+rand = "0.8"
 
 [[bench]]
 name = "rbtree"

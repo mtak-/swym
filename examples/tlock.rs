@@ -65,8 +65,15 @@ fn main() {
 
     let string = &string;
 
-    // Uncomment the line below to see deadlock (and 0% cpu usage showing all threads parked).
-    // let _deadlock = string.lock();
+    // Uncomment the block below to see deadlock (and 0% cpu usage showing all threads parked).
+    // let raw_string = string as *const TLock<String> as usize;
+    // let thread = std::thread::spawn(move || {
+    //     let string = unsafe { &*(raw_string as *const TLock<String>) };
+    //     let deadlock = string.lock();
+    //     // here we force all threads to park for a bit, just so that we can test them recovering.
+    //     std::thread::sleep(std::time::Duration::from_secs(10));
+    //     drop(deadlock);
+    // });
     thread::scope(|s| {
         for i in 0..8 {
             s.spawn(move |_| {
@@ -78,6 +85,8 @@ fn main() {
         }
     })
     .unwrap();
+    // thread.join().unwrap();
 
-    println!("last thread's message:\n    '{}'", *string.lock())
+    println!("last thread's message:\n    '{}'", *string.lock());
+    swym::stats::print_stats()
 }

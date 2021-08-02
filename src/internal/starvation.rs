@@ -367,7 +367,7 @@ impl ProgressImpl {
             } => false,
             ProgressImpl::Starving => {
                 debug_assert!(false);
-                false
+                unsafe { nudge::unreach() }
             }
         }
     }

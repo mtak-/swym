@@ -29,20 +29,21 @@ nightly = [
     "phoenix-tls/nightly",
     "swym-htm/nightly",
 ]
-stats = []
+stats = ["swym-stats/stats"]
 
 [dependencies]
 cfg-if = "1.0.0"
 crossbeam-utils = "0.8.5"
 fxhash = "0.2.1"
-freeze = { path = "../freeze" }
+freeze = { git = "https://github.com/mtak-/freeze" }
 lazy_static = "1.4.0"
 lock_api = "0.4"
-nudge = "0.2.1"
+nudge = "0.2"
 parking_lot = "0.11"
 parking_lot_core = "0.8"
-phoenix-tls = { path = "../phoenix-tls" }
+phoenix-tls = "0.1"
 swym-htm = { path = "./swym-htm", version = "0.1.0" }
+swym-stats = { path = "./swym-stats", version = "0.1.0" }
 
 [dev-dependencies]
 jemallocator = "0.3.2"
@@ -72,4 +73,5 @@ members = [
     ".",
     "swym-htm",
     "swym-rbtree",
+    "swym-stats",
 ]

@@ -1,6 +1,5 @@
 #![deny(unused_must_use)]
 
-#[macro_use]
 extern crate criterion;
 
 #[global_allocator]
@@ -98,6 +97,19 @@ mod rbtree {
             || RBTreeMap::new(),
             |tree, elem| drop(tree.insert(elem, 0)),
         )
+        .chain(thread_benches(
+            "remove",
+            data.clone(),
+            {
+                let data = unsafe { &*Rc::into_raw(data.clone()) };
+                move || {
+                    let remove_tree = Box::new(RBTreeMap::new());
+                    spawn_chunked(&data, MAX_THREADS, |elem| drop(remove_tree.insert(elem, 0)));
+                    unsafe { &*Box::into_raw(remove_tree) }
+                }
+            },
+            move |tree, elem| drop(tree.remove(&elem)),
+        ))
         .chain(thread_benches(
             "entry",
             data.clone(),

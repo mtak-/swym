@@ -95,16 +95,16 @@ macro_rules! stats_func {
     ($(#[$attr:meta])* $name:ident: Event @ $env_var:ident) => {
         #[inline]
         $(#[$attr])*
-        pub(crate) fn $name() {
+        pub fn $name() {
             if cfg!(feature = "stats") || env_var_set!($env_var) {
-                THREAD_STAT.handle().get().$name.happened()
+                THREAD_STAT.with(move |x| x.get().$name.happened())
             }
         }
     };
     ($(#[$attr:meta])* $name:ident: Size @ $env_var:ident) => {
         #[inline]
         $(#[$attr])*
-        pub(crate) fn $name(size: usize) {
+        pub fn $name(size: usize) {
             if cfg!(feature = "stats") || env_var_set!($env_var) {
                 let size = size as u64;
                 THREAD_STAT.with(move |x| x.get().$name.record(size))
@@ -129,6 +129,7 @@ macro_rules! stats {
             }
         }
 
+        #[inline(always)]
         fn any_stats_active() -> bool {
             cfg!(feature = "stats") $(|| env_var_set!($env_var))*
         }
@@ -220,6 +221,7 @@ impl PhoenixTarget for ThreadStats {
 
 impl ThreadStats {
     /// Returns the actual statistics object.
+    #[inline]
     pub fn get<'a>(&'a self) -> impl DerefMut<Target = Stats> + 'a {
         self.0.borrow_mut()
     }
@@ -227,6 +229,7 @@ impl ThreadStats {
     /// Flushes the thread stats to the global thread stats object.
     ///
     /// After flushing, `self` is reset.
+    #[inline]
     pub fn flush(&mut self) {
         let mut borrow = self.get();
         GLOBAL.lock().merge(&*borrow);
@@ -243,6 +246,7 @@ lazy_static::lazy_static! {
 }
 
 /// Returns the global stats object, or None if the feature is disabled.
+#[inline]
 pub fn stats() -> Option<impl Deref<Target = Stats>> {
     if any_stats_active() {
         Some(GLOBAL.lock())
@@ -252,6 +256,7 @@ pub fn stats() -> Option<impl Deref<Target = Stats>> {
 }
 
 /// Returns the thread local stats object, or None if the feature is disabled.
+#[inline]
 pub fn thread_stats() -> Option<impl Deref<Target = ThreadStats>> {
     if any_stats_active() {
         Some(THREAD_STAT.handle())

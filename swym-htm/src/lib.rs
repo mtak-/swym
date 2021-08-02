@@ -13,7 +13,8 @@ cfg_if::cfg_if! {
     if #[cfg(all(target_arch = "powerpc64", feature = "htm", feature = "nightly"))] {
         pub mod powerpc64;
         use powerpc64 as back;
-    } else if #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "nightly"))] {
+    // TODO: TSX is temporarily disabled on x86 due to intel's microcode updates disabling TSX on many CPUs.
+    } else if #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "nightly", not(feature = "nightly")))] {
         pub mod x86_64;
         use x86_64 as back;
     } else {

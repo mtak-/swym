@@ -89,7 +89,6 @@ mod internal;
 
 mod read;
 mod rw;
-pub mod stats;
 pub mod tcell;
 pub mod thread_key;
 pub mod tptr;
@@ -99,6 +98,8 @@ pub use read::ReadTx;
 pub use rw::RwTx;
 #[doc(inline)]
 pub use swym_htm as htm;
+#[doc(inline)]
+pub use swym_stats as stats;
 
 #[cfg(test)]
 mod memory {
